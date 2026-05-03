@@ -1,4 +1,4 @@
-# RAG Runtime Kernel
+﻿# RAG Runtime Kernel
 
 > **LLM proposes. System decides. State persists.**
 
@@ -46,14 +46,14 @@ Autonomous mode is the default and is **not** degraded — all rules apply with 
 ## Quick Start
 
 1. Create a project folder with a `RAG/` subfolder
-2. Paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.1.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.1.md) into your LLM project instructions
+2. Paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.2.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.2.md) into your LLM project instructions
 3. Start a conversation — the system bootstraps itself
 
 ## Repository Structure
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.1.md   # The specification (this is the product)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.2.md   # The specification (this is the product)
 ├── docs/
 │   ├── architecture.md                        # System architecture overview
 │   └── design_principles.md                   # Core design philosophy
@@ -78,7 +78,7 @@ Key principles:
 
 ## Specification Highlights
 
-The full specification (v3.1.1) contains 38 sections covering:
+The full specification (v3.1.2) contains 39 sections covering:
 
 - §0–§1: Operating principle and core architecture
 - §2–§3: State machine and tool verification
@@ -86,20 +86,21 @@ The full specification (v3.1.1) contains 38 sections covering:
 - §7–§10: Files Tab rule, HOT/COLD memory model, source hierarchy, ingestion pipeline
 - §11–§14: Conflict ledger, event log/WAL, atomic write protocol, drift detection
 - §15–§17: Token economy, multi-POV validation, session-close audit
+- §18: Audit protocol (8-dimension integrity checks, bounded repair loops)
 - §18–§20: Boot sequence, recovery protocol, halt conditions
 - §21–§28: Operational discipline rules (decisional integrity, response discipline, no guesswork, self-sufficiency, filesystem discipline, concurrency guard, runtime directive, self-export)
 - §29–§37: Runtime wrapper contract, bootstrap, schemas, pointer block, completion standard, prerequisites, version history
 
 ## Current Status
 
-- **Specification:** v3.1.1 — complete and operational
+- **Specification:** v3.1.2 — complete with audit protocol, environmental checks, and session-zero improvements and operational
 - **Runtime Kernel:** Roadmap — Python wrapper for enforced mode
 - **Graph Orchestrator:** Roadmap — LangGraph-class DAG execution
 - **CLI Tools:** Roadmap — Command-line interface for kernel operations
 
 ## Version History
 
-See [§37 in the specification](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.1.md#37--version-history) for full version history from v1.4 through v3.1.1.
+See [§37 in the specification](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.2.md#37--version-history) for full version history from v1.4 through v3.1.2.
 
 ## License
 
