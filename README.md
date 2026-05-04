@@ -173,7 +173,7 @@ Current version: **v3.1.3** (2026-05-04)
 
 If you find this project useful, you're welcome to support its development.
 
-**Developer:** Pavlo Akholod  
+**Developer:** Artem Pakhol  
 **LinkedIn:** [linkedin.com/in/pakhol](https://www.linkedin.com/in/pakhol)
 
 ## License
