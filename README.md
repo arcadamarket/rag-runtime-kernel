@@ -209,7 +209,7 @@ Found a bug? Please [open an issue](../../issues/new/choose) using the provided 
 
 ## Support the Developer
 
-**Developer:** Pavlo Akholod
+**Developer:** Artem Pakhol
 **LinkedIn:** [linkedin.com/in/pakhol](https://www.linkedin.com/in/pakhol)
 
 ## License
