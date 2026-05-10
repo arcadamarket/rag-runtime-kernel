@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="assets/logo.png" alt="RAG Runtime Kernel" width="280"/>
+</p>
+
 # RAG Runtime Kernel
 
 > **LLM proposes. System decides. State persists.**
 
-A filesystem-backed, event-sourced control system for LLM workflows that enforces structured memory, deterministic state transitions, and validated persistence — without requiring any external dependencies.
+Enterprise-grade memory and state management for any LLM — crash recovery, conflict tracking, audit trails, and deterministic lifecycle control. Single file. Zero dependencies. Zero lock-in. Outperforms multi-tool stacks while fitting inside a chat window.
 
 ---
 
@@ -11,6 +15,8 @@ A filesystem-backed, event-sourced control system for LLM workflows that enforce
 Every LLM session starts from zero. Close the tab, lose the state. The industry "solutions" are duct tape: chat history dumps, vector DBs that hallucinate retrieval, framework lock-in that breaks across platforms.
 
 **RAG Runtime Kernel wraps around your project** — it doesn't replace your workflow, it adds a structured memory and orchestration layer on top. One markdown file. Zero dependencies. Drop it into any LLM session and you get: deterministic state persistence, crash recovery, conflict tracking, and cross-session memory that actually works — across Claude, GPT, and any LLM.
+
+In [head-to-head benchmarks](#how-it-compares), this single-file specification matches or exceeds multi-tool stacks (Claude Code, lean-ctx, LLM Wiki) on state management, crash recovery, and cross-platform interoperability — while requiring zero installation.
 
 **Key benefits:**
 - **Persistence** — your project state survives across sessions, tabs, and platforms
@@ -28,7 +34,7 @@ Every LLM session starts from zero. Close the tab, lose the state. The industry 
 
 1. Create a new Project (or open an existing one)
 2. Start a new session within that project
-3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.3.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.3.md) into the session as a file
+3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md) into the session as a file
 4. Send your first message — the system bootstraps itself
 5. Follow on-screen steps: provide root paths, optional project description, optional POV config
 6. Copy the generated **pointer block** into your Project Instructions when prompted
@@ -37,7 +43,7 @@ Every LLM session starts from zero. Close the tab, lose the state. The industry 
 ### ChatGPT / GPT Web
 
 1. Open a new conversation (or use Custom GPT if available)
-2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.3.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.3.md)
+2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md)
 3. Send your first message — the system bootstraps in autonomous mode
 4. Follow on-screen steps (same as above)
 5. At session end, download the generated RAG files and save to your project folder
@@ -78,8 +84,8 @@ Full benchmark: [`docs/benchmark_comparison.md`](docs/benchmark_comparison.md)
 | Capability | RAG Runtime Kernel | Claude Code | lean-ctx | LLM Wiki |
 |---|---|---|---|---|
 | **Cross-session memory** | Full: HOT/COLD + WAL + crash recovery | Partial: CLAUDE.md, no crash recovery | None | Pattern only |
-| **Deterministic state machine** | BOOTING→READY→WORKING→CHECKPOINTING→CLOSING + RECOVERY | None | None | None |
-| **Token efficiency** | 60–90% reduction (HOT-only boot ~4K tokens) | Unbounded growth without curation | 60–99% raw compression (best-in-class I/O) | Depends on wiki quality |
+| **Deterministic state machine** | BOOTING > READY > WORKING > CHECKPOINTING > CLOSING + RECOVERY | None | None | None |
+| **Token efficiency** | 60-90% reduction (HOT-only boot ~4K tokens) | Unbounded growth without curation | 60-99% raw compression (best-in-class I/O) | Depends on wiki quality |
 | **Cross-platform** | Claude + GPT + any LLM, same spec | Claude Code only | Editor-focused | Platform-agnostic pattern |
 | **Dependencies** | Zero. Single markdown file | Node.js + CLI | Rust binary | Varies |
 | **Crash recovery** | WAL replay + .bak rotation + RECOVERY state | File-history checkpoints | N/A | None |
@@ -101,11 +107,11 @@ A **specification** — a complete protocol that turns any LLM into a controlled
 
 ```
 LLM (reasoning engine)
-  ↓ JSON proposals
+  | JSON proposals
 Policy Layer (this specification)
-  ↓ validated transitions
+  | validated transitions
 Runtime Kernel (state + persistence)
-  ↓ atomic writes
+  | atomic writes
 Filesystem (source of truth)
 ```
 
@@ -113,9 +119,9 @@ Filesystem (source of truth)
 
 **Structured Memory (HOT/COLD)** — Active state stays lean (~15KB). Archival data loads on-demand with automatic partitioning.
 
-**Deterministic State Machine** — `BOOTING → READY → WORKING → CHECKPOINTING → CLOSING` with `RECOVERY` path.
+**Deterministic State Machine** — `BOOTING > READY > WORKING > CHECKPOINTING > CLOSING` with `RECOVERY` path.
 
-**Proposal → Validation → Commit** — LLM proposes JSON actions. System validates against policy, then commits or rejects.
+**Proposal > Validation > Commit** — LLM proposes JSON actions. System validates against policy, then commits or rejects.
 
 **Atomic Persistence** — All writes atomic and verified. WAL enables crash recovery.
 
@@ -129,7 +135,7 @@ Filesystem (source of truth)
 
 **Full Audit Trail** — Every state transition, decision, and conflict logged.
 
-**Token Efficiency** — 70–95% reduction vs. naive approaches.
+**Token Efficiency** — 70-95% reduction vs. naive approaches.
 
 ## Two Execution Modes
 
@@ -150,9 +156,11 @@ Filesystem (source of truth)
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.3.md   # The specification (the product)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md   # The specification (the product)
 ├── CONTRIBUTING.md                            # How to report issues
 ├── COMPREHENSIVE_TODO_PLAN_v3_1_3.md          # Full development plan
+├── assets/
+│   └── logo.png                               # Project logo
 ├── docs/
 │   ├── architecture.md                        # System architecture
 │   ├── benchmark_comparison.md                # Head-to-head vs alternatives
@@ -160,9 +168,11 @@ rag-runtime-kernel/
 │   ├── test_analysis_gpt_web.md               # GPT Web test findings
 │   └── ROADMAP.md                             # Development roadmap
 ├── tests/
-│   ├── UNIT_TEST_CLAUDE_DESKTOP.md            # Claude Desktop test suite (32 tests)
-│   └── UNIT_TEST_GPT_WEB.md                   # GPT Web test suite (33 tests)
-├── .github/ISSUE_TEMPLATE/                    # Bug report + feature request templates
+│   ├── UNIT_TEST_CLAUDE_DESKTOP.md            # Claude Desktop test suite (42 tests)
+│   └── UNIT_TEST_GPT_WEB.md                   # GPT Web test suite (43 tests)
+├── .github/
+│   ├── FUNDING.yml                            # GitHub Sponsors
+│   └── ISSUE_TEMPLATE/                        # Bug report + feature request templates
 ├── LICENSE                                    # AGPL-3.0
 └── README.md
 ```
@@ -198,7 +208,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
 
 | Release | Focus |
 |---|---|
-| **v3.1.4** | Defect fixes: optional POV, session-zero boot scan, archive extraction |
+| **v3.1.4** | Defect fixes: optional POV, session-zero boot scan, post-scan summary |
 | **v3.2** | OS-Level Runtime: filesystem bridge, real WAL, COLD partition manager |
 | **v3.3** | UX: graduated POV, conflict auto-categorization, delta checkpoints |
 | **v4.0** | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
@@ -207,7 +217,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
 
 Found a bug? Please [open an issue](../../issues/new/choose) using the provided templates. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## Support the Developer
+## Support
 
 **Developer:** Artem Pakhol
 **LinkedIn:** [linkedin.com/in/pakhol](https://www.linkedin.com/in/pakhol)

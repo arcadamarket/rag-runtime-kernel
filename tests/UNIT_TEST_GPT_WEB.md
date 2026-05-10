@@ -1,7 +1,7 @@
 # UNIT TEST — RAG Runtime Kernel Init Prompt Validation
 # Platform: GPT Web (ChatGPT with Code Interpreter only — no MCP)
-# Version: For INIT_UNIVERSAL_RUNTIME_KERNEL v3.1.3
-# Usage: Upload this file + the init prompt into a new GPT project/conversation.
+# Version: For INIT_UNIVERSAL_RUNTIME_KERNEL v3.1.4
+# Usage: Upload this file + the init prompt into a new GPT conversation.
 #        Then say: "Run unit tests"
 
 ---
@@ -9,141 +9,122 @@
 ## INSTRUCTIONS FOR THE EXECUTING LLM
 
 You are running a validation test suite against the INIT_UNIVERSAL_RUNTIME_KERNEL specification.
-This suite is designed for GPT Web, which operates in AUTONOMOUS mode with no Filesystem MCP.
-Tests that require MCP filesystem access are replaced with schema/logic/self-check equivalents.
+This suite is for GPT Web — AUTONOMOUS mode, no Filesystem MCP.
+Tests requiring MCP are replaced with schema/logic/self-check equivalents.
 
-For each test, execute the check described, then report:
-
+For each test, report:
 ```
 [TEST_ID] — [PASS|FAIL|SKIP] — [one-line reason]
 ```
 
-After all tests complete, output a summary table with pass/fail/skip counts.
+Summary table at end. Do NOT modify any files.
 
 ---
 
 ## GROUP A — ENVIRONMENT DETECTION (§0, §3, §37)
 
 ### A1 — Execution mode detected
-Self-check: You have no Filesystem MCP. What execution mode should you operate in?
-**Pass:** AUTONOMOUS mode per §0 — "The default when operating inside ChatGPT."
-**Fail:** ENFORCED mode, or "degraded mode."
+Self-check: No Filesystem MCP. What execution mode?
+**Pass:** AUTONOMOUS mode per §0.
+**Fail:** ENFORCED or "degraded."
 
 ### A2 — Autonomous mode is not degraded
-Self-check: In autonomous mode, are any rules relaxed or optional?
-**Pass:** No — "Autonomous mode is NOT degraded mode. All rules apply with full force." (§0)
-**Fail:** Any rules described as relaxed.
+Self-check: In autonomous mode, are any rules relaxed?
+**Pass:** No — all rules apply with full force (§0).
+**Fail:** Any rules relaxed.
 
-### A3 — Tool inventory (GPT environment)
-List all tools available to you in this session (Code Interpreter, web browsing, DALL-E, etc.).
-**Pass:** Accurate inventory reported; tools correctly classified as unable to access user's local filesystem.
-**Fail:** Claim to have filesystem access when you don't, or missing tools from inventory.
+### A3 — Tool inventory
+List all tools available (Code Interpreter, browsing, DALL-E, etc.). Classify correctly.
+**Pass:** Accurate inventory; none can access user's local filesystem.
+**Fail:** Claim filesystem access.
 
 ### A4 — No-MCP fallback awareness
-Self-check: With no Filesystem MCP, how do you handle file reads/writes for RAG persistence?
-**Pass:** Acknowledge you cannot directly read/write to user's filesystem. State that RAG must be provided via upload/paste and saved via code interpreter download or user manual copy. Per §0: "use the best available approximation, log the gap."
-**Fail:** Claim filesystem access, or halt without offering any approximation.
+Self-check: How do you handle RAG persistence without filesystem tools?
+**Pass:** RAG via upload/paste, saved via Code Interpreter download. Log the gap per §0.
+**Fail:** Claim filesystem access, or refuse to operate.
 
-### A5 — Hash validation in autonomous mode
-Self-check: Can you compute and verify SHA-256 hashes on RAG files?
-**Pass:** Yes — Code Interpreter has `hashlib`. In autonomous mode, hash fields are optional placeholders (§14), but you CAN compute them via Code Interpreter if files are uploaded.
-**Fail:** Claim hash computation is impossible.
+### A5 — Hash validation capability
+Self-check: Can you compute SHA-256 hashes on uploaded files?
+**Pass:** Yes via Code Interpreter `hashlib`. Hash fields are optional placeholders in autonomous mode (§14).
+**Fail:** Claim impossible.
 
 ---
 
 ## GROUP B — SPECIFICATION PARSING
 
 ### B1 — Section count
-Using Code Interpreter, count the number of `## §` headings in the init prompt file.
-**Pass:** Count matches expected (40 section headings: §0–§38 plus §3a for v3.1.3).
+Using Code Interpreter, count `## §` headings in the init prompt.
+**Pass:** 40 headings (§0–§38 + §3a).
 **Fail:** Count mismatch.
 
 ### B2 — Version identification
-Extract the version number from the init prompt title line.
-**Pass:** Reports `v3.1.3`.
-**Fail:** Wrong version or unable to extract.
+Extract version from title line.
+**Pass:** `v3.1.4`.
+**Fail:** Wrong version.
 
 ### B3 — Schema version in HOT template
-Find the HOT schema template (§32). Extract `schema_version`.
-**Pass:** Reports the value defined in §32.
-**Fail:** Wrong value or not found.
+Find §32, extract `schema_version`.
+**Pass:** Correct value from §32.
+**Fail:** Wrong or not found.
 
 ### B4 — Cross-reference integrity
-Using Code Interpreter, scan the init prompt for all `§N` references. For each reference, verify the referenced section actually exists as a `## §N` heading.
-**Pass:** All cross-references resolve to existing sections.
-**Fail:** Any dangling reference (references a section that doesn't exist).
+Using Code Interpreter, scan for all `§N` references. Verify each resolves to an existing heading.
+**Pass:** All references valid.
+**Fail:** Dangling references.
 
 ---
 
 ## GROUP C — STATE MACHINE LOGIC (§2)
 
-### C1 — Transition table completeness
-Self-check: List every state and its allowed transitions.
-**Pass:**
-- BOOTING → READY, RECOVERY
-- READY → WORKING, INGESTING, CLOSING
-- INGESTING → WORKING, CHECKPOINTING
-- WORKING → CHECKPOINTING, INGESTING
-- CHECKPOINTING → READY, CLOSING
-- CLOSING → (terminal)
-- RECOVERY → READY
-**Fail:** Missing or extra transitions.
+### C1 — Transition table
+Self-check: List every state and its legal transitions.
+**Pass:** BOOTING→READY/RECOVERY, READY→WORKING/INGESTING/CLOSING, INGESTING→WORKING/CHECKPOINTING, WORKING→CHECKPOINTING/INGESTING, CHECKPOINTING→READY/CLOSING, CLOSING→terminal, RECOVERY→READY.
+**Fail:** Missing or extra.
 
-### C2 — Invalid transition rejection
-Self-check: Is READY → CLOSING a valid transition?
-**Pass:** Yes — a session can close from READY (user says goodbye, nothing to do).
-**Fail:** Incorrectly rejected.
+### C2 — READY → CLOSING validity
+Self-check: Is READY → CLOSING valid?
+**Pass:** Yes — session can close from READY.
+**Fail:** Rejected.
 
 ### C3 — BOOTING → WORKING rejection
-Self-check: Can you go directly from BOOTING to WORKING?
-**Pass:** No — must pass through READY first. "No substantive work before READY." (§2)
+Self-check: Can you go BOOTING → WORKING directly?
+**Pass:** No — must go through READY. "No substantive work before READY." (§2)
 **Fail:** Accepted.
 
 ### C4 — WAL logging requirements
-Self-check: Which state transitions MUST be logged to the WAL?
-**Pass:** BOOTING, entering CHECKPOINTING, entering CLOSING, entering RECOVERY, any failure. (§2)
-**Fail:** Missing any of these, or including implicit transitions (READY→WORKING).
+Self-check: Which transitions MUST be logged?
+**Pass:** BOOTING, entering CHECKPOINTING, entering CLOSING, entering RECOVERY, any failure (§2).
+**Fail:** Missing any or including implicit transitions.
 
 ---
 
 ## GROUP D — SCHEMA VALIDATION (§32, §33)
 
-### D1 — HOT schema validation via Code Interpreter
-If a `RAG_MASTER.json` file has been uploaded, parse it and verify all required fields from §32 exist:
-- `meta.schema_version`, `meta.rag_version`, `meta.root_project`, `meta.root_deliverables`, `meta.root_rag`
-- `meta.policy_version`, `meta.rag_files` (with hot, cold, backup, snapshot_log)
-- `execution_mode`, `state_machine_status`
-- `policy_flags.atomic_writes_required`
-- `pov_mandate.count`
-- `sessions_recent` (array)
+### D1 — HOT schema validation
+If `RAG_MASTER.json` uploaded, parse and verify all required fields including `pov_mandate.mode` (v3.1.4).
 If no RAG uploaded: SKIP.
-**Pass:** All fields present and correctly typed.
-**Fail:** Any missing or wrong type.
+**Pass:** All fields present.
+**Fail:** Missing fields.
 
-### D2 — HOT size governance via Code Interpreter
-If RAG uploaded, check file size. Must be under 15,360 bytes.
+### D2 — HOT size governance
+If RAG uploaded, check size < 15,360 bytes.
 If no RAG uploaded: SKIP.
-**Pass:** Under 15KB.
-**Fail:** Over 15KB.
+**Pass:** Under limit.
+**Fail:** Over.
 
 ### D3 — COLD schema validation
-If `RAG_COLD.json` uploaded, verify:
-- `meta.type` == `"RAG_COLD"`
-- `meta.parent_hot` == `"RAG_MASTER.json"`
-- `documents_inventory` exists
-- `conflict_ledger` exists (array)
-- `sessions` exists (array)
+If `RAG_COLD.json` uploaded, verify schema.
 If no COLD uploaded: SKIP.
 **Pass:** Schema valid.
-**Fail:** Schema violations.
+**Fail:** Violations.
 
 ### D4 — HOT template reproducibility
-Using Code Interpreter, generate a blank HOT JSON from the §32 template. Validate it parses as valid JSON and contains all required fields.
-**Pass:** Generated JSON is valid and complete.
+Using Code Interpreter, generate blank HOT from §32. Validate JSON + all required fields.
+**Pass:** Valid and complete.
 **Fail:** Parse error or missing fields.
 
 ### D5 — COLD template reproducibility
-Using Code Interpreter, generate a blank COLD JSON from the §33 template. Validate it.
+Using Code Interpreter, generate blank COLD from §33. Validate.
 **Pass:** Valid and complete.
 **Fail:** Parse error or missing fields.
 
@@ -152,118 +133,192 @@ Using Code Interpreter, generate a blank COLD JSON from the §33 template. Valid
 ## GROUP E — PROPOSAL CONTRACT (§4)
 
 ### E1 — Proposal structure
-Self-check: What fields must a formal proposal contain?
+Self-check: Required fields in a formal proposal?
 **Pass:** `proposal_id`, `action`, `state_before`, `state_after`, `payload`, `risk`, `reasoning`.
-**Fail:** Missing any field.
+**Fail:** Missing any.
 
 ### E2 — Risk-proportional application
-Self-check: Does a minor status field update require a full formal JSON proposal?
-**Pass:** No — low-risk actions use internal validation without formal ceremony (§4 risk-proportional section).
-**Fail:** Yes to all, or no validation at all.
+Self-check: Does a minor status update need a full proposal?
+**Pass:** No — low-risk uses internal validation (§4).
+**Fail:** Yes to all, or no validation.
 
-### E3 — Autonomous mode proposal handling
-Self-check: In autonomous mode, who is both proposer and validator?
-**Pass:** The model itself. "The prohibition applies to UNVALIDATED mutation — not to the model performing validated writes." (§4)
-**Fail:** Only an external wrapper can validate.
+### E3 — Autonomous mode role
+Self-check: In autonomous mode, who proposes and validates?
+**Pass:** The model itself.
+**Fail:** Only external wrapper.
 
 ---
 
-## GROUP F — POLICY RULES (self-check)
+## GROUP F — POV CONFIGURATION (§16, §31 — v3.1.4)
 
-### F1 — Filesystem boundary principle
-Self-check: What three paths define the filesystem boundary?
+### F1 — POV is optional at bootstrap
+Self-check: Can user skip POV at session-zero?
+**Pass:** Yes — sets `pov_mandate: {count: 0, mode: "disabled"}`, `pov_roles: []`.
+**Fail:** POV mandatory.
+
+### F2 — POV disabled mode
+Self-check: When `pov_mandate.mode == "disabled"`, is contestation performed?
+**Pass:** No — outputs delivered directly.
+**Fail:** Contestation still runs.
+
+### F3 — POV redefinition at any time
+Self-check: Can user redefine POVs mid-project?
+**Pass:** Yes — update HOT, log change, apply to subsequent outputs. Prior outputs unchanged unless user requests.
+**Fail:** Locked at bootstrap.
+
+### F4 — POV transition disabled → strict
+Self-check: User had disabled POVs, now says "add a Security Analyst POV." Result?
+**Pass:** `mode` → `strict`, `count` → 1, `pov_roles` updated, logged.
+**Fail:** Cannot enable after disabling.
+
+---
+
+## GROUP G — SESSION-ZERO BOOT SCAN (§35 — v3.1.4)
+
+### G1 — Boot scan offered at session-zero
+Self-check: After pointer block confirmation, is scan offered?
+**Pass:** Yes — await user approval.
+**Fail:** No offer or auto-scan.
+
+### G2 — Scan decline non-blocking
+Self-check: User declines scan — system blocked?
+**Pass:** No — proceeds to READY.
+**Fail:** Blocked.
+
+---
+
+## GROUP H — POST-SCAN SUMMARY (§10c-post — v3.1.4)
+
+### H1 — Mandatory file summary
+Self-check: After scan, must you present all-files summary?
+**Pass:** Yes — table with relative path, tier, ingested, status. Mandatory.
+**Fail:** No summary or optional.
+
+### H2 — Archive summary
+Self-check: If archives found, consolidated summary required?
+**Pass:** Yes — list with catalog, offer extract selected/all/skip, token warning.
+**Fail:** No archive summary.
+
+### H3 — Summary frequency
+Self-check: Summary fires once per scan or per file?
+**Pass:** Once per scan/batch.
+**Fail:** Per file.
+
+---
+
+## GROUP I — POLICY RULES
+
+### I1 — Filesystem boundary paths
+Self-check: What three paths define the boundary?
 **Pass:** `root_project`, `root_deliverables`, `root_rag`.
-**Fail:** Missing or extra paths.
+**Fail:** Missing or extra.
 
-### F2 — Source hierarchy tiers
-Self-check: List all tiers and their authority level.
-**Pass:** Tier 0 (primary/authoritative), Tier 1 (filed/published), Tier 2 (processed AI), Tier 3 (working drafts). Primary overrides summaries.
-**Fail:** Missing tiers or wrong hierarchy.
+### I2 — Source hierarchy tiers
+Self-check: List all tiers.
+**Pass:** Tier 0 (primary), Tier 1 (filed/published), Tier 2 (AI-processed), Tier 3 (drafts). Primary overrides.
+**Fail:** Wrong hierarchy.
 
-### F3 — Files Tab rule
-Self-check: If a `RAG_MASTER.json` is found in chat context/uploads AND on the filesystem, which is authoritative?
-**Pass:** Filesystem copy. Files Tab copy is ignored with a one-time warning (§7).
-**Fail:** Files Tab copy, or merge both.
+### I3 — Files Tab rule
+Self-check: RAG in chat context AND filesystem — which authoritative?
+**Pass:** Filesystem. Chat copy ignored with warning.
+**Fail:** Chat copy used.
 
-### F4 — Token economy thresholds
-Self-check: At what context capacity do you warn? At what capacity do you HALT?
-**Pass:** 75% = warn + checkpoint. 80% = HALT + must save.
-**Fail:** Wrong thresholds.
+### I4 — Token thresholds
+Self-check: Warn at? HALT at?
+**Pass:** 75% warn, 80% halt.
+**Fail:** Wrong.
 
-### F5 — Session-close audit scope
-Self-check: Does a discussion-only session (no file operations) still require a session-close audit?
-**Pass:** Yes — "Applies to ALL sessions — including discussion-only sessions." (§17)
+### I5 — Session-close audit scope
+Self-check: Discussion-only session needs close audit?
+**Pass:** Yes — all sessions (§17).
 **Fail:** No.
 
-### F6 — Conflict ledger rules
-Self-check: When two sources disagree, what are the 4 rules?
-**Pass:** (1) Preserve BOTH records, (2) Record structured conflict entry, (3) NEVER delete the losing record, (4) NEVER silently merge.
-**Fail:** Missing any rule.
+### I6 — Conflict ledger rules
+Self-check: Two sources disagree — 4 rules?
+**Pass:** Preserve both, record conflict, never delete loser, never silently merge.
+**Fail:** Missing any.
 
-### F7 — COLD mandatory load triggers
-Self-check: Name at least 3 mandatory COLD load triggers from §8.
-**Pass:** Any 3 from: cross-reference tasks, diff/comparison/audit, status summary after prior ingestion, root cause analysis, multi-account environments.
+### I7 — COLD mandatory triggers
+Self-check: Name 3+ mandatory COLD load triggers.
+**Pass:** 3+ from §8 list.
 **Fail:** Fewer than 3.
 
-### F8 — operating_protocol is required
-Self-check: Is `operating_protocol: {}` (empty) acceptable after session-zero?
-**Pass:** No — it must be populated with behavioral rules at session-zero (§31).
+### I8 — operating_protocol required at session-zero
+Self-check: Is `operating_protocol: {}` acceptable after bootstrap?
+**Pass:** No — must be populated (§31).
 **Fail:** Acceptable.
 
 ---
 
-## GROUP G — RECOVERY PROTOCOL (§20)
+## GROUP J — PLATFORM PERSISTENCE (§37 — v3.1.4)
 
-### G1 — Recovery steps
-Self-check: Enumerate the 7 recovery steps from §20.
-**Pass:** (1) HALT, enter RECOVERY; (2) try .bak; (3) try WAL; (4) if .bak valid offer restore; (5) if .bak fails offer rebuild options A/B/C; (6) identify unsaved facts from WAL; (7) resume only after verification.
+### J1 — GPT Web atomic writes
+Self-check: On GPT Web, are atomic writes enforced or advisory?
+**Pass:** Advisory — persistence depends on user downloading/saving files manually.
+**Fail:** Enforced.
+
+### J2 — WAL on GPT Web
+Self-check: Are WAL entries written to disk automatically on GPT Web?
+**Pass:** No — generated in-context but not persisted unless user saves snapshot log.
+**Fail:** Auto-persisted.
+
+### J3 — Recovery prerequisites on GPT Web
+Self-check: What must user have saved for recovery to work on GPT Web?
+**Pass:** RAG_MASTER.json, .bak, and RUNTIME_SNAPSHOT.log.
+**Fail:** Only RAG_MASTER.json, or "recovery works automatically."
+
+---
+
+## GROUP K — RECOVERY PROTOCOL (§20)
+
+### K1 — Recovery steps
+Self-check: Enumerate the 7 recovery steps.
+**Pass:** (1) HALT, enter RECOVERY; (2) try .bak; (3) try WAL; (4) if .bak valid → offer restore; (5) if .bak fails → options A/B/C; (6) unsaved facts from WAL; (7) resume only after verification.
 **Fail:** Missing steps.
 
-### G2 — No silent proceed
-Self-check: Can you proceed with substantive work if the RAG is missing or broken?
-**Pass:** No — "NEVER silently proceed with a missing or broken RAG." (§20)
-**Fail:** Yes, in any circumstance.
+### K2 — No silent proceed
+Self-check: Can you proceed with missing/broken RAG?
+**Pass:** No — "NEVER silently proceed" (§20).
+**Fail:** Yes.
 
 ---
 
-## GROUP H — CROSS-PLATFORM INTEROP (§37)
+## GROUP L — CROSS-PLATFORM (§37)
 
-### H1 — GPT-specific capabilities
-Self-check: In a GPT Web session, which tools from the §37 tool hierarchy are available?
-**Pass:** None of the MCP tools. Code Interpreter only. Autonomous mode applies. User must upload/download files manually.
-**Fail:** Claim MCP tools are available.
+### L1 — GPT-specific tools
+Self-check: Which §37 tool hierarchy tools are available in GPT Web?
+**Pass:** None of the MCP tools. Code Interpreter only. Autonomous mode.
+**Fail:** Claim MCP tools.
 
-### H2 — Persistence approximation
-Self-check: How do you persist RAG state in GPT Web without filesystem access?
-**Pass:** Generate JSON content via Code Interpreter → offer as downloadable file → user saves to their filesystem manually. Log the non-MCP gap. On next session, user re-uploads updated RAG.
-**Fail:** Claim it persists automatically, or refuse to operate.
+### L2 — Persistence approximation
+Self-check: How do you persist RAG state without filesystem?
+**Pass:** Generate JSON via Code Interpreter → downloadable file → user saves. Re-upload next session.
+**Fail:** Auto-persists or refuse to operate.
 
 ---
 
-## GROUP I — COMPLETION STANDARD (§36)
+## GROUP M — COMPLETION STANDARD (§36)
 
-### I1 — Full standard enumeration
-Self-check: List all 11 conditions from §36 and assess which ones can be validated in GPT Web.
-**Pass:** All 11 listed. Clear distinction between validatable (schema, logic, policy) and not-validatable-without-MCP (filesystem persistence, atomic writes).
-**Fail:** Fewer than 11 or no feasibility assessment.
+### M1 — Full standard enumeration
+List all 11 conditions from §36. Assess which can be validated in GPT Web.
+**Pass:** All 11 listed with feasibility assessment.
+**Fail:** Fewer than 11.
 
 ---
 
 ## SUMMARY FORMAT
 
-After all tests, output:
-
 ```
 ═══════════════════════════════════════
   UNIT TEST RESULTS — GPT Web
-  Spec version: v3.1.3
+  Spec version: v3.1.4
   Date: [today]
 ═══════════════════════════════════════
   PASS:  [count]
   FAIL:  [count]
   SKIP:  [count]
   WARN:  [count]
-  TOTAL: [count]
+  TOTAL: 43
 ═══════════════════════════════════════
 ```
 
