@@ -13,3 +13,9 @@ node_modules/
 *.egg-info/
 dist/
 build/
+
+# Deferred until accounts are set up (Stripe/PayPal)
+.github/FUNDING.yml
+
+# Local pre-adjustment logos — GitHub versions are user-adjusted and authoritative
+assets/
