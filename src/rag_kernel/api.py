@@ -1,0 +1,645 @@
+"""HTTP API router for the RAG Runtime Kernel.
+
+Stdlib-only HTTP server exposing the kernel's functionality via JSON API.
+All endpoints accept/return JSON. Default port: 7437 ("R-G-K" on phone keypad).
+
+Integrates:
+- StateMachine: session state transitions
+- Persistence: atomic writes, WAL, hash verification
+- ColdManager: lazy COLD partition access
+- ProjectLock: concurrency guard
+
+Design doc reference: v3.2_ARCHITECTURE_DESIGN.md §5
+Satisfies: M-023 (core HTTP API)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+import traceback
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from rag_kernel.cold_manager import ColdManager, ColdFileError, PartitionNotFoundError
+from rag_kernel.concurrency import (
+    ProjectLock,
+    LockConflictError,
+    detect_split_brain,
+)
+from rag_kernel.persistence import (
+    WAL,
+    atomic_write_json,
+    compute_hash,
+    verify_hashes,
+)
+from rag_kernel.state_machine import State, StateMachine
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+DEFAULT_PORT = 7437
+HOT_FILENAME = "RAG_MASTER.json"
+COLD_FILENAME = "RAG_COLD.json"
+WAL_FILENAME = "WAL.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Kernel Application (ties all components together)
+# ---------------------------------------------------------------------------
+
+class KernelApp:
+    """Central application object. Owns all kernel subsystems.
+
+    This is the single integration point. The HTTP handler and
+    MCP transport both delegate to KernelApp methods.
+    """
+
+    def __init__(
+        self,
+        project_dir: Path,
+        session_id: Optional[str] = None,
+    ) -> None:
+        self.project_dir = project_dir
+        self.session_id = session_id or f"S-{os.getpid()}-{int(time.time())}"
+
+        # Paths
+        self.hot_path = project_dir / HOT_FILENAME
+        self.cold_path = project_dir / COLD_FILENAME
+        self.wal_path = project_dir / WAL_FILENAME
+
+        # Subsystems (initialized but not booted)
+        self.state_machine = StateMachine()
+        self.lock = ProjectLock(project_dir)
+        self.wal = WAL(self.wal_path)
+        self.cold = ColdManager(self.cold_path)
+
+        # HOT data (loaded on boot)
+        self._hot: dict = {}
+
+        # Proposal staging area
+        self._proposals: dict[str, dict] = {}
+        self._proposal_seq = 0
+
+    # -- Boot ---------------------------------------------------------------
+
+    def boot(self) -> dict:
+        """Initialize the kernel session.
+
+        Sequence:
+        1. Acquire project lock
+        2. Load HOT (RAG_MASTER.json)
+        3. Verify hashes
+        4. Open WAL
+        5. Check for split-brain
+        6. Transition to READY (or RECOVERY)
+
+        Returns status dict.
+        """
+        # 1. Lock
+        if not self.lock.acquire(self.session_id):
+            info = self.lock.read_lock()
+            self.state_machine.transition(State.RECOVERY)
+            return {
+                "status": "LOCKED",
+                "state": self.state_machine.current.value,
+                "locked_by": info.to_dict() if info else None,
+            }
+
+        # 2. Open WAL early so it's available in all code paths
+        self.wal.open()
+
+        # 3. Load HOT
+        if self.hot_path.exists():
+            try:
+                raw = self.hot_path.read_text(encoding="utf-8")
+                self._hot = json.loads(raw)
+            except (json.JSONDecodeError, OSError) as e:
+                self.state_machine.transition(State.RECOVERY)
+                return {
+                    "status": "HOT_LOAD_FAILED",
+                    "state": State.RECOVERY.value,
+                    "error": str(e),
+                }
+        else:
+            self._hot = {"meta": {"session_id": self.session_id}}
+
+        # 4. Verify hashes
+        hash_errors = verify_hashes(self._hot)
+
+        # 5. Split-brain check
+        wal_entries = [e.to_dict() for e in self.wal.replay()]
+        split = detect_split_brain(self._hot, wal_entries)
+
+        if split or hash_errors:
+            self.state_machine.transition(State.RECOVERY)
+            self.wal.append(
+                "BOOT_RECOVERY",
+                session_id=self.session_id,
+                hash_errors=hash_errors,
+                split_brain=str(split) if split else None,
+            )
+            return {
+                "status": "RECOVERY",
+                "state": State.RECOVERY.value,
+                "hash_errors": hash_errors,
+                "split_brain": str(split) if split else None,
+            }
+
+        # 6. Transition to READY (no errors)
+        self.state_machine.transition(State.READY)
+        self.wal.append(
+            "BOOT_COMPLETE",
+            session_id=self.session_id,
+        )
+
+        # Update HOT session info
+        if "meta" not in self._hot:
+            self._hot["meta"] = {}
+        self._hot["meta"]["session_id"] = self.session_id
+
+        return {
+            "status": "OK",
+            "state": State.READY.value,
+            "session_id": self.session_id,
+        }
+
+    # -- Status -------------------------------------------------------------
+
+    def status(self) -> dict:
+        """Return current kernel status."""
+        return {
+            "state": self.state_machine.current.value,
+            "session_id": self.session_id,
+            "seq": self.state_machine.seq,
+            "wal_seq": self.wal.seq,
+            "is_terminal": self.state_machine.is_terminal,
+            "available_transitions": [
+                s.value for s in self.state_machine.available_transitions
+            ],
+            "cold_summary": self.cold.summary(),
+            "lock_held": self.lock.is_locked,
+        }
+
+    # -- HOT ----------------------------------------------------------------
+
+    def get_hot(self) -> dict:
+        """Return current HOT data."""
+        return dict(self._hot)
+
+    # -- COLD ---------------------------------------------------------------
+
+    def get_cold(self, partition: Optional[str] = None) -> Any:
+        """Return COLD data (full or specific partition)."""
+        if partition:
+            return self.cold.get(partition)
+        return self.cold.get_all()
+
+    # -- Propose / Commit / Reject ------------------------------------------
+
+    def propose(self, proposal: dict) -> dict:
+        """Submit a mutation proposal for validation.
+
+        The proposal must include:
+        - action: str (e.g., "update_status", "add_session")
+        - payload: dict (the data to write)
+
+        Returns proposal_id and validation result.
+        """
+        self._proposal_seq += 1
+        proposal_id = f"{self.session_id}-P{self._proposal_seq}"
+
+        # Validate structure
+        errors = []
+        if "action" not in proposal:
+            errors.append("Missing 'action' field")
+        if "payload" not in proposal:
+            errors.append("Missing 'payload' field")
+
+        # Validate state allows mutation
+        current = self.state_machine.current
+        if current not in (State.READY, State.WORKING, State.INGESTING):
+            errors.append(
+                f"Cannot propose in state {current.value}. "
+                f"Must be READY, WORKING, or INGESTING."
+            )
+
+        result = {
+            "proposal_id": proposal_id,
+            "valid": len(errors) == 0,
+            "errors": errors,
+        }
+
+        if not errors:
+            self._proposals[proposal_id] = {
+                "proposal_id": proposal_id,
+                "action": proposal["action"],
+                "payload": proposal["payload"],
+                "state_before": current.value,
+                "created_at": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                ),
+            }
+            self.wal.append(
+                "PROPOSAL_CREATED",
+                proposal_id=proposal_id,
+                action=proposal["action"],
+                session_id=self.session_id,
+            )
+
+        return result
+
+    def commit(self, proposal_id: str) -> dict:
+        """Commit a validated proposal.
+
+        Applies the payload to HOT, writes atomically, updates WAL.
+        """
+        if proposal_id not in self._proposals:
+            return {
+                "committed": False,
+                "error": f"Proposal '{proposal_id}' not found or already committed.",
+            }
+
+        proposal = self._proposals.pop(proposal_id)
+        payload = proposal["payload"]
+
+        # Transition to WORKING if not already
+        if self.state_machine.current == State.READY:
+            self.state_machine.transition(State.WORKING)
+
+        # Apply payload to HOT (shallow merge at top level)
+        for key, value in payload.items():
+            self._hot[key] = value
+
+        # Recompute hash
+        state_hash = compute_hash(self._hot)
+        if "meta" not in self._hot:
+            self._hot["meta"] = {}
+        self._hot["meta"]["state_hash"] = state_hash
+
+        # Atomic write
+        atomic_write_json(self.hot_path, self._hot)
+
+        # WAL
+        self.wal.append(
+            "PROPOSAL_COMMITTED",
+            proposal_id=proposal_id,
+            action=proposal["action"],
+            session_id=self.session_id,
+        )
+
+        return {
+            "committed": True,
+            "proposal_id": proposal_id,
+            "state_hash": state_hash,
+        }
+
+    def reject(self, proposal_id: str) -> dict:
+        """Reject a proposal. Removes it from staging."""
+        if proposal_id not in self._proposals:
+            return {
+                "rejected": False,
+                "error": f"Proposal '{proposal_id}' not found.",
+            }
+
+        self._proposals.pop(proposal_id)
+        self.wal.append(
+            "PROPOSAL_REJECTED",
+            proposal_id=proposal_id,
+            session_id=self.session_id,
+        )
+        return {"rejected": True, "proposal_id": proposal_id}
+
+    # -- Checkpoint ---------------------------------------------------------
+
+    def checkpoint(self) -> dict:
+        """Save current state. Backup rotation + hash recompute."""
+        if not self.state_machine.transition(State.CHECKPOINTING):
+            return {
+                "checkpointed": False,
+                "error": f"Cannot checkpoint from {self.state_machine.current.value}",
+            }
+
+        # Recompute hash
+        state_hash = compute_hash(self._hot)
+        if "meta" not in self._hot:
+            self._hot["meta"] = {}
+        self._hot["meta"]["state_hash"] = state_hash
+        self._hot["meta"]["last_checkpoint_seq"] = self.wal.seq
+        self._hot["meta"]["session_id"] = self.session_id
+
+        # Atomic write (creates .bak)
+        atomic_write_json(self.hot_path, self._hot)
+
+        self.wal.append(
+            "CHECKPOINT",
+            session_id=self.session_id,
+            seq=self.wal.seq,
+        )
+
+        # Back to READY
+        self.state_machine.transition(State.READY)
+
+        return {
+            "checkpointed": True,
+            "state_hash": state_hash,
+            "wal_seq": self.wal.seq,
+        }
+
+    # -- WAL ----------------------------------------------------------------
+
+    def get_wal(self, since: int = 0) -> list[dict]:
+        """Return WAL entries, optionally filtered by since=seq."""
+        return [e.to_dict() for e in self.wal.replay(since=since)]
+
+    # -- Recovery -----------------------------------------------------------
+
+    def recover(self) -> dict:
+        """Attempt recovery: try .bak, then report state."""
+        bak_path = self.hot_path.with_suffix(
+            self.hot_path.suffix + ".bak"
+        )
+
+        if bak_path.exists():
+            try:
+                raw = bak_path.read_text(encoding="utf-8")
+                self._hot = json.loads(raw)
+                hash_errors = verify_hashes(self._hot)
+                if not hash_errors:
+                    atomic_write_json(self.hot_path, self._hot)
+                    self.wal.append(
+                        "RECOVERY_BAK_RESTORED",
+                        session_id=self.session_id,
+                    )
+                    if self.state_machine.current == State.RECOVERY:
+                        self.state_machine.transition(State.READY)
+                    return {
+                        "recovered": True,
+                        "method": "bak",
+                        "state": self.state_machine.current.value,
+                    }
+                else:
+                    return {
+                        "recovered": False,
+                        "method": "bak",
+                        "hash_errors": hash_errors,
+                    }
+            except (json.JSONDecodeError, OSError) as e:
+                return {
+                    "recovered": False,
+                    "method": "bak",
+                    "error": str(e),
+                }
+
+        return {
+            "recovered": False,
+            "error": "No .bak file found. Manual intervention required.",
+        }
+
+    # -- Close --------------------------------------------------------------
+
+    def close(self) -> dict:
+        """Close the session: checkpoint, flush WAL, release lock."""
+        # Checkpoint if possible
+        current = self.state_machine.current
+        if current in (State.READY, State.WORKING, State.INGESTING):
+            self.checkpoint()
+
+        # Transition to CLOSING
+        if self.state_machine.current != State.CLOSING:
+            if not self.state_machine.transition(State.CLOSING):
+                self.state_machine.force_state(
+                    State.CLOSING, reason="session close"
+                )
+
+        # WAL
+        self.wal.append(
+            "SESSION_CLOSED",
+            session_id=self.session_id,
+        )
+        self.wal.close()
+
+        # Release lock
+        self.lock.release()
+
+        return {
+            "closed": True,
+            "state": State.CLOSING.value,
+            "session_id": self.session_id,
+        }
+
+
+# ---------------------------------------------------------------------------
+# HTTP Request Handler
+# ---------------------------------------------------------------------------
+
+class KernelHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for the RAG Kernel API.
+
+    Routes requests to the KernelApp instance stored on the server.
+    All responses are JSON.
+    """
+
+    # Suppress default stderr logging
+    def log_message(self, format: str, *args: Any) -> None:
+        pass  # Override to suppress default logging
+
+    def do_GET(self) -> None:
+        """Handle GET requests."""
+        path = self.path.split("?")[0]  # strip query string
+
+        routes: dict[str, Callable] = {
+            "/status": self._handle_status,
+            "/hot": self._handle_hot,
+            "/cold": self._handle_cold,
+            "/wal": self._handle_wal,
+        }
+
+        # Check for parameterized routes
+        cold_match = re.match(r"^/cold/(.+)$", path)
+        if cold_match:
+            self._handle_cold_partition(cold_match.group(1))
+            return
+
+        handler = routes.get(path)
+        if handler:
+            handler()
+        else:
+            self._send_json({"error": f"Not found: {path}"}, 404)
+
+    def do_POST(self) -> None:
+        """Handle POST requests."""
+        path = self.path.split("?")[0]
+
+        routes: dict[str, Callable] = {
+            "/boot": self._handle_boot,
+            "/propose": self._handle_propose,
+            "/checkpoint": self._handle_checkpoint,
+            "/recover": self._handle_recover,
+            "/close": self._handle_close,
+        }
+
+        # Parameterized routes
+        commit_match = re.match(r"^/commit/(.+)$", path)
+        if commit_match:
+            self._handle_commit(commit_match.group(1))
+            return
+
+        reject_match = re.match(r"^/reject/(.+)$", path)
+        if reject_match:
+            self._handle_reject(reject_match.group(1))
+            return
+
+        handler = routes.get(path)
+        if handler:
+            handler()
+        else:
+            self._send_json({"error": f"Not found: {path}"}, 404)
+
+    # -- Route handlers -----------------------------------------------------
+
+    def _handle_status(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        self._send_json(app.status())
+
+    def _handle_hot(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        self._send_json(app.get_hot())
+
+    def _handle_cold(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        try:
+            self._send_json(app.get_cold())
+        except ColdFileError as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_cold_partition(self, partition: str) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        try:
+            data = app.get_cold(partition)
+            self._send_json(data)
+        except PartitionNotFoundError as e:
+            self._send_json({"error": str(e)}, 404)
+        except ColdFileError as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_wal(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        # Parse ?since=N from query string
+        since = 0
+        if "?" in self.path:
+            query = self.path.split("?")[1]
+            for param in query.split("&"):
+                if param.startswith("since="):
+                    try:
+                        since = int(param.split("=")[1])
+                    except ValueError:
+                        pass
+        self._send_json(app.get_wal(since=since))
+
+    def _handle_boot(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        result = app.boot()
+        code = 200 if result.get("status") == "OK" else 409
+        self._send_json(result, code)
+
+    def _handle_propose(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        body = self._read_body()
+        if body is None:
+            return
+        result = app.propose(body)
+        code = 200 if result["valid"] else 400
+        self._send_json(result, code)
+
+    def _handle_commit(self, proposal_id: str) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        result = app.commit(proposal_id)
+        code = 200 if result["committed"] else 404
+        self._send_json(result, code)
+
+    def _handle_reject(self, proposal_id: str) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        result = app.reject(proposal_id)
+        code = 200 if result["rejected"] else 404
+        self._send_json(result, code)
+
+    def _handle_checkpoint(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        result = app.checkpoint()
+        code = 200 if result["checkpointed"] else 409
+        self._send_json(result, code)
+
+    def _handle_recover(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        result = app.recover()
+        code = 200 if result.get("recovered") else 500
+        self._send_json(result, code)
+
+    def _handle_close(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        result = app.close()
+        self._send_json(result)
+
+    # -- Helpers ------------------------------------------------------------
+
+    def _read_body(self) -> Optional[dict]:
+        """Read and parse JSON request body."""
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            self._send_json({"error": "Empty request body"}, 400)
+            return None
+        try:
+            raw = self.rfile.read(length)
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            self._send_json({"error": "Invalid JSON"}, 400)
+            return None
+
+    def _send_json(self, data: Any, code: int = 200) -> None:
+        """Send a JSON response."""
+        body = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+# ---------------------------------------------------------------------------
+# Server factory
+# ---------------------------------------------------------------------------
+
+class KernelHTTPServer(HTTPServer):
+    """HTTPServer subclass that carries a KernelApp reference."""
+
+    def __init__(
+        self,
+        app: KernelApp,
+        host: str = "127.0.0.1",
+        port: int = DEFAULT_PORT,
+    ) -> None:
+        self.app = app
+        super().__init__((host, port), KernelHTTPHandler)
+
+
+def create_server(
+    project_dir: Path,
+    host: str = "127.0.0.1",
+    port: int = DEFAULT_PORT,
+    session_id: Optional[str] = None,
+) -> KernelHTTPServer:
+    """Create a configured HTTP server ready to serve.
+
+    Usage:
+        server = create_server(Path("RAG"))
+        server.app.boot()
+        server.serve_forever()
+    """
+    app = KernelApp(project_dir, session_id=session_id)
+    return KernelHTTPServer(app, host, port)
