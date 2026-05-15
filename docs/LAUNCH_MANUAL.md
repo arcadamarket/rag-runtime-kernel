@@ -30,7 +30,7 @@ Comprehensive setup instructions for every supported platform and mode.
 The RAG Runtime Kernel is a filesystem-backed, event-sourced, prompt-controlled project memory system for LLMs. It has two components:
 
 - **Init prompt** (`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.x.md`) — loaded into LLM context to govern behavior.
-- **Python runtime** (`src/rag_kernel/`) — 8 modules providing external enforcement: `state_machine`, `persistence`, `cold_manager`, `concurrency`, `api`, `mcp_transport`, `schemas`, `__main__`.
+- **Python runtime** (`rag_kernel/`) — 8 modules providing external enforcement: `state_machine`, `persistence`, `cold_manager`, `concurrency`, `api`, `mcp_transport`, `schemas`, `__main__`.
 
 Two operating modes:
 
@@ -272,7 +272,7 @@ set PYTHONPATH=C:\path\to\rag-runtime-kernel\src
 python -m rag_kernel serve --project C:\path\to\your\RAG --port 7437
 
 # macOS/Linux
-PYTHONPATH=/path/to/rag-runtime-kernel/src python -m rag_kernel serve --project /path/to/your/RAG --port 7437
+python -m rag_kernel serve --project /path/to/your/RAG --port 7437
 ```
 
 Expected output:
@@ -514,7 +514,7 @@ Any LLM or agent framework that can make HTTP requests can use the kernel.
 
 1. Start the HTTP server:
    ```bash
-   PYTHONPATH=/path/to/rag-runtime-kernel/src python -m rag_kernel serve --project /path/to/your/RAG --port 7437
+   python -m rag_kernel serve --project /path/to/your/RAG --port 7437
    ```
 
 2. The kernel listens on `http://127.0.0.1:7437` by default.
@@ -688,7 +688,7 @@ Another kernel instance holds the lock. Close it first, or delete `.rag_kernel.l
 `RAG_MASTER.json` was edited outside the kernel. The kernel enters RECOVERY state. Use `/recover` (HTTP) or `rag_recover` (MCP) to restore from backup, or fix hashes manually.
 
 **"ModuleNotFoundError: No module named 'rag_kernel'"**
-Set `PYTHONPATH` to include the `src/` directory of the repository:
+Run from the repository root:
 ```bash
 # Windows
 set PYTHONPATH=C:\path\to\rag-runtime-kernel\src

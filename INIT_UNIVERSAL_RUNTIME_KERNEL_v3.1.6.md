@@ -1295,7 +1295,7 @@ For the protocol to work deterministically, the user's environment should have:
 
 5. **(Optional)** PDF/OCR MCP or Claude with code-execution tools for PDF text extraction.
 6. **(Optional)** Claude Code installed locally for zero-token file copy operations.
-7. **Python runtime kernel** (`src/rag_kernel/`) for ENFORCED mode. See §41 for v3.2 deployment model. Requires Python 3.10+.
+7. **Python runtime kernel** (`rag_kernel/`) for ENFORCED mode. See §41 for v3.2 deployment model. Requires Python 3.10+.
 
 If any prerequisite is missing, operate in autonomous mode per §0 with applicable fallbacks per §3a, §10c, §13, and §14.
 
@@ -1378,7 +1378,7 @@ This registry is append-only. When a new tool/environment failure is discovered 
 
 From v3.2 onward, users deploying the RAG Runtime Kernel in ENFORCED mode require BOTH:
 1. **This specification** (the init prompt) — loaded into the LLM's context to govern autonomous behavior, proposal validation, and spec enforcement.
-2. **The Python runtime** (`src/rag_kernel/`) — 8 modules providing the external enforcement layer: state machine, persistence engine, COLD manager, concurrency guard, API surface, MCP transport, schemas, and entry point.
+2. **The Python runtime** (`rag_kernel/`) — 8 modules providing the external enforcement layer: state machine, persistence engine, COLD manager, concurrency guard, API surface, MCP transport, schemas, and entry point.
 
 In AUTONOMOUS mode (no Python runtime), only the init prompt is needed. The model self-enforces all rules per §0.
 

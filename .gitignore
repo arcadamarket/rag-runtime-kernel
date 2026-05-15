@@ -19,5 +19,5 @@ build/
 # Deferred until accounts are set up (Stripe/PayPal)
 .github/FUNDING.yml
 
-# Local pre-adjustment logos — GitHub versions are user-adjusted and authoritative
-assets/
+# Temp shell scripts (used by CI/build, not part of the project)
+*.sh

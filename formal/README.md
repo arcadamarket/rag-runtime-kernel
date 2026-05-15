@@ -183,5 +183,5 @@ To model additional subsystems:
 - [TLA+ Home Page](https://lamport.azurewebsites.net/tla/tla.html)
 - [Learn TLA+](https://learntla.com) — free online textbook
 - `docs/v3.2_ARCHITECTURE_DESIGN.md` §6 (state machine), §7 (WAL)
-- `src/rag_kernel/state_machine.py`
-- `src/rag_kernel/persistence.py`
+- `rag_kernel/state_machine.py`
+- `rag_kernel/persistence.py`
