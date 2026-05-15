@@ -184,15 +184,16 @@ rag-runtime-kernel/
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
 │   ├── v3.2_ARCHITECTURE_DESIGN.md            # v3.2 runtime architecture
 │   └── ROADMAP.md                             # Development roadmap
-├── rag_kernel/                                # v3.2 Runtime Bridge (ENFORCED mode)
-│   ├── __main__.py                            # CLI entry point (serve / mcp)
-│   ├── api.py                                 # HTTP API (FastAPI)
-│   ├── state_machine.py                       # Deterministic state engine
-│   ├── persistence.py                         # Atomic writes, WAL, hash verification
-│   ├── cold_manager.py                        # COLD partition manager
-│   ├── concurrency.py                         # Lock manager, write collision guard
-│   ├── mcp_transport.py                       # MCP tool interface
-│   └── schemas.py                             # Pydantic models for proposals/state
+├── src/
+│   └── rag_kernel/                            # v3.2 Runtime Bridge (ENFORCED mode)
+│       ├── __main__.py                        # CLI entry point (serve / mcp)
+│       ├── api.py                             # HTTP API (FastAPI)
+│       ├── state_machine.py                   # Deterministic state engine
+│       ├── persistence.py                     # Atomic writes, WAL, hash verification
+│       ├── cold_manager.py                    # COLD partition manager
+│       ├── concurrency.py                     # Lock manager, write collision guard
+│       ├── mcp_transport.py                   # MCP tool interface
+│       └── schemas.py                         # Pydantic models for proposals/state
 ├── tests/                                     # Test suites
 │   ├── test_state_machine.py                  # State machine unit tests
 │   ├── test_persistence.py                    # Persistence + WAL tests
