@@ -34,7 +34,7 @@ In [head-to-head benchmarks](#how-it-compares), this single-file specification m
 
 1. Create a new Project (or open an existing one)
 2. Start a new session within that project
-3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md) into the session as a file
+3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md) into the session as a file
 4. Send your first message — the system bootstraps itself
 5. Follow on-screen steps: provide root paths, optional project description, optional POV config
 6. Copy the generated **pointer block** into your Project Instructions when prompted
@@ -43,13 +43,27 @@ In [head-to-head benchmarks](#how-it-compares), this single-file specification m
 ### ChatGPT / GPT Web
 
 1. Open a new conversation (or use Custom GPT if available)
-2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md)
+2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md)
 3. Send your first message — the system bootstraps in autonomous mode
 4. Follow on-screen steps (same as above)
 5. At session end, download the generated RAG files and save to your project folder
 6. Upload RAG files at the start of each new session to restore state
 
 ### Works for both new projects and existing ones being refined.
+
+### ENFORCED Mode (v3.2 Runtime Bridge)
+
+For hard runtime validation of every state transition, use the Python runtime:
+
+```bash
+# HTTP mode (for GPT Chat Custom Actions or any HTTP client)
+python -m rag_kernel serve --project /path/to/your/RAG --port 7437
+
+# MCP mode (for Claude Desktop)
+python -m rag_kernel mcp --project /path/to/your/RAG
+```
+
+Full setup instructions for all platforms and modes: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
 
 ---
 
@@ -142,7 +156,7 @@ Filesystem (source of truth)
 | Mode | How It Works |
 |---|---|
 | **Autonomous** | LLM self-enforces all rules. No external software needed. Default mode. |
-| **Enforced** | Python runtime kernel intercepts all mutations. (Roadmap) |
+| **Enforced** | Python runtime (v3.2) intercepts all mutations. 8 modules, 337 tests, 5811 lines. |
 
 ## Prerequisites
 
@@ -150,15 +164,15 @@ Filesystem (source of truth)
 
 **Recommended:** [Filesystem MCP](https://github.com/modelcontextprotocol/servers) for direct file read/write.
 
-**Optional:** Shell/PowerShell MCP, Python 3.10+ (ENFORCED mode roadmap), Claude Code or Cowork.
+**Optional:** Shell/PowerShell MCP, Python 3.10+ (ENFORCED mode), Claude Code or Cowork.
 
 ## Repository Structure
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.4.md   # The specification (the product)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md   # The specification (the product)
 ├── CONTRIBUTING.md                            # How to report issues
-├── COMPREHENSIVE_TODO_PLAN_v3_1_3.md          # Full development plan
+├── CHANGELOG.md                              # Version history
 ├── assets/
 │   └── logo.png                               # Project logo
 ├── docs/
@@ -166,10 +180,30 @@ rag-runtime-kernel/
 │   ├── benchmark_comparison.md                # Head-to-head vs alternatives
 │   ├── design_principles.md                   # Core design philosophy
 │   ├── test_analysis_gpt_web.md               # GPT Web test findings
+│   ├── LAUNCH_MANUAL.md                       # Full setup guide (all platforms + modes)
+│   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
+│   ├── v3.2_ARCHITECTURE_DESIGN.md            # v3.2 runtime architecture
 │   └── ROADMAP.md                             # Development roadmap
-├── tests/
-│   ├── UNIT_TEST_CLAUDE_DESKTOP.md            # Claude Desktop test suite (42 tests)
-│   └── UNIT_TEST_GPT_WEB.md                   # GPT Web test suite (43 tests)
+├── rag_kernel/                                # v3.2 Runtime Bridge (ENFORCED mode)
+│   ├── __main__.py                            # CLI entry point (serve / mcp)
+│   ├── api.py                                 # HTTP API (FastAPI)
+│   ├── state_machine.py                       # Deterministic state engine
+│   ├── persistence.py                         # Atomic writes, WAL, hash verification
+│   ├── cold_manager.py                        # COLD partition manager
+│   ├── concurrency.py                         # Lock manager, write collision guard
+│   ├── mcp_transport.py                       # MCP tool interface
+│   └── schemas.py                             # Pydantic models for proposals/state
+├── tests/                                     # Test suites
+│   ├── test_state_machine.py                  # State machine unit tests
+│   ├── test_persistence.py                    # Persistence + WAL tests
+│   ├── test_cold_manager.py                   # COLD partition tests
+│   ├── test_concurrency.py                    # Lock + collision tests
+│   ├── test_api.py                            # HTTP API tests
+│   ├── test_mcp_transport.py                  # MCP transport tests
+│   ├── test_schemas.py                        # Schema validation tests
+│   ├── test_main.py                           # CLI entry point tests
+│   ├── UNIT_TEST_CLAUDE_DESKTOP.md            # Claude Desktop spec-level tests (42)
+│   └── UNIT_TEST_GPT_WEB.md                   # GPT Web spec-level tests (43)
 ├── .github/
 │   ├── FUNDING.yml                            # GitHub Sponsors
 │   └── ISSUE_TEMPLATE/                        # Bug report + feature request templates
@@ -198,20 +232,19 @@ See [`docs/test_analysis_gpt_web.md`](docs/test_analysis_gpt_web.md) for detaile
 
 1. **Context window bound** — spec ~16K tokens; large projects may hit limits
 2. **No cross-filesystem bridge yet** — relies on platform tools; user-assisted I/O without them
-3. **No runtime kernel yet** — ENFORCED mode is roadmap
-4. **Single-writer** — concurrent writes detected-and-halted, not auto-merged
-5. **GPT Web** — no atomic writes, no real token counter, manual persistence
+3. **Single-writer** — concurrent writes detected-and-halted, not auto-merged
+4. **GPT Web** — no atomic writes, no real token counter, manual persistence
 
 ## Future Development
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
 
-| Release | Focus |
-|---|---|
-| **v3.1.4** | Defect fixes: optional POV, session-zero boot scan, post-scan summary |
-| **v3.2** | OS-Level Runtime: filesystem bridge, real WAL, COLD partition manager |
-| **v3.3** | UX: graduated POV, conflict auto-categorization, delta checkpoints |
-| **v4.0** | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
+| Release | Status | Focus |
+|---|---|---|
+| **v3.1.6** | Released | 43-section spec: pre-flight gate enforcement, known-issues registry, tool hierarchy |
+| **v3.2** | Released | Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. |
+| **v3.3** | Planned | UX: graduated POV, conflict auto-categorization, delta checkpoints |
+| **v4.0** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
 
 ## Reporting Issues
 
