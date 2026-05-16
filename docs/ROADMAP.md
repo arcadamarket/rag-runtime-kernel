@@ -4,53 +4,43 @@
 
 ---
 
-## v3.1.4 — Patch Release (Error Elimination)
+## v3.1.6 — Released (2026-05-14)
 
-Target: Specification-level fixes. No new features. Pure correctness.
+Specification release: 43 sections. Pre-flight gate enforcement, known-issues registry, tool hierarchy with wsl-exec.
 
-### Defect Fixes
-
-| ID | Fix | Source | Spec Sections |
-|---|---|---|---|
-| DEF-001 | Make POV configuration optional at bootstrap. Default to `pov_mandate: {count: 0, mode: "disabled"}` when user skips. System proceeds without POV enforcement. Users can enable POVs later via RAG edit. | Step 5 hard block | §31, §16 |
-| DEF-002 | Add boot scan offer to session-zero flow. After RAG creation + pointer block confirmation, system MUST offer: "Run boot scan? This will scan root_project, build inventory, and extract knowledge into COLD." | Missing session-zero scan | §19, §31 |
-| DEF-003 | Add post-scan archive detection prompt. After scan completion, detect `.zip`/`.tar`/`.7z` files in scanned root. Prompt user with extraction option + token cost warning. | Archive handling gap | §10c |
-
-### Spec Clarifications
-
-| Item | Change | Section |
-|---|---|---|
-| Context truncation policy | Define explicit behavior when conversation context is truncated by platform (not by token pressure halt). Currently undefined — system may lose in-flight state without checkpoint. Add: "If context truncation is detected or suspected, system MUST attempt emergency checkpoint before any further operations." | §15 (new clause) |
-| Conversation search limitation | Document that conversation_search tool indexes saved past chats only — cannot recover truncated content from the active conversation. Add to §3a tool limitations table. | §3a |
-| GPT Web atomic write disclaimer | Add explicit note in §37 cross-platform table: "GPT Web: atomic writes are advisory only. All persistence requires explicit user download." | §37 |
+All v3.1.4 defect fixes (DEF-001 through DEF-003) and spec clarifications shipped in earlier patch releases.
 
 ---
 
-## v3.2 — OS-Level Runtime (Planned)
+## v3.2 — Released (2026-05-14)
 
-Target: Eliminate platform-dependent limitations. Single background process serves any LLM.
+Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live.
 
-### Core Components
-
-| Component | Purpose | Addresses |
-|---|---|---|
-| Filesystem bridge daemon | Background process exposing read/write/verify operations via local HTTP or MCP protocol | LIM-001, LIM-004, LIM-005 |
-| COLD partition manager | Loads partitions into system RAM, serves on-demand to LLM context | LIM-003, WEAK-002, ENH-003 |
-| WAL writer | Real filesystem WAL with fsync guarantees | LIM-005, WEAK-004 |
-| Atomic write engine | Write-tmp → verify → rename pattern with .bak rotation | LIM-001 |
-| Hash verification at boot | Compute SHA-256 of loaded files, compare against stored hashes, alert on mismatch | ENH-007 |
-| Cross-platform sync bridge | Single filesystem source of truth accessible by Claude Desktop, GPT, and any MCP-capable client | LIM-006, WEAK-003 |
-
-### Implementation Notes
-
-- Stack: Python 3.10+, zero external deps beyond stdlib
-- Protocol: Local HTTP API or MCP server (compatible with Claude Desktop, Cursor, etc.)
-- Security: Localhost-only binding, no network exposure
-- Packaging: Single `pip install` or standalone binary
+| Component | Status |
+|---|---|
+| State machine engine | Shipped |
+| Persistence engine (atomic writes, WAL, hash verification) | Shipped |
+| COLD partition manager | Shipped |
+| Concurrency guard (lock manager, write collision detection) | Shipped |
+| HTTP API (FastAPI) | Shipped |
+| MCP transport | Shipped |
+| CLI entry point (serve / mcp) | Shipped |
+| Pydantic schemas | Shipped |
 
 ---
 
-## v3.3 — Robustness & UX (Planned)
+## Formal Verification — Phase 1 Complete
+
+| Phase | Work | Status |
+|---|---|---|
+| 1 — Model | TLA+ specification: 7 states, 8 safety invariants, 3 liveness properties (555 lines) | **Complete** |
+| 2 — Verify | Run TLC model checker against spec | Not started |
+| 3 — Generate | Auto-generate transition guard code from formal model | Not started |
+| 4 — Integrate | Embed generated guards into Python runtime (ENFORCED mode) | Blocked on Phase 2–3 |
+
+---
+
+## v3.3 — Planned
 
 Target: Reduce user friction, improve autonomous-mode reliability.
 
@@ -73,7 +63,7 @@ Target: Reduce user friction, improve autonomous-mode reliability.
 
 ---
 
-## v4.0 — Graph Orchestrator (Roadmap)
+## v4.0 — Graph Orchestrator (Planned)
 
 Target: Multi-step workflow orchestration with dependency tracking.
 
@@ -86,21 +76,7 @@ Target: Multi-step workflow orchestration with dependency tracking.
 | Rollback support | Failed node rolls back to last valid state without corrupting siblings |
 
 ### Prerequisites
-- v3.2 OS-Level Runtime (filesystem bridge required)
-- Formal state transition verification (ENH-001) — must be complete before graph nodes can enforce transition guards
-
----
-
-## Formal Verification Track (Research)
-
-Target: Provably correct state transitions. Eliminates spec-violation class entirely.
-
-| Phase | Work | Status |
-|---|---|---|
-| 1 — Model | Express state machine as TLA+ or Alloy specification | Not started |
-| 2 — Verify | Prove all transitions satisfy safety invariants (no silent state skip, no unguarded mutation) | Not started |
-| 3 — Generate | Auto-generate transition guard code from formal model | Not started |
-| 4 — Integrate | Embed generated guards into Python runtime kernel (ENFORCED mode) | Blocked on v3.2 |
+- Formal verification Phase 2+ (transition guards must be provably correct before graph nodes enforce them)
 
 ---
 
@@ -108,13 +84,7 @@ Target: Provably correct state transitions. Eliminates spec-violation class enti
 
 Target: Give GPT Web real filesystem access without requiring platform changes.
 
-| Approach | Feasibility | Notes |
-|---|---|---|
-| Local MCP server + browser extension bridge | MEDIUM | Extension relays MCP calls from GPT Web to local server. Privacy concerns. Browser extension review process. |
-| Local HTTP API + GPT Actions | HIGH | GPT custom actions call localhost API. Requires user to configure GPT Actions. Simplest path. |
-| Tunneled MCP via cloud relay | LOW | Adds network dependency, latency, security surface. Against zero-deps principle. |
-
-Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_kernel serve` locally, configures GPT custom action pointing to `http://localhost:PORT`. All file operations route through local API.
+Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_kernel serve` locally, configures GPT custom action pointing to `http://localhost:PORT`. All file operations route through local API. Already supported by v3.2 Runtime Bridge.
 
 ---
 
@@ -122,7 +92,7 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **CRITICAL** | DEF-001, DEF-002, DEF-003, spec clarifications | v3.1.4 |
-| **HIGH** | Filesystem bridge, WAL writer, hash verification, ENH-004 | v3.2 |
-| **MEDIUM** | COLD partition manager, conflict auto-categorization, delta checkpoints | v3.2–v3.3 |
-| **LOW** | Archive depth control, formal verification, MCP layer research | v3.3–v4.0 |
+| **SHIPPED** | v3.1.4–v3.1.6 spec fixes, v3.2 Runtime Bridge, Formal Verification Phase 1 | Done |
+| **HIGH** | TLC model checking (Phase 2), ENH-004 graduated POV | v3.3 |
+| **MEDIUM** | Conflict auto-categorization, delta checkpoints | v3.3 |
+| **LOW** | Graph orchestrator, formal guard generation | v4.0 |

@@ -2,6 +2,36 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v3.2.0] — 2026-05-14
+
+### Added
+- **Runtime Bridge** — 8 Python modules implementing ENFORCED mode: `state_machine.py`, `persistence.py`, `cold_manager.py`, `concurrency.py`, `api.py`, `mcp_transport.py`, `schemas.py`, `__main__.py`.
+- 337 unit tests across 8 test files, all passing.
+- 5811 lines of source + tests.
+- HTTP mode (`python -m rag_kernel serve`) for GPT Custom Actions or any HTTP client.
+- MCP mode (`python -m rag_kernel mcp`) for Claude Desktop.
+- Hard runtime validation of every state transition in ENFORCED mode.
+
+## [v3.1.6] — 2026-05-14
+
+### Added
+- Pre-flight gate enforcement (§41) — mandatory written declaration before any 2+ tool sequence.
+- Known-issues registry for tool/environment constraints.
+- wsl-exec in tool hierarchy as primary shell MCP.
+- 43 sections total (new §39–§43).
+
+### Fixed
+- §6 patched: file creation boundary + deletion guard.
+- §21 patched: hard 2-strike circuit breaker.
+- §26 patched: credential safety + git guards.
+
+## [v3.1.5] — 2026-05-14
+
+### Added
+- Error log discipline (§39) — errors logged as they occur, blocking prerequisite before next task.
+- Task-level tool verification (§40) — verify all required tools before starting work.
+- Formal verification Phase 1: TLA+ specification of state machine (555 lines, 8 safety invariants, 3 liveness properties).
+
 ## [v3.1.4] — 2026-05-10
 
 ### Added
@@ -62,9 +92,9 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## Development Status
 
-**Current:** v3.1.4 specification complete and committed. Unit test suites written (42 Claude Desktop + 43 GPT Web). v3.2 architecture designed.
+**Current:** v3.1.6 specification (43 sections) and v3.2 Runtime Bridge (8 modules, 337 tests, 5811 lines) both released and shipped. Formal verification Phase 1 complete (TLA+ spec).
 
-**Next:** v3.2 OS-level runtime bridge implementation — Python 3.10+, zero external dependencies, localhost HTTP + MCP transport.
+**Next:** v3.3 — UX improvements (graduated POV, conflict auto-categorization, delta checkpoints).
 
 **Repository:** [github.com/arcadamarket/rag-runtime-kernel](https://github.com/arcadamarket/rag-runtime-kernel)
 **Developer:** Artem Pakhol
