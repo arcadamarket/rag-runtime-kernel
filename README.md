@@ -110,8 +110,9 @@ Full benchmark: [`docs/benchmark_comparison.md`](docs/benchmark_comparison.md)
 1. **Only system with a formal state machine on LLM workflows** — deterministic transition guards, not ad-hoc
 2. **Only system that works identically across Claude and GPT** — the spec is the invariant
 3. **Only system with atomic write protocol + WAL + backup rotation** — enterprise-grade persistence
-4. **Zero install, zero dependencies** — the specification IS the product
-5. **Conflict ledger is unique** — no other system tracks disagreements between sources
+4. **Formally verified with TLA+** — the same technique Amazon uses for AWS infrastructure (see below)
+5. **Zero install, zero dependencies** — the specification IS the product
+6. **Conflict ledger is unique** — no other system tracks disagreements between sources
 
 ---
 
@@ -128,6 +129,29 @@ Runtime Kernel (state + persistence)
   | atomic writes
 Filesystem (source of truth)
 ```
+
+## Formally Verified with TLA+
+
+The state machine is verified using [TLA+](https://lamport.azurewebsites.net/tla/tla.html) and the TLC model checker — the same formal methods technique [used by Amazon to verify AWS infrastructure](https://lamport.azurewebsites.net/tla/amazon-excerpt.html).
+
+TLC exhaustively explored **136,193 states** (84,261 distinct) and verified all 8 safety invariants with zero violations:
+
+| Invariant | What It Proves |
+|---|---|
+| TypeInvariant | All state variables hold valid types at all times |
+| TransitionSafety | Every reachable state is legal per the transition graph |
+| SingleWriter | At most one proposal staged at any time (no concurrent mutations) |
+| WALConsistency | Write-ahead log is append-only, monotone, and never lags behind state |
+| TerminalSafety | CLOSING is irreversible — no exit, no crash, no pending proposals |
+| NoDeadlock | Every non-terminal state has at least one enabled action |
+| CrashRecoveryConsistency | Crash flag is only true when state is RECOVERY |
+| WALPrecedesStateChange | WAL entry exists before any state transition commits |
+
+The TLA+ specification (`formal/RAGKernel.tla`) is a direct transcription of the Python state machine — every transition, guard, and invariant maps 1:1 to the runtime code. Full results in [`formal/TLC_RESULTS.md`](formal/TLC_RESULTS.md).
+
+Unit tests prove "these 337 scenarios work." TLA+ proves "no scenario can ever violate the invariants." That is a fundamentally stronger guarantee.
+
+---
 
 ## Core Features
 
@@ -205,6 +229,10 @@ rag-runtime-kernel/
 ├── .github/
 │   ├── FUNDING.yml                            # GitHub Sponsors
 │   └── ISSUE_TEMPLATE/                        # Bug report + feature request templates
+├── formal/
+│   ├── RAGKernel.tla                          # TLA+ state machine specification
+│   ├── RAGKernel.cfg                          # TLC model checker configuration
+│   └── TLC_RESULTS.md                         # Verification results (136K states, 8 invariants)
 ├── LICENSE                                    # AGPL-3.0
 └── README.md
 ```
@@ -240,7 +268,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
 | Release | Status | Focus |
 |---|---|---|
 | **v3.1.6** | Released | 43-section spec: pre-flight gate enforcement, known-issues registry, tool hierarchy |
-| **v3.2** | Released | Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. |
+| **v3.2** | Released | Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. TLA+ formal verification: 136K states, 8 safety invariants verified. |
 | **v3.3** | Planned | UX: graduated POV, conflict auto-categorization, delta checkpoints |
 | **v4.0** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
 

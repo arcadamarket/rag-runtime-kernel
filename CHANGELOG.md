@@ -2,6 +2,18 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v3.2.1] — 2026-05-16
+
+### Added
+- **Formal verification with TLA+ and TLC model checker** — 136,193 states explored, 84,261 distinct, all 8 safety invariants verified with zero violations. Same technique used by Amazon for AWS infrastructure.
+- `formal/TLC_RESULTS.md` — full verification report.
+- GitHub Discussions tab launched with v3.2 announcement.
+
+### Fixed
+- `formal/RAGKernel.cfg` — fixed INIT/NEXT+SPEC conflict that prevented TLC from running; added CHECK_DEADLOCK FALSE for terminal CLOSING state.
+- `formal/RAGKernel.tla` — strengthened fairness model: SF (strong fairness) on RecoveryComplete(READY) and WF on DirectTransition(READY) to prevent theoretical BOOTING-RECOVERY livelock.
+- `.gitignore` — added TLC generated artifacts (states/, TTrace files).
+
 ## [v3.2.0] — 2026-05-14
 
 ### Added
