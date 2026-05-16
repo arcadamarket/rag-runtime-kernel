@@ -173,8 +173,6 @@ rag-runtime-kernel/
 ├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md   # The specification (the product)
 ├── CONTRIBUTING.md                            # How to report issues
 ├── CHANGELOG.md                              # Version history
-├── assets/
-│   └── logo.png                               # Project logo
 ├── docs/
 │   ├── architecture.md                        # System architecture
 │   ├── benchmark_comparison.md                # Head-to-head vs alternatives
