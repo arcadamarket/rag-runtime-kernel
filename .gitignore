@@ -21,6 +21,3 @@ build/
 
 # Temp shell scripts (used by CI/build, not part of the project)
 *.sh
-
-# Local logo assets — GitHub versions are authoritative. Do NOT push.
-assets/
