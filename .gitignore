@@ -21,3 +21,7 @@ build/
 
 # Temp shell scripts (used by CI/build, not part of the project)
 *.sh
+# TLC model checker artifacts
+formal/states/
+formal/*_TTrace_*
+formal/1

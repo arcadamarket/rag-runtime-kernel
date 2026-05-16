@@ -364,9 +364,17 @@ Next ==
 *)
 
 Fairness ==
-    /\ WF_vars(\E target \in {READY, BOOTING} : RecoveryComplete(target))
+    \* Strong fairness on RecoveryComplete(READY): if recovering to READY is
+    \* infinitely often enabled, it must eventually be taken.  This prevents
+    \* the BOOTING<->RECOVERY liveness trap where RecoveryComplete always
+    \* nondeterministically picks BOOTING over READY.
+    \* SF is needed (not WF) because crashes can temporarily disable recovery.
+    /\ SF_vars(RecoveryComplete(READY))
     /\ WF_vars(CommitProposal)
     /\ WF_vars(ClearRejection)
+    \* Also ensure the system eventually transitions to READY from BOOTING
+    \* (normal boot completion), preventing infinite BOOTING loops.
+    /\ WF_vars(DirectTransition(READY))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
