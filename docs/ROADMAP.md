@@ -29,12 +29,12 @@ Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live.
 
 ---
 
-## Formal Verification — Phase 1 Complete
+## Formal Verification — Phase 2 In Progress
 
 | Phase | Work | Status |
 |---|---|---|
-| 1 — Model | TLA+ specification: 7 states, 8 safety invariants, 3 liveness properties (555 lines) | **Complete** |
-| 2 — Verify | Run TLC model checker against spec | Not started |
+| 1 — Model + Safety | TLA+ spec: 7 states, 8 safety invariants, WAL model. TLC verified: 136K states, 0 violations. | **Complete** (9f37dc1) |
+| 2 — Liveness | WALCompaction action added, 3 liveness properties enabled. Manual invariant trace passed. | **Spec updated** (S16) — awaiting TLC run |
 | 3 — Generate | Auto-generate transition guard code from formal model | Not started |
 | 4 — Integrate | Embed generated guards into Python runtime (ENFORCED mode) | Blocked on Phase 2–3 |
 
@@ -92,7 +92,7 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **SHIPPED** | v3.1.4–v3.1.6 spec fixes, v3.2 Runtime Bridge, Formal Verification Phase 1 | Done |
-| **HIGH** | TLC model checking (Phase 2), ENH-004 graduated POV | v3.3 |
+| **SHIPPED** | v3.1.4–v3.1.6 spec fixes, v3.2 Runtime Bridge, FV Phase 1 (safety) | Done |
+| **HIGH** | FV Phase 2 liveness (spec ready, TLC pending), ENH-004 graduated POV | v3.3 |
 | **MEDIUM** | Conflict auto-categorization, delta checkpoints | v3.3 |
 | **LOW** | Graph orchestrator, formal guard generation | v4.0 |

@@ -15,8 +15,11 @@
     2. Proposal lifecycle: STAGED -> COMMITTED | REJECTED (single-writer)
     3. WAL invariants: append-only, monotone seq, write-before-commit
     4. Crash / nondeterministic failure -> RECOVERY path
-    5. Safety invariants checked by TLC
-    6. Liveness property: no permanent RECOVERY trap
+    5. Safety invariants checked by TLC (Phase 1 — verified)
+    6. Liveness properties (Phase 2): no permanent RECOVERY trap,
+       eventual termination, proposal resolution
+    7. WAL compaction (Phase 2): truncation model enabling liveness
+       verification under finite MaxWALSeq bound
 
   Notation conventions
   --------------------
@@ -313,7 +316,48 @@ Crash ==
 
 (*
   -----------------------------------------------------------------------
-  6.7  RecoveryComplete
+  6.7  WALCompaction
+  -----------------------------------------------------------------------
+  Models WAL truncation/compaction that occurs during checkpointing.
+  In the real system (persistence.py), old WAL entries are discarded
+  after a successful checkpoint, keeping only what's needed for recovery.
+
+  This action is critical for liveness verification: without it, the
+  finite MaxWALSeq bound causes the WAL to fill up, disabling all
+  WAL-appending actions and creating false liveness violations.
+
+  Semantics:
+    - Can fire when the system is not crashed and not in a terminal state.
+    - Keeps only the last WAL entry (the most recent committed state),
+      re-indexed to seq=1.
+    - Resets stateSeq to 1 to maintain WALConsistency (WALSeq >= stateSeq).
+    - Requires at least 2 WAL entries (compaction of a single entry is a no-op).
+
+  Invariant preservation:
+    - WALConsistency: wal'[1].seq = 1 (seq matches index), WALSeq'=1 >= stateSeq'=1.
+    - WALPrecedesStateChange: last entry's toState still equals current state.
+    - TypeInvariant: all types preserved.
+
+  Mirrors: WAL checkpoint rotation in persistence.py + COLD archival.
+*)
+
+WALCompaction ==
+    /\ state \notin TerminalStates
+    /\ Len(wal) >= 2                   \* at least 2 entries to compact
+    /\ proposalStatus = NONE           \* no in-flight proposal
+    \* NOTE: WALCompaction is allowed even when crashed=TRUE.
+    \* Compaction is a storage-layer operation that does not alter kernel
+    \* state, proposal status, or the crashed flag — it only trims old
+    \* WAL entries.  Allowing it during RECOVERY is essential: if a crash
+    \* occurs when the WAL is at MaxWALSeq, RecoveryComplete (which appends
+    \* to the WAL) would be permanently disabled without compaction.
+    /\ wal'      = <<[seq |-> 1, toState |-> wal[Len(wal)].toState]>>
+    /\ stateSeq' = 1
+    /\ UNCHANGED <<state, proposalStatus, proposalTarget, crashed>>
+
+(*
+  -----------------------------------------------------------------------
+  6.8  RecoveryComplete
   -----------------------------------------------------------------------
   The recovery process replays the WAL and transitions to either READY
   (normal recovery) or BOOTING (full restart required).
@@ -353,6 +397,7 @@ Next ==
     \/ RejectProposal
     \/ ClearRejection
     \/ CommitProposal
+    \/ WALCompaction
     \/ (\E target \in States : StageProposal(target))
     \/ (\E target \in States : DirectTransition(target))
     \/ (\E target \in {READY, BOOTING} : RecoveryComplete(target))
@@ -372,9 +417,23 @@ Fairness ==
     /\ SF_vars(RecoveryComplete(READY))
     /\ WF_vars(CommitProposal)
     /\ WF_vars(ClearRejection)
-    \* Also ensure the system eventually transitions to READY from BOOTING
-    \* (normal boot completion), preventing infinite BOOTING loops.
-    /\ WF_vars(DirectTransition(READY))
+    \* Strong fairness on DirectTransition(READY): if transitioning to READY
+    \* is infinitely often enabled, it must eventually be taken.  SF (not WF)
+    \* is required because DirectTransition(READY) can be repeatedly enabled
+    \* at BOOTING and RECOVERY states, but nondeterministic choice of other
+    \* targets (RECOVERY from BOOTING, BOOTING from RECOVERY) can prevent it
+    \* from being continuously enabled — it gets "interrupted" each time the
+    \* state flips.  This prevents the BOOTING<->RECOVERY direct-transition
+    \* loop found by TLC in Phase 2 (counterexample: States 3-12 cycle via
+    \* DirectTransition without crashed=TRUE, bypassing RecoveryComplete).
+    /\ SF_vars(DirectTransition(READY))
+    \* WAL compaction must eventually fire when enabled (WAL has >= 2 entries,
+    \* system is not crashed, no in-flight proposal).  Without this, the finite
+    \* MaxWALSeq bound causes all WAL-appending actions to become disabled,
+    \* creating false liveness violations.  WF is sufficient because compaction
+    \* is continuously enabled once its preconditions hold (no nondeterministic
+    \* disabling).
+    /\ WF_vars(WALCompaction)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 

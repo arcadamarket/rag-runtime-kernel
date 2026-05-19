@@ -158,6 +158,7 @@ deeper verification runs in CI.
 | `WAL` variable (sequence) | `WAL` class in `persistence.py` |
 | `Crash` action | `StateMachine.force_state(RECOVERY, "crash")` |
 | `RecoveryComplete` | `WAL.replay()` + `StateMachine.transition(READY)` |
+| `WALCompaction` | WAL checkpoint rotation in `persistence.py` + COLD archival |
 | `SingleWriter` invariant | `ProjectLock` + single-staged-proposal constraint |
 | `WALPrecedesStateChange` | `WAL.append()` called before `StateMachine.transition()` |
 
