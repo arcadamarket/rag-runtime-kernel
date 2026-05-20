@@ -2,6 +2,23 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v3.1.7] — 2026-05-20
+
+### Added — RAG/Memory Reconciliation Release
+- **§42 File Sync Protocol** — single-source editing, bidirectional git sync, mandatory `git add -A` staging.
+- **§43 Context Window Management** — compression/compaction forbidden, 70% context halt-and-checkpoint protocol.
+- **§44 Resolved Item Protocol** — mandatory 4-step resolution across all persistent stores, stale reminder prevention.
+- **§45 Garbage Collector Protocol** — session-start cleanup, project-scoped only, standard targets table.
+- **§46 RAG as Single Source of Truth** — portability guarantee: project transferable to any LLM platform via init prompt OR RAG_MASTER.json. Reconciliation procedure for release synchronization.
+- §41 known-issues registry expanded: wsl-exec `&&` stripping, wsl-exec `~` non-expansion.
+
+### Changed
+- **All behavioral rules consolidated into RAG_MASTER.json** `operating_protocol`. Previously scattered across platform-specific memory files (Cowork `feedback_*.md`), now mirrored in both the RAG and the init prompt. RAG_MASTER.json is now truly self-contained — the only file needed to transfer a project to any LLM platform.
+- 48 sections total (§0–§46 + §3a). Schema 5.3.
+
+### Security
+- `CLEANUP.ps1` updated: Cowork session data cleanup now enumerates individual session folders with age-based safety (≤3 days = skip). No longer offers to delete entire session storage as a unit.
+
 ## [v3.2.1] — 2026-05-16
 
 ### Added

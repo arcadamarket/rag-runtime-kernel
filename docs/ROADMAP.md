@@ -4,6 +4,14 @@
 
 ---
 
+## v3.1.7 — Released (2026-05-20)
+
+RAG/Memory Reconciliation Release: 48 sections. All behavioral rules consolidated from platform-specific memory into RAG_MASTER.json. New sections: File Sync Protocol (§42), Context Window Management (§43), Resolved Item Protocol (§44), Garbage Collector (§45), RAG as Single Source of Truth with portability guarantee (§46). Known-issues registry expanded.
+
+**Portability milestone:** RAG_MASTER.json is now fully self-contained — a project can be transferred to any LLM platform (Claude, GPT, or any other) by providing either the init prompt OR the RAG file. Both contain the complete behavioral rule set.
+
+---
+
 ## v3.1.6 — Released (2026-05-14)
 
 Specification release: 43 sections. Pre-flight gate enforcement, known-issues registry, tool hierarchy with wsl-exec.
@@ -92,7 +100,7 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **SHIPPED** | v3.1.4–v3.1.6 spec fixes, v3.2 Runtime Bridge, FV Phase 1 (safety) | Done |
+| **SHIPPED** | v3.1.4–v3.1.7 spec (incl. RAG reconciliation), v3.2 Runtime Bridge, FV Phase 1+2 (safety+liveness) | Done |
 | **HIGH** | FV Phase 2 liveness (spec ready, TLC pending), ENH-004 graduated POV | v3.3 |
 | **MEDIUM** | Conflict auto-categorization, delta checkpoints | v3.3 |
 | **LOW** | Graph orchestrator, formal guard generation | v4.0 |
