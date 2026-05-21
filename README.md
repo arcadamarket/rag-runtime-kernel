@@ -28,13 +28,28 @@ In [head-to-head benchmarks](#how-it-compares), this single-file specification m
 
 ## Quick Start
 
-> **Important:** The Init Prompt is a full specification (~16K tokens). It goes into a **project session**, not the Instructions/System Prompt field (which has size limitations on most platforms).
+### Cowork (Fastest Path)
+
+1. Download [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md)
+2. Create a project folder with a `RAG/` subfolder
+3. Open Cowork, select the folder, drop the init prompt into your first message
+4. The system bootstraps itself — follow the on-screen prompts
+
+For ENFORCED mode (v3.2 Python runtime), add `rag_kernel/` to your project and run:
+```bash
+python -m rag_kernel mcp --project /path/to/your/RAG
+```
+Full platform-specific setup: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
+
+### Claude Projects / ChatGPT
+
+> **Note:** The Init Prompt is a full specification (~16K tokens). It goes into a **project session**, not the Instructions/System Prompt field (which has size limitations on most platforms).
 
 ### Claude Desktop / Claude Projects
 
 1. Create a new Project (or open an existing one)
 2. Start a new session within that project
-3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md) into the session as a file
+3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md) into the session as a file
 4. Send your first message — the system bootstraps itself
 5. Follow on-screen steps: provide root paths, optional project description, optional POV config
 6. Copy the generated **pointer block** into your Project Instructions when prompted
@@ -43,7 +58,7 @@ In [head-to-head benchmarks](#how-it-compares), this single-file specification m
 ### ChatGPT / GPT Web
 
 1. Open a new conversation (or use Custom GPT if available)
-2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md)
+2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md)
 3. Send your first message — the system bootstraps in autonomous mode
 4. Follow on-screen steps (same as above)
 5. At session end, download the generated RAG files and save to your project folder
@@ -134,9 +149,9 @@ Filesystem (source of truth)
 
 The state machine is verified using [TLA+](https://lamport.azurewebsites.net/tla/tla.html) and the TLC model checker — the same formal methods technique [used by Amazon to verify AWS infrastructure](https://lamport.azurewebsites.net/tla/amazon-excerpt.html).
 
-TLC exhaustively explored **136,193 states** (84,261 distinct) and verified all 8 safety invariants with zero violations:
+TLC exhaustively explored **389,522 states** (168,520 distinct) at depth 19 and verified all 8 safety invariants + 3 liveness properties with zero violations:
 
-| Invariant | What It Proves |
+| Safety Invariant | What It Proves |
 |---|---|
 | TypeInvariant | All state variables hold valid types at all times |
 | TransitionSafety | Every reachable state is legal per the transition graph |
@@ -147,9 +162,17 @@ TLC exhaustively explored **136,193 states** (84,261 distinct) and verified all 
 | CrashRecoveryConsistency | Crash flag is only true when state is RECOVERY |
 | WALPrecedesStateChange | WAL entry exists before any state transition commits |
 
+| Liveness Property | What It Proves |
+|---|---|
+| EventualReady | The system always eventually reaches READY from any reachable state |
+| EventualCheckpoint | Once in WORKING, the system always eventually checkpoints |
+| EventualClose | The system always eventually reaches CLOSING (no infinite loops) |
+
+Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING/RECOVERY direct-transition loop, and a crash-at-full-WAL deadlock.
+
 The TLA+ specification (`formal/RAGKernel.tla`) is a direct transcription of the Python state machine — every transition, guard, and invariant maps 1:1 to the runtime code. Full results in [`formal/TLC_RESULTS.md`](formal/TLC_RESULTS.md).
 
-Unit tests prove "these 337 scenarios work." TLA+ proves "no scenario can ever violate the invariants." That is a fundamentally stronger guarantee.
+Unit tests prove "these 337 scenarios work." TLA+ proves "no scenario can ever violate the invariants — and the system always makes progress." That is a fundamentally stronger guarantee.
 
 ---
 
@@ -194,7 +217,8 @@ Unit tests prove "these 337 scenarios work." TLA+ proves "no scenario can ever v
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md   # The specification (the product)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md   # The specification (current version)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md   # Previous version (archived)
 ├── CONTRIBUTING.md                            # How to report issues
 ├── CHANGELOG.md                              # Version history
 ├── docs/
@@ -267,8 +291,8 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
 
 | Release | Status | Focus |
 |---|---|---|
-| **v3.1.6** | Released | 43-section spec: pre-flight gate enforcement, known-issues registry, tool hierarchy |
-| **v3.2** | Released | Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. TLA+ formal verification: 136K states, 8 safety invariants verified. |
+| **v3.1.7** | Released | 48-section spec: RAG/memory reconciliation, file sync, context management, resolved items, garbage collector, portability guarantee |
+| **v3.2** | Released | Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. TLA+ formal verification: 389K states, 8 safety invariants + 3 liveness properties verified. |
 | **v3.3** | Planned | UX: graduated POV, conflict auto-categorization, delta checkpoints |
 | **v4.0** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
 

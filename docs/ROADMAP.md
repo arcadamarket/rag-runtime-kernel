@@ -101,6 +101,6 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 | Priority | Items | Target |
 |---|---|---|
 | **SHIPPED** | v3.1.4–v3.1.7 spec (incl. RAG reconciliation), v3.2 Runtime Bridge, FV Phase 1+2 (safety+liveness) | Done |
-| **HIGH** | FV Phase 2 liveness (spec ready, TLC pending), ENH-004 graduated POV | v3.3 |
+| **HIGH** | ENH-004 graduated POV, v3.3 UX improvements | v3.3 |
 | **MEDIUM** | Conflict auto-categorization, delta checkpoints | v3.3 |
 | **LOW** | Graph orchestrator, formal guard generation | v4.0 |
