@@ -67,7 +67,7 @@ No Python. No server. The LLM reads the init prompt and self-enforces all RAG Ke
 6. Click **Add content** (the paperclip/file icon) and upload your `RAG_MASTER.json` as a project file.
    - If you also have `RAG_COLD.json`, upload that too.
 7. Start a new conversation inside the project.
-8. The LLM will auto-detect the init prompt and boot the RAG Kernel in autonomous mode.
+8. Send: **"Initialize the project."** — the LLM boots the RAG Kernel in autonomous mode.
 9. Verify by asking: *"What is the current kernel state?"* — it should report `READY`.
 
 **How it works:** Claude reads `RAG_MASTER.json` from the project files as HOT memory. All mutations go through the propose/commit cycle enforced by the prompt. Claude writes updated JSON back to the project file on checkpoint.
@@ -82,7 +82,8 @@ No Python. No server. The LLM reads the init prompt and self-enforces all RAG Ke
    - If you also have `RAG_COLD.json`, upload that too.
 6. Click **Save** (choose "Only me" or "Anyone with a link").
 7. Open a conversation with your GPT.
-8. Verify by asking: *"What is the current kernel state?"* — it should report `READY`.
+8. Send: **"Initialize the project."** — the kernel bootstraps.
+9. Verify by asking: *"What is the current kernel state?"* — it should report `READY`.
 
 **Note:** GPT file access is read-only in the Knowledge section. The LLM will track mutations in-context and output updated JSON for you to re-upload when needed.
 
@@ -93,7 +94,7 @@ This works with any LLM that supports system prompts and file attachments (Gemin
 1. Set the system prompt / instructions to the full contents of `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`.
 2. Attach `RAG_MASTER.json` to the conversation (upload or paste).
 3. Optionally attach `RAG_COLD.json` for COLD partition access.
-4. Begin the conversation. The LLM will operate under RAG Kernel rules.
+4. Send: **"Initialize the project."** — the LLM operates under RAG Kernel rules.
 5. Verify: ask for kernel status. It should self-report as `READY`.
 
 **Limitations of autonomous mode:**

@@ -33,12 +33,37 @@ In [head-to-head benchmarks](#how-it-compares), this single-file specification m
 1. Download [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md)
 2. Create a project folder with a `RAG/` subfolder
 3. Open Cowork, select the folder, drop the init prompt into your first message
-4. The system bootstraps itself — follow the on-screen prompts
+4. Send: **"Initialize the project."** — the system bootstraps itself, follow on-screen prompts
 
-For ENFORCED mode (v3.2 Python runtime), add `rag_kernel/` to your project and run:
-```bash
-python -m rag_kernel mcp --project /path/to/your/RAG
+**To add ENFORCED mode (v3.2 Python runtime):** copy `rag_kernel/` into your project:
+
+PowerShell:
+```powershell
+git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
+Copy-Item -Recurse temp-clone\rag_kernel YOUR_PROJECT\rag_kernel
+Remove-Item -Recurse -Force temp-clone
 ```
+
+CMD:
+```cmd
+git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
+xcopy temp-clone\rag_kernel YOUR_PROJECT\rag_kernel\ /E /I
+rmdir /s /q temp-clone
+```
+
+Bash:
+```bash
+git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
+cp -r temp-clone/rag_kernel YOUR_PROJECT/rag_kernel
+rm -rf temp-clone
+```
+
+Then run as MCP server or HTTP server:
+```bash
+python -m rag_kernel mcp --project /path/to/your/RAG    # MCP mode (Claude Desktop)
+python -m rag_kernel serve --project /path/to/your/RAG   # HTTP mode (GPT / any LLM)
+```
+
 Full platform-specific setup: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
 
 ### Claude Projects / ChatGPT
@@ -50,7 +75,7 @@ Full platform-specific setup: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
 1. Create a new Project (or open an existing one)
 2. Start a new session within that project
 3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md) into the session as a file
-4. Send your first message — the system bootstraps itself
+4. Send: **"Initialize the project."** — the system bootstraps itself
 5. Follow on-screen steps: provide root paths, optional project description, optional POV config
 6. Copy the generated **pointer block** into your Project Instructions when prompted
 7. All subsequent sessions auto-load the RAG and enforce all rules
