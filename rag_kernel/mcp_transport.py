@@ -13,6 +13,21 @@ Protocol: JSON-RPC 2.0 over newline-delimited JSON on stdio.
 Messages are framed as: Content-Length: N\r\n\r\n{json}
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md §9.2
+
+@rag-kernel-manifest
+{
+  "module": "rag_kernel.mcp_transport",
+  "capability": "mcp_server",
+  "description": "MCP stdio transport — primary interface for Claude Desktop",
+  "exports": ["MCPServer"],
+  "tools": [
+    "rag_boot", "rag_status", "rag_hot", "rag_cold", "rag_propose",
+    "rag_commit", "rag_reject", "rag_checkpoint", "rag_wal",
+    "rag_recover", "rag_close"
+  ],
+  "use_when": "Running kernel as MCP server for Claude Desktop integration",
+  "never_bypass": false
+}
 """
 
 from __future__ import annotations

@@ -29,8 +29,8 @@ Comprehensive setup instructions for every supported platform and mode.
 
 The RAG Runtime Kernel is a filesystem-backed, event-sourced, prompt-controlled project memory system for LLMs. It has two components:
 
-- **Init prompt** (`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`) — loaded into LLM context to govern behavior.
-- **Python runtime** (`rag_kernel/`) — 8 modules providing external enforcement: `state_machine`, `persistence`, `cold_manager`, `concurrency`, `api`, `mcp_transport`, `schemas`, `__main__`.
+- **Init prompt** (`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md`) — loaded into LLM context to govern behavior.
+- **Python runtime** (`rag_kernel/` v0.2.0) — 9 modules providing external enforcement: `state_machine`, `persistence`, `cold_manager`, `concurrency`, `api`, `mcp_transport`, `schemas`, `spec_parser`, `__main__`. Zero-touch bootstrap via `rag_kernel init --spec`.
 
 Two operating modes:
 
@@ -63,7 +63,7 @@ No Python. No server. The LLM reads the init prompt and self-enforces all RAG Ke
 2. Click **Create project**.
 3. Give it a name (e.g., "My Project — RAG Kernel").
 4. Open the project and click the **gear icon** (Project Settings).
-5. In **Project Instructions**, paste the entire contents of `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`.
+5. In **Project Instructions**, paste the entire contents of `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md`.
 6. Click **Add content** (the paperclip/file icon) and upload your `RAG_MASTER.json` as a project file.
    - If you also have `RAG_COLD.json`, upload that too.
 7. Start a new conversation inside the project.
@@ -77,7 +77,7 @@ No Python. No server. The LLM reads the init prompt and self-enforces all RAG Ke
 1. Go to [chatgpt.com](https://chatgpt.com) and click **Explore GPTs** or **My GPTs**.
 2. Click **Create a GPT** (or edit an existing one).
 3. Go to the **Configure** tab.
-4. In **Instructions**, paste the entire contents of `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`.
+4. In **Instructions**, paste the entire contents of `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md`.
 5. Under **Knowledge**, click **Upload files** and add your `RAG_MASTER.json`.
    - If you also have `RAG_COLD.json`, upload that too.
 6. Click **Save** (choose "Only me" or "Anyone with a link").
@@ -91,7 +91,7 @@ No Python. No server. The LLM reads the init prompt and self-enforces all RAG Ke
 
 This works with any LLM that supports system prompts and file attachments (Gemini, local models via Open WebUI, etc.).
 
-1. Set the system prompt / instructions to the full contents of `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`.
+1. Set the system prompt / instructions to the full contents of `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md`.
 2. Attach `RAG_MASTER.json` to the conversation (upload or paste).
 3. Optionally attach `RAG_COLD.json` for COLD partition access.
 4. Send: **"Initialize the project."** — the LLM operates under RAG Kernel rules.

@@ -10,6 +10,16 @@ All operations use Python stdlib only. Zero external dependencies.
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md section 7
 Spec reference: design_principles.md -- Persistence Stack
+
+@rag-kernel-manifest
+{
+  "module": "rag_kernel.persistence",
+  "capability": "persistence",
+  "description": "Crash-safe filesystem: atomic writes, WAL, hash verification, backup rotation",
+  "exports": ["atomic_write_json", "WALWriter", "WALReader", "compute_hash", "verify_hash"],
+  "use_when": "Any write to RAG_MASTER.json, COLD, or WAL — never write these files directly",
+  "never_bypass": true
+}
 """
 
 from __future__ import annotations

@@ -6,6 +6,17 @@ Invalid transitions are rejected and logged. All state changes are auditable.
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md §6
 Spec reference: architecture.md — State Machine section
+
+@rag-kernel-manifest
+{
+  "module": "rag_kernel.state_machine",
+  "capability": "state_machine",
+  "description": "Deterministic finite state machine with guarded transitions",
+  "states": ["BOOTING", "READY", "INGESTING", "WORKING", "CHECKPOINTING", "CLOSING", "RECOVERY"],
+  "exports": ["State", "Event", "StateMachine", "TransitionError"],
+  "use_when": "Any session lifecycle operation — boot, state change, close, recovery",
+  "never_bypass": true
+}
 """
 
 from __future__ import annotations

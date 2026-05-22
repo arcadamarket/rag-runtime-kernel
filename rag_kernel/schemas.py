@@ -11,6 +11,16 @@ Validation functions return (valid: bool, errors: list[str]).
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md §10
 Satisfies: M-023-P8 (proposal contract)
+
+@rag-kernel-manifest
+{
+  "module": "rag_kernel.schemas",
+  "capability": "validation",
+  "description": "Pure-data validation for proposals, events, HOT/COLD structures",
+  "exports": ["validate_proposal", "validate_event", "validate_hot", "validate_cold"],
+  "use_when": "Before committing any proposal or writing any RAG structure",
+  "never_bypass": true
+}
 """
 
 from __future__ import annotations

@@ -13,6 +13,16 @@ Key behaviors:
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md §7.4
 Spec reference: architecture.md — Memory Architecture (HOT/COLD)
+
+@rag-kernel-manifest
+{
+  "module": "rag_kernel.cold_manager",
+  "capability": "cold_storage",
+  "description": "Lazy-loading COLD archive with token budgeting and partition eviction",
+  "exports": ["ColdManager", "ColdPartition"],
+  "use_when": "Loading archival data (past sessions, historical conflicts, old deliverables)",
+  "never_bypass": false
+}
 Satisfies: M-015 (COLD partition lazy-loading), M-033 (token budget)
 """
 

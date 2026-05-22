@@ -2,6 +2,29 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.2.0] — 2026-05-22
+
+### Added — Zero-Touch Bootstrap & Capability Self-Discovery
+
+**Paradigm shift: from semi-autonomous LLM-driven to fully autonomous OS-level deterministic Python backbone.** The LLM's role is now task assignor, results checker, and orchestrator only. All state management, validation, bootstrapping, and persistence run as OS-level Python scripts consuming zero LLM tokens.
+
+- **`spec_parser.py`** (610 lines) — deterministic Markdown→RAG parser. Extracts machine-readable `rag-config` JSON blocks from the init prompt specification and produces RAG_MASTER.json + RAG_COLD.json. Zero LLM involvement.
+- **`rag_kernel init --spec <path.md>`** — single-command RAG bootstrap from spec. Parses v3.1.8 structured blocks, validates schema, writes atomically.
+- **`rag_kernel configure --rag <path> --context <path>`** — merges project-specific context (JSON or Markdown with rag-config blocks) into an existing RAG. Atomic deep-merge.
+- **Capability self-discovery** — `rag_kernel.discover()` returns the full capability registry: 9 modules, 9 capabilities, invocation rules, CLI commands, critical module flags.
+- **`@rag-kernel-manifest` docstring blocks** — every module carries structured JSON metadata (capabilities, exports, use_when, never_bypass) that `discover()` extracts at session start.
+- **Invocation protocol** — formal rules defining when the LLM MUST use rag_kernel (state transitions, proposals, checkpoints, COLD, split-brain, RAG init) vs. when direct file I/O is acceptable (simple reads, status checks, error logs).
+- 64 new tests for spec_parser (TestDeepMerge, TestVoidRAG, TestDataStructures, TestParseString, TestErrorHandling, TestParseFile, TestVersionExtraction, TestValidation, TestWrite, TestReport, TestMergeOrdering, TestFenceEdgeCases).
+- **401 total tests** across 9 test files (up from 337).
+- Package version bumped to 0.2.0.
+
+## [v3.1.8] — 2026-05-22
+
+### Added — Machine-Parseable Specification
+- 25 `rag-config` fenced JSON blocks embedded throughout the specification alongside human-readable prose. Dual-audience document: humans read the prose, `spec_parser.py` reads the structured blocks.
+- Target format for `rag_kernel init --spec` zero-touch bootstrap.
+- All behavioral rules, state machine definitions, schema templates, and configuration defaults are now extractable deterministically.
+
 ## [v3.1.7] — 2026-05-20
 
 ### Added — RAG/Memory Reconciliation Release
@@ -121,9 +144,9 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## Development Status
 
-**Current:** v3.1.6 specification (43 sections) and v3.2 Runtime Bridge (8 modules, 337 tests, 5811 lines) both released and shipped. Formal verification Phase 1 complete (TLA+ spec).
+**Current:** v3.1.8 specification (machine-parseable with rag-config blocks) and v0.2.0 Runtime Kernel (9 modules, 401 tests) released. Zero-touch bootstrap and capability self-discovery shipped. Formal verification complete: 389K states, 8 safety + 3 liveness invariants, 0 violations.
 
-**Next:** v3.3 — UX improvements (graduated POV, conflict auto-categorization, delta checkpoints).
+**Next:** v3.3 Phase 1 — Graduated POV enforcement (STRICT/ADVISORY/SILENT modes).
 
 **Repository:** [github.com/arcadamarket/rag-runtime-kernel](https://github.com/arcadamarket/rag-runtime-kernel)
 **Developer:** Artem Pakhol

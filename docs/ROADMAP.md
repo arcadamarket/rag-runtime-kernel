@@ -4,6 +4,28 @@
 
 ---
 
+## v0.2.0 — Released (2026-05-22)
+
+**Paradigm shift: fully autonomous OS-level Python backbone.** LLM role reduced to task assignor, results checker, orchestrator. All bootstrapping, state management, validation, and persistence run as deterministic Python scripts consuming zero LLM tokens.
+
+| Component | Status |
+|---|---|
+| `spec_parser.py` — deterministic MD→RAG parser (610 lines) | Shipped |
+| `rag_kernel init --spec` — zero-touch bootstrap from spec | Shipped |
+| `rag_kernel configure` — project-specific context merge | Shipped |
+| `discover()` — capability self-discovery registry | Shipped |
+| `@rag-kernel-manifest` — structured module metadata | Shipped (all 9 modules) |
+| Invocation protocol — MUST_USE_KERNEL vs DIRECT_IO_OK | Shipped |
+| 64 new tests (401 total) | Shipped |
+
+---
+
+## v3.1.8 — Released (2026-05-22)
+
+Machine-parseable specification: 25 `rag-config` fenced JSON blocks for deterministic parsing by `spec_parser.py`. Dual-audience document (human prose + structured data). Zero-touch bootstrap target.
+
+---
+
 ## v3.1.7 — Released (2026-05-20)
 
 RAG/Memory Reconciliation Release: 48 sections. All behavioral rules consolidated from platform-specific memory into RAG_MASTER.json. New sections: File Sync Protocol (§42), Context Window Management (§43), Resolved Item Protocol (§44), Garbage Collector (§45), RAG as Single Source of Truth with portability guarantee (§46). Known-issues registry expanded.
@@ -20,9 +42,9 @@ All v3.1.4 defect fixes (DEF-001 through DEF-003) and spec clarifications shippe
 
 ---
 
-## v3.2 — Released (2026-05-14)
+## v3.2 — Released (2026-05-14), evolved to v0.2.0
 
-Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live.
+Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Superseded by v0.2.0 (9 modules, 401 tests, zero-touch bootstrap).
 
 | Component | Status |
 |---|---|
@@ -37,20 +59,20 @@ Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live.
 
 ---
 
-## Formal Verification — Phase 2 In Progress
+## Formal Verification — Phase 2 Complete
 
 | Phase | Work | Status |
 |---|---|---|
 | 1 — Model + Safety | TLA+ spec: 7 states, 8 safety invariants, WAL model. TLC verified: 136K states, 0 violations. | **Complete** (9f37dc1) |
-| 2 — Liveness | WALCompaction action added, 3 liveness properties enabled. Manual invariant trace passed. | **Spec updated** (S16) — awaiting TLC run |
+| 2 — Liveness | WALCompaction action, 3 liveness properties. TLC verified: 389K states, 0 violations. | **Complete** (ddd7af6) |
 | 3 — Generate | Auto-generate transition guard code from formal model | Not started |
-| 4 — Integrate | Embed generated guards into Python runtime (ENFORCED mode) | Blocked on Phase 2–3 |
+| 4 — Integrate | Embed generated guards into Python runtime (ENFORCED mode) | Blocked on Phase 3 |
 
 ---
 
-## v3.3 — Planned
+## v3.3 — In Progress
 
-Target: Reduce user friction, improve autonomous-mode reliability.
+Target: Reduce user friction, improve autonomous-mode reliability. Zero-touch bootstrap (V33-BOOTSTRAP) and kernel linkage (V33-LINKAGE) shipped in v0.2.0.
 
 ### Enhancements
 
@@ -100,7 +122,7 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **SHIPPED** | v3.1.4–v3.1.7 spec (incl. RAG reconciliation), v3.2 Runtime Bridge, FV Phase 1+2 (safety+liveness) | Done |
-| **HIGH** | ENH-004 graduated POV, v3.3 UX improvements | v3.3 |
+| **SHIPPED** | v3.1.4–v3.1.8 spec, v0.2.0 kernel (zero-touch bootstrap, capability discovery), FV Phase 1+2 (389K states) | Done |
+| **HIGH** | ENH-004 graduated POV, v3.3 remaining UX improvements | v3.3 |
 | **MEDIUM** | Conflict auto-categorization, delta checkpoints | v3.3 |
 | **LOW** | Graph orchestrator, formal guard generation | v4.0 |

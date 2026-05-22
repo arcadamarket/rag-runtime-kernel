@@ -11,6 +11,16 @@ All operations use Python stdlib only. Zero external dependencies.
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md §8
 Spec reference: architecture.md — Concurrency section
 Satisfies: M-016 (concurrency guard, split-brain detection)
+
+@rag-kernel-manifest
+{
+  "module": "rag_kernel.concurrency",
+  "capability": "concurrency_guard",
+  "description": "File-based mutex and split-brain detection for multi-session safety",
+  "exports": ["ProjectLock", "SplitBrainDetector"],
+  "use_when": "Session boot (acquire lock), session close (release lock), crash recovery",
+  "never_bypass": true
+}
 """
 
 from __future__ import annotations

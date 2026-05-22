@@ -11,6 +11,21 @@ Integrates:
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md §5
 Satisfies: M-023 (core HTTP API)
+
+@rag-kernel-manifest
+{
+  "module": "rag_kernel.api",
+  "capability": "http_api",
+  "description": "HTTP JSON API server — primary interface for GPT Web and direct access",
+  "exports": ["KernelApp", "create_server", "DEFAULT_PORT"],
+  "endpoints": [
+    "POST /boot", "GET /status", "GET /hot", "GET /cold/:partition",
+    "POST /propose", "POST /commit", "POST /reject",
+    "POST /checkpoint", "GET /wal", "POST /recover", "POST /close"
+  ],
+  "use_when": "Running kernel as a persistent HTTP service",
+  "never_bypass": false
+}
 """
 
 from __future__ import annotations

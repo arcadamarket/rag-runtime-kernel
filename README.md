@@ -30,12 +30,13 @@ In [head-to-head benchmarks](#how-it-compares), this single-file specification m
 
 ### Cowork (Fastest Path)
 
-1. Download [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md)
-2. Create a project folder with a `RAG/` subfolder
-3. Open Cowork, select the folder, drop the init prompt into your first message
-4. Send: **"Initialize the project."** — the system bootstraps itself, follow on-screen prompts
+1. Create a project folder with a `RAG/` subfolder
+2. Copy `rag_kernel/` into your project (see below)
+3. Open Cowork, select the folder, start a session
+4. Run: `python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md --output RAG/` — deterministic bootstrap, zero tokens, zero LLM
+5. Optionally merge project-specific context: `python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context your_context.json`
 
-**To add ENFORCED mode (v3.2 Python runtime):** copy `rag_kernel/` into your project:
+**Copy `rag_kernel/` into your project:**
 
 PowerShell:
 ```powershell
@@ -73,17 +74,18 @@ Full platform-specific setup: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
 ### Claude Desktop / Claude Projects
 
 1. Create a new Project (or open an existing one)
-2. Start a new session within that project
-3. Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md) into the session as a file
-4. Send: **"Initialize the project."** — the system bootstraps itself
-5. Follow on-screen steps: provide root paths, optional project description, optional POV config
-6. Copy the generated **pointer block** into your Project Instructions when prompted
-7. All subsequent sessions auto-load the RAG and enforce all rules
+2. Copy `rag_kernel/` into your project folder and place [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md) in `RAG/`
+3. Start a new session, run: `python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md --output RAG/`
+4. The kernel parses the spec deterministically and produces RAG_MASTER.json — zero LLM tokens
+5. Copy the generated **pointer block** into your Project Instructions when prompted
+6. All subsequent sessions auto-load the RAG and enforce all rules
+
+**Without rag_kernel (Autonomous mode):** Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md) into a session as a file and send "Initialize the project." — the LLM self-bootstraps.
 
 ### ChatGPT / GPT Web
 
 1. Open a new conversation (or use Custom GPT if available)
-2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md)
+2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md)
 3. Send your first message — the system bootstraps in autonomous mode
 4. Follow on-screen steps (same as above)
 5. At session end, download the generated RAG files and save to your project folder
@@ -91,7 +93,7 @@ Full platform-specific setup: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
 
 ### Works for both new projects and existing ones being refined.
 
-### ENFORCED Mode (v3.2 Runtime Bridge)
+### ENFORCED Mode (v0.2.0 Runtime Kernel)
 
 For hard runtime validation of every state transition, use the Python runtime:
 
@@ -197,7 +199,7 @@ Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING/RECOVE
 
 The TLA+ specification (`formal/RAGKernel.tla`) is a direct transcription of the Python state machine — every transition, guard, and invariant maps 1:1 to the runtime code. Full results in [`formal/TLC_RESULTS.md`](formal/TLC_RESULTS.md).
 
-Unit tests prove "these 337 scenarios work." TLA+ proves "no scenario can ever violate the invariants — and the system always makes progress." That is a fundamentally stronger guarantee.
+Unit tests prove "these 401 scenarios work." TLA+ proves "no scenario can ever violate the invariants — and the system always makes progress." That is a fundamentally stronger guarantee.
 
 ---
 
@@ -228,7 +230,7 @@ Unit tests prove "these 337 scenarios work." TLA+ proves "no scenario can ever v
 | Mode | How It Works |
 |---|---|
 | **Autonomous** | LLM self-enforces all rules. No external software needed. Default mode. |
-| **Enforced** | Python runtime (v3.2) intercepts all mutations. 8 modules, 337 tests, 5811 lines. |
+| **Enforced** | Python runtime (v0.2.0) intercepts all mutations. 9 modules, 401 tests. Zero-touch bootstrap: `rag_kernel init` parses spec deterministically — no LLM needed. |
 
 ## Prerequisites
 
@@ -242,8 +244,8 @@ Unit tests prove "these 337 scenarios work." TLA+ proves "no scenario can ever v
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md   # The specification (current version)
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md   # Previous version (archived)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md   # The specification (current version)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md   # Previous version (archived)
 ├── CONTRIBUTING.md                            # How to report issues
 ├── CHANGELOG.md                              # Version history
 ├── docs/
@@ -255,15 +257,17 @@ rag-runtime-kernel/
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
 │   ├── v3.2_ARCHITECTURE_DESIGN.md            # v3.2 runtime architecture
 │   └── ROADMAP.md                             # Development roadmap
-├── rag_kernel/                                # v3.2 Runtime Bridge (ENFORCED mode)
-│   ├── __main__.py                            # CLI entry point (serve / mcp)
+├── rag_kernel/                                # v0.2.0 Runtime Kernel (ENFORCED mode)
+│   ├── __init__.py                            # Package entry, discover() capability registry
+│   ├── __main__.py                            # CLI entry point (init / configure / health / serve / mcp)
 │   ├── api.py                                 # HTTP API (FastAPI)
 │   ├── state_machine.py                       # Deterministic state engine
 │   ├── persistence.py                         # Atomic writes, WAL, hash verification
 │   ├── cold_manager.py                        # COLD partition manager
 │   ├── concurrency.py                         # Lock manager, write collision guard
 │   ├── mcp_transport.py                       # MCP tool interface
-│   └── schemas.py                             # Pydantic models for proposals/state
+│   ├── schemas.py                             # Pydantic models for proposals/state
+│   └── spec_parser.py                         # Deterministic MD→RAG parser (zero LLM)
 ├── tests/                                     # Test suites
 │   ├── test_state_machine.py                  # State machine unit tests
 │   ├── test_persistence.py                    # Persistence + WAL tests
@@ -273,6 +277,7 @@ rag-runtime-kernel/
 │   ├── test_mcp_transport.py                  # MCP transport tests
 │   ├── test_schemas.py                        # Schema validation tests
 │   ├── test_main.py                           # CLI entry point tests
+│   ├── test_spec_parser.py                    # Spec parser + init/configure tests (64)
 │   ├── UNIT_TEST_CLAUDE_DESKTOP.md            # Claude Desktop spec-level tests (42)
 │   └── UNIT_TEST_GPT_WEB.md                   # GPT Web spec-level tests (43)
 ├── .github/
@@ -281,7 +286,7 @@ rag-runtime-kernel/
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
 │   ├── RAGKernel.cfg                          # TLC model checker configuration
-│   └── TLC_RESULTS.md                         # Verification results (136K states, 8 invariants)
+│   └── TLC_RESULTS.md                         # Verification results (389K states, 8 safety + 3 liveness)
 ├── LICENSE                                    # AGPL-3.0
 └── README.md
 ```
@@ -316,9 +321,9 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
 
 | Release | Status | Focus |
 |---|---|---|
-| **v3.1.7** | Released | 48-section spec: RAG/memory reconciliation, file sync, context management, resolved items, garbage collector, portability guarantee |
-| **v3.2** | Released | Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. TLA+ formal verification: 389K states, 8 safety invariants + 3 liveness properties verified. |
-| **v3.3** | Planned | UX: graduated POV, conflict auto-categorization, delta checkpoints |
+| **v3.1.8** | Released | Machine-parseable spec with `rag-config` fenced blocks for deterministic parsing. Zero-touch bootstrap target. |
+| **v0.2.0** | Released | 9 modules, 401 tests. Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). Paradigm shift: fully autonomous OS-level Python backbone — LLM role reduced to task assignor, results checker, orchestrator. |
+| **v3.3** | In Progress | UX: graduated POV, conflict auto-categorization, delta checkpoints |
 | **v4.0** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
 
 ## Reporting Issues
