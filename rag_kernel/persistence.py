@@ -16,7 +16,7 @@ Spec reference: design_principles.md -- Persistence Stack
   "module": "rag_kernel.persistence",
   "capability": "persistence",
   "description": "Crash-safe filesystem: atomic writes, WAL, hash verification, backup rotation",
-  "exports": ["atomic_write_json", "WALWriter", "WALReader", "compute_hash", "verify_hash"],
+  "exports": ["atomic_write_json", "WALWriter", "WALReader", "compute_hash", "verify_hash", "DeltaOp", "DeltaCheckpoint", "DeltaCheckpointManager", "delta_apply", "delta_compute"],
   "use_when": "Any write to RAG_MASTER.json, COLD, or WAL — never write these files directly",
   "never_bypass": true
 }
@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -390,3 +390,265 @@ class WAL:
     def __repr__(self) -> str:
         state = "open" if self._file is not None else "closed"
         return f"WAL(path={self.path}, seq={self._seq}, {state})"
+
+
+# ---------------------------------------------------------------------------
+# Delta Checkpoints (ENH-006)
+# ---------------------------------------------------------------------------
+
+class DeltaOp:
+    """A single delta operation on a JSON document.
+
+    Operations follow RFC 6902 JSON Patch semantics, using dot-path
+    addressing for nested keys (e.g., "meta.state_hash").
+
+    Ops:
+        replace — overwrite existing value at path
+        add     — insert new key at path (error if exists)
+        remove  — delete key at path (error if missing)
+    """
+
+    VALID_OPS = frozenset({"replace", "add", "remove"})
+
+    __slots__ = ("path", "op", "value")
+
+    def __init__(self, path: str, op: str, value: Any = None) -> None:
+        if op not in self.VALID_OPS:
+            raise ValueError(f"Invalid delta op: {op!r}. Must be one of {self.VALID_OPS}")
+        if not path:
+            raise ValueError("Delta path must be non-empty")
+        self.path = path
+        self.op = op
+        self.value = value
+
+    def to_dict(self) -> dict:
+        d: dict = {"path": self.path, "op": self.op}
+        if self.op != "remove":
+            d["value"] = self.value
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DeltaOp":
+        return cls(path=d["path"], op=d["op"], value=d.get("value"))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DeltaOp):
+            return NotImplemented
+        return self.path == other.path and self.op == other.op and self.value == other.value
+
+    def __repr__(self) -> str:
+        if self.op == "remove":
+            return f"DeltaOp({self.path!r}, {self.op!r})"
+        return f"DeltaOp({self.path!r}, {self.op!r}, {self.value!r})"
+
+
+@dataclass
+class DeltaCheckpoint:
+    """A delta checkpoint: base sequence + list of changes since that base.
+
+    The base_seq refers to the WAL sequence of the last full checkpoint.
+    Applying all deltas to the base state produces the current state.
+    """
+
+    base_seq: int
+    deltas: list  # list[DeltaOp]
+    timestamp: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.timestamp:
+            self.timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def to_dict(self) -> dict:
+        return {
+            "type": "delta",
+            "base_seq": self.base_seq,
+            "timestamp": self.timestamp,
+            "deltas": [d.to_dict() for d in self.deltas],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DeltaCheckpoint":
+        return cls(
+            base_seq=d["base_seq"],
+            deltas=[DeltaOp.from_dict(op) for op in d["deltas"]],
+            timestamp=d.get("timestamp", ""),
+        )
+
+    @property
+    def delta_count(self) -> int:
+        return len(self.deltas)
+
+
+def _resolve_path(obj: dict, path: str) -> Tuple[dict, str]:
+    """Walk a dot-path to find the parent dict and final key.
+
+    Given obj={"meta": {"version": "1.0"}} and path="meta.version",
+    returns ({"version": "1.0"}, "version").
+
+    Raises KeyError if any intermediate key is missing or not a dict.
+    """
+    parts = path.split(".")
+    current = obj
+    for part in parts[:-1]:
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(f"Path segment {part!r} not found in {path!r}")
+        current = current[part]
+        if not isinstance(current, dict):
+            raise KeyError(f"Path segment {part!r} is not a dict in {path!r}")
+    return current, parts[-1]
+
+
+def delta_apply(base: dict, delta: DeltaCheckpoint) -> dict:
+    """Apply a DeltaCheckpoint to a base dict, returning the modified dict.
+
+    Modifies base in-place and returns it.
+
+    Raises KeyError on invalid paths, ValueError on invalid ops.
+    """
+    for op in delta.deltas:
+        parent, key = _resolve_path(base, op.path)
+
+        if op.op == "replace":
+            if key not in parent:
+                raise KeyError(f"Cannot replace: {op.path!r} does not exist")
+            parent[key] = op.value
+
+        elif op.op == "add":
+            if key in parent:
+                raise KeyError(f"Cannot add: {op.path!r} already exists")
+            parent[key] = op.value
+
+        elif op.op == "remove":
+            if key not in parent:
+                raise KeyError(f"Cannot remove: {op.path!r} does not exist")
+            del parent[key]
+
+    return base
+
+
+def delta_compute(old: dict, new: dict, prefix: str = "") -> List[DeltaOp]:
+    """Compute the minimal delta between two dicts.
+
+    Recursively compares old and new, producing DeltaOp entries:
+    - Keys in new but not old → add
+    - Keys in old but not new → remove
+    - Keys in both but with different values → replace (if leaf) or recurse (if both dicts)
+
+    Returns a list of DeltaOp objects. An empty list means the dicts are identical.
+    """
+    ops: List[DeltaOp] = []
+
+    all_keys = set(old.keys()) | set(new.keys())
+
+    for key in sorted(all_keys):
+        path = f"{prefix}.{key}" if prefix else key
+
+        if key not in old:
+            # Added in new
+            ops.append(DeltaOp(path, "add", new[key]))
+        elif key not in new:
+            # Removed in new
+            ops.append(DeltaOp(path, "remove"))
+        elif old[key] != new[key]:
+            # Changed — recurse if both are dicts, otherwise replace
+            if isinstance(old[key], dict) and isinstance(new[key], dict):
+                ops.extend(delta_compute(old[key], new[key], prefix=path))
+            else:
+                ops.append(DeltaOp(path, "replace", new[key]))
+
+    return ops
+
+
+class DeltaCheckpointManager:
+    """Manages the delta checkpoint lifecycle.
+
+    Tracks how many deltas have been accumulated since the last full
+    checkpoint and triggers a full checkpoint when the threshold is reached,
+    on session close, or on structural changes.
+
+    Config:
+        max_deltas: Maximum deltas before forcing a full checkpoint (default: 10).
+    """
+
+    def __init__(self, max_deltas: int = 10) -> None:
+        if max_deltas < 1:
+            raise ValueError(f"max_deltas must be >= 1, got {max_deltas}")
+        self.max_deltas = max_deltas
+        self._base_snapshot: Optional[dict] = None
+        self._base_seq: int = 0
+        self._accumulated: List[DeltaOp] = []
+        self._first_full_done: bool = False
+
+    @property
+    def delta_count(self) -> int:
+        """Number of delta ops accumulated since last full checkpoint."""
+        return len(self._accumulated)
+
+    @property
+    def needs_full(self) -> bool:
+        """True if accumulated deltas have reached the threshold."""
+        return self._delta_count_logical >= self.max_deltas
+
+    @property
+    def _delta_count_logical(self) -> int:
+        """Logical delta count: number of delta_checkpoint() calls, not ops."""
+        # We track calls via a separate counter
+        return getattr(self, "_call_count", 0)
+
+    def set_base(self, snapshot: dict, seq: int) -> None:
+        """Set the base snapshot (deep copy) after a full checkpoint.
+
+        Must be called after every full checkpoint to establish the
+        comparison baseline.
+        """
+        import copy
+        self._base_snapshot = copy.deepcopy(snapshot)
+        self._base_seq = seq
+        self._accumulated = []
+        self._call_count = 0
+
+    def compute_delta(self, current: dict) -> Optional[DeltaCheckpoint]:
+        """Compute delta between base snapshot and current state.
+
+        Returns None if no changes detected.
+        Returns a DeltaCheckpoint with all accumulated changes.
+        """
+        if self._base_snapshot is None:
+            return None
+
+        ops = delta_compute(self._base_snapshot, current)
+        if not ops:
+            return None
+
+        self._accumulated = ops
+        self._call_count = getattr(self, "_call_count", 0) + 1
+
+        return DeltaCheckpoint(
+            base_seq=self._base_seq,
+            deltas=ops,
+        )
+
+    def should_full_checkpoint(self, is_closing: bool = False) -> bool:
+        """Determine if a full checkpoint is required.
+
+        Full checkpoint triggers:
+        1. No base snapshot exists (first checkpoint)
+        2. First checkpoint after boot (before any full has been done)
+        3. Delta count >= max_deltas threshold
+        4. Session is closing (always full on close)
+        """
+        if self._base_snapshot is None:
+            return True
+        if not self._first_full_done:
+            return True
+        if is_closing:
+            return True
+        return self.needs_full
+
+    def reset(self) -> None:
+        """Clear all state. Called on full checkpoint completion."""
+        self._base_snapshot = None
+        self._base_seq = 0
+        self._accumulated = []
+        self._call_count = 0
+        self._first_full_done = False

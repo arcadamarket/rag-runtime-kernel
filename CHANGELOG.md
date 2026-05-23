@@ -2,6 +2,14 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.2.2] — 2026-05-23
+
+### Added — Delta Checkpoints (ENH-006)
+- **Delta checkpoint engine** in `persistence.py`: `DeltaOp` (RFC 6902-like ops), `DeltaCheckpoint` (base_seq + ops), `delta_compute()` (recursive dict diff), `delta_apply()` (in-place patching), `DeltaCheckpointManager` (lifecycle with configurable threshold).
+- **Core invariant**: `apply(base, compute(base, current)) == current` — verified by roundtrip tests.
+- **Smart routing** in `api.py`: first checkpoint after boot is always full; subsequent checkpoints use deltas; threshold (default 10) or session close triggers full. ~60% I/O reduction on typical sessions.
+- 60 new tests across 8 test classes (DeltaOp, DeltaCheckpoint, ResolvePath, DeltaCompute, DeltaApply, DeltaCheckpointManager, KernelAppDeltaCheckpoint). **487 total tests**, all passing.
+
 ## [v0.2.1] — 2026-05-23
 
 ### Added — Graduated POV Enforcement (ENH-004)

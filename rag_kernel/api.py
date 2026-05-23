@@ -51,6 +51,7 @@ from rag_kernel.persistence import (
     atomic_write_json,
     compute_hash,
     verify_hashes,
+    DeltaCheckpointManager,
 )
 from rag_kernel.schemas import VALID_POV_MODES, validate_pov_mode, should_auto_escalate
 from rag_kernel.state_machine import State, StateMachine
@@ -102,6 +103,9 @@ class KernelApp:
         # Proposal staging area
         self._proposals: dict[str, dict] = {}
         self._proposal_seq = 0
+
+        # Delta checkpoint manager (ENH-006)
+        self._delta_mgr = DeltaCheckpointManager(max_deltas=10)
 
     # -- Boot ---------------------------------------------------------------
 
@@ -180,6 +184,9 @@ class KernelApp:
             self._hot["meta"] = {}
         self._hot["meta"]["session_id"] = self.session_id
 
+        # Set delta checkpoint base snapshot
+        self._delta_mgr.set_base(self._hot, self.wal.seq)
+
         return {
             "status": "OK",
             "state": State.READY.value,
@@ -202,6 +209,11 @@ class KernelApp:
             "cold_summary": self.cold.summary(),
             "lock_held": self.lock.is_locked,
             "pov_mode": self.get_pov_mode(),
+            "delta_checkpoint": {
+                "deltas_since_full": self._delta_mgr.delta_count,
+                "max_deltas": self._delta_mgr.max_deltas,
+                "needs_full": self._delta_mgr.needs_full,
+            },
         }
 
     # -- POV mode -----------------------------------------------------------
@@ -391,8 +403,20 @@ class KernelApp:
 
     # -- Checkpoint ---------------------------------------------------------
 
-    def checkpoint(self) -> dict:
-        """Save current state. Backup rotation + hash recompute."""
+    def checkpoint(self, force_full: bool = False, is_closing: bool = False) -> dict:
+        """Save current state. Supports full and delta checkpoints (ENH-006).
+
+        Full checkpoint: writes entire RAG_MASTER.json atomically.
+        Delta checkpoint: writes only changed fields to WAL.
+
+        Full is triggered when:
+        - force_full=True
+        - is_closing=True (session close always gets full)
+        - No base snapshot exists (first checkpoint)
+        - Delta count >= max_deltas threshold
+
+        Otherwise a delta checkpoint is written.
+        """
         if not self.state_machine.transition(State.CHECKPOINTING):
             return {
                 "checkpointed": False,
@@ -407,23 +431,68 @@ class KernelApp:
         self._hot["meta"]["last_checkpoint_seq"] = self.wal.seq
         self._hot["meta"]["session_id"] = self.session_id
 
-        # Atomic write (creates .bak)
-        atomic_write_json(self.hot_path, self._hot)
-
-        self.wal.append(
-            "CHECKPOINT",
-            session_id=self.session_id,
-            seq=self.wal.seq,
+        do_full = (
+            force_full
+            or self._delta_mgr.should_full_checkpoint(is_closing=is_closing)
         )
 
-        # Back to READY
-        self.state_machine.transition(State.READY)
+        if do_full:
+            # Full checkpoint: atomic write (creates .bak)
+            atomic_write_json(self.hot_path, self._hot)
 
-        return {
-            "checkpointed": True,
-            "state_hash": state_hash,
-            "wal_seq": self.wal.seq,
-        }
+            self.wal.append(
+                "CHECKPOINT",
+                checkpoint_type="full",
+                session_id=self.session_id,
+                seq=self.wal.seq,
+            )
+
+            # Reset delta manager with new base and mark full done
+            self._delta_mgr.set_base(self._hot, self.wal.seq)
+            self._delta_mgr._first_full_done = True
+
+            # Back to READY
+            self.state_machine.transition(State.READY)
+
+            return {
+                "checkpointed": True,
+                "checkpoint_type": "full",
+                "state_hash": state_hash,
+                "wal_seq": self.wal.seq,
+            }
+        else:
+            # Delta checkpoint: compute diff and write to WAL
+            delta = self._delta_mgr.compute_delta(self._hot)
+
+            if delta is None:
+                # No changes — skip checkpoint, back to READY
+                self.state_machine.transition(State.READY)
+                return {
+                    "checkpointed": False,
+                    "checkpoint_type": "delta",
+                    "reason": "no_changes",
+                    "wal_seq": self.wal.seq,
+                }
+
+            self.wal.append(
+                "CHECKPOINT",
+                checkpoint_type="delta",
+                session_id=self.session_id,
+                seq=self.wal.seq,
+                delta=delta.to_dict(),
+            )
+
+            # Back to READY
+            self.state_machine.transition(State.READY)
+
+            return {
+                "checkpointed": True,
+                "checkpoint_type": "delta",
+                "delta_count": delta.delta_count,
+                "deltas_since_full": self._delta_mgr.delta_count,
+                "state_hash": state_hash,
+                "wal_seq": self.wal.seq,
+            }
 
     # -- WAL ----------------------------------------------------------------
 
@@ -479,10 +548,10 @@ class KernelApp:
 
     def close(self) -> dict:
         """Close the session: checkpoint, flush WAL, release lock."""
-        # Checkpoint if possible
+        # Full checkpoint on close (ENH-006: always full on session close)
         current = self.state_machine.current
         if current in (State.READY, State.WORKING, State.INGESTING):
-            self.checkpoint()
+            self.checkpoint(is_closing=True)
 
         # Transition to CLOSING
         if self.state_machine.current != State.CLOSING:
