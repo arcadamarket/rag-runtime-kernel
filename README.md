@@ -255,7 +255,7 @@ rag-runtime-kernel/
 │   ├── test_analysis_gpt_web.md               # GPT Web test findings
 │   ├── LAUNCH_MANUAL.md                       # Full setup guide (all platforms + modes)
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
-│   ├── v3.2_ARCHITECTURE_DESIGN.md            # v3.2 runtime architecture
+│   ├── v3.2_ARCHITECTURE_DESIGN.md            # Runtime architecture (v0.1.0 design doc)
 │   └── ROADMAP.md                             # Development roadmap
 ├── rag_kernel/                                # v0.2.0 Runtime Kernel (ENFORCED mode)
 │   ├── __init__.py                            # Package entry, discover() capability registry
@@ -322,9 +322,10 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
 | Release | Status | Focus |
 |---|---|---|
 | **v3.1.8** | Released | Machine-parseable spec with `rag-config` fenced blocks for deterministic parsing. Zero-touch bootstrap target. |
+| **v0.2.1** | Released | Graduated POV enforcement (STRICT/ADVISORY/SILENT), 427 tests. Version scheme cleanup. |
 | **v0.2.0** | Released | 9 modules, 401 tests. Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). Paradigm shift: fully autonomous OS-level Python backbone — LLM role reduced to task assignor, results checker, orchestrator. |
-| **v3.3** | In Progress | UX: graduated POV, conflict auto-categorization, delta checkpoints |
-| **v4.0** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
+| **v0.3.0** | In Progress | Delta checkpoints (ENH-006), conflict auto-categorization (ENH-005) |
+| **v0.4.0+** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
 
 ## Reporting Issues
 

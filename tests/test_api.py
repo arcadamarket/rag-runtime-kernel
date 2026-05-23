@@ -276,6 +276,75 @@ class TestKernelAppClose:
         assert not booted_app.lock.is_locked
 
 
+class TestKernelAppPovMode:
+    def test_default_pov_mode(self, booted_app):
+        """Default mode is strict."""
+        assert booted_app.get_pov_mode() == "strict"
+
+    def test_set_pov_mode_advisory(self, booted_app):
+        """Can set mode to advisory."""
+        result = booted_app.set_pov_mode("advisory")
+        assert result["updated"] is True
+        assert result["new_mode"] == "advisory"
+        assert booted_app.get_pov_mode() == "advisory"
+
+    def test_set_pov_mode_silent(self, booted_app):
+        """Can set mode to silent."""
+        result = booted_app.set_pov_mode("silent")
+        assert result["updated"] is True
+        assert booted_app.get_pov_mode() == "silent"
+
+    def test_set_pov_mode_disabled(self, booted_app):
+        """Can set mode to disabled."""
+        result = booted_app.set_pov_mode("disabled")
+        assert result["updated"] is True
+        assert booted_app.get_pov_mode() == "disabled"
+
+    def test_set_pov_mode_invalid(self, booted_app):
+        """Invalid mode rejected."""
+        result = booted_app.set_pov_mode("turbo")
+        assert result["updated"] is False
+        assert len(result["errors"]) > 0
+
+    def test_pov_mode_in_status(self, booted_app):
+        """Status includes pov_mode."""
+        status = booted_app.status()
+        assert "pov_mode" in status
+        assert status["pov_mode"] == "strict"
+
+    def test_pov_mode_persists(self, project_dir):
+        """POV mode change is written to disk."""
+        app = KernelApp(project_dir, session_id="POV-PERSIST")
+        app.boot()
+        app.set_pov_mode("advisory")
+
+        # Re-read from disk
+        hot_path = project_dir / "RAG_MASTER.json"
+        import json
+        data = json.loads(hot_path.read_text(encoding="utf-8"))
+        assert data["pov_mandate"]["mode"] == "advisory"
+
+    def test_auto_escalate_high_risk(self, booted_app):
+        """High-risk operations escalate to strict."""
+        result = booted_app.check_auto_escalate("state_machine_change")
+        assert result["escalated"] is True
+        assert result["effective_mode"] == "strict"
+
+    def test_auto_escalate_low_risk(self, booted_app):
+        """Low-risk operations do not escalate."""
+        result = booted_app.check_auto_escalate("file_read")
+        assert result["escalated"] is False
+        assert result["effective_mode"] == "strict"  # default is strict anyway
+
+    def test_auto_escalate_when_silent(self, booted_app):
+        """Auto-escalation overrides silent mode for high-risk ops."""
+        booted_app.set_pov_mode("silent")
+        result = booted_app.check_auto_escalate("persistence_change")
+        assert result["escalated"] is True
+        assert result["effective_mode"] == "strict"
+        assert result["configured_mode"] == "silent"
+
+
 class TestKernelAppFullCycle:
     def test_full_lifecycle(self, project_dir):
         """boot -> propose -> commit -> checkpoint -> close."""

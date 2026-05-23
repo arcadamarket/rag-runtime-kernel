@@ -54,10 +54,48 @@ VALID_ACTIONS = frozenset({
     "add_conflict",
     "resolve_conflict",
     "update_inventory",
+    "update_pov_mode",
     "custom",
 })
 
 VALID_RISK_LEVELS = frozenset({"low", "medium", "high"})
+
+# ---------------------------------------------------------------------------
+# POV mode validation
+# ---------------------------------------------------------------------------
+
+VALID_POV_MODES = frozenset({"strict", "advisory", "silent", "disabled"})
+
+# Operations that force auto-escalation to strict mode
+AUTO_ESCALATE_OPERATIONS = frozenset({
+    "state_machine_change",
+    "persistence_change",
+    "concurrency_change",
+    "formal_verification",
+    "schema_change",
+    "security_decision",
+})
+
+
+def validate_pov_mode(mode: Any) -> ValidationResult:
+    """Validate a POV mode value.
+
+    Valid modes: strict, advisory, silent, disabled.
+    """
+    if not isinstance(mode, str):
+        return _fail([f"pov_mode must be a string, got {type(mode).__name__}"])
+    if mode not in VALID_POV_MODES:
+        return _fail([f"pov_mode must be one of {sorted(VALID_POV_MODES)}, got '{mode}'"])
+    return _ok()
+
+
+def should_auto_escalate(operation_type: str) -> bool:
+    """Check if an operation type requires auto-escalation to strict POV mode.
+
+    Returns True if the operation is high-risk and requires full dual-POV analysis
+    regardless of the configured pov_mandate.mode.
+    """
+    return operation_type in AUTO_ESCALATE_OPERATIONS
 
 
 def validate_proposal(proposal: Any) -> ValidationResult:

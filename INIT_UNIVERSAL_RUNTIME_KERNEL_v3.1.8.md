@@ -757,7 +757,7 @@ HOT MUST maintain these observability fields:
 
 ## §16 — MULTI-POV VALIDATION
 
-Every substantive output MUST be contested across all defined POV roles before delivery.
+Substantive outputs are contested across all defined POV roles — but the intensity of contestation depends on `pov_mandate.mode`.
 
 ### POV rules
 - `pov_mandate.count` is explicit, user-defined, equals length of `pov_roles`.
@@ -765,7 +765,36 @@ Every substantive output MUST be contested across all defined POV roles before d
 - No default roles are assumed. If `pov_roles` is missing or empty on boot AND `pov_mandate.mode` is not `disabled`: BLOCK substantive work until user defines them. When `pov_mandate.mode` is `disabled`, skip POV contestation entirely — outputs are delivered without multi-perspective validation.
 - Internet verification REQUIRED for any fact that may have changed since training cutoff.
 
-### Contestation format
+### Graduated POV modes
+
+`pov_mandate.mode` controls the intensity of multi-perspective validation:
+
+| Mode | Behavior | When to use |
+|---|---|---|
+| `strict` | Both POVs required on every substantive output. Missing POV = spec violation. Full contestation format. | Architecture decisions, state machine changes, formal verification, persistence changes, concurrency modifications |
+| `advisory` | POVs generated as internal analysis but do not block delivery. Output is a single synthesized recommendation. POV reasoning available on request ("show me the POV analysis"). | Standard development tasks, code reviews, documentation, implementation work |
+| `silent` | POVs suppressed entirely. No dual analysis overhead. | Simple queries, status checks, file reads, file operations, routine updates |
+| `disabled` | No POV roles defined. System operates without multi-perspective validation. | User opted out of POV at session-zero |
+
+**Default:** `strict` (backward compatible). Projects that do not set `pov_mandate.mode` explicitly get full dual-POV on every inference.
+
+### Auto-escalation rules
+
+Regardless of the current `pov_mandate.mode`, the system MUST auto-escalate to `strict` for the duration of any operation that involves:
+- State machine transition changes (adding/removing states or transitions)
+- Persistence engine modifications (WAL, atomic writes, backup rotation)
+- Concurrency guard changes (lock manager, write collision detection)
+- Formal verification work (TLA+ specifications, invariant definitions)
+- Schema changes (adding/removing fields from RAG structure)
+- Security-sensitive decisions (credential handling, access control)
+
+Auto-escalation is temporary — after the high-risk operation completes, mode reverts to its configured value. Auto-escalation events are logged in the session entry.
+
+### Manual override
+
+The user may change `pov_mandate.mode` at any time by instructing the model (e.g., "switch to advisory POV mode", "use strict POV for this task", "silence the POVs"). Mode changes are applied immediately to all subsequent outputs. The change is persisted to HOT on the next checkpoint.
+
+### Contestation format (strict mode)
 For each substantive output, internally evaluate:
 ```
 POV: <role>
@@ -773,6 +802,12 @@ VERDICT: PASS | OBJECTION
 OBJECTION_DETAIL: <specific concern, if any>
 ```
 Only what survives ALL POVs is delivered. If an objection is overridden, record the override and reasoning in the session entry.
+
+### Advisory mode behavior
+POV analysis runs internally. The output delivered to the user is a single synthesized recommendation that incorporates insights from all POVs without surfacing the individual contestation. If the user asks "show me the POV analysis" or "what did the POVs say", surface the full contestation for that output.
+
+### Silent mode behavior
+No POV analysis runs. Outputs are delivered directly. If the user explicitly requests POV analysis on a specific output ("analyze this from both perspectives"), run a one-shot contestation for that output only — do not change the mode.
 
 
 ```rag-config
@@ -1174,6 +1209,8 @@ Ask for:
 The user may skip this step by responding "skip" or leaving it blank.
 
 **If user skips:** Set `pov_mandate: {count: 0, mode: "disabled"}` and `pov_roles: []`. The system operates without multi-perspective validation — all outputs are delivered directly without POV contestation. The user may enable or redefine POVs at any time during the project lifecycle (see below).
+
+**POV mode selection (optional, after defining roles):** Ask the user which POV mode they prefer: `strict` (full dual-analysis on every output — most thorough, highest token cost), `advisory` (internal analysis, synthesized output — balanced), or `silent` (no analysis unless requested — lowest token cost). Default: `strict`.
 
 **Soft recommendation (always present):** "Defining POVs enables multi-perspective validation of every substantive output. This catches blind spots, reduces errors, and forces explicit trade-off reasoning. You can skip now and define them later."
 

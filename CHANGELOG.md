@@ -2,6 +2,22 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.2.1] — 2026-05-23
+
+### Added — Graduated POV Enforcement (ENH-004)
+- Three-tier POV mode: `STRICT` (both POVs required, blocks decisions), `ADVISORY` (POVs as internal analysis, single synthesized output), `SILENT` (POVs suppressed entirely).
+- Auto-escalation: high-risk operations (state machine edits, persistence changes, concurrency modifications) automatically escalate to STRICT regardless of current mode.
+- Manual override via proposal: user can force any mode at any time.
+- `schemas.py`: `validate_pov_mode()`, `should_auto_escalate()`, `VALID_POV_MODES`, `AUTO_ESCALATE_OPERATIONS`, `update_pov_mode` action.
+- `api.py`: `get_pov_mode()`, `set_pov_mode()`, `check_auto_escalate()`, 3 new endpoints (GET/PATCH `/config/pov_mode`, POST `/config/pov_mode/check`), `pov_mode` in status response.
+- 26 new tests (16 schema + 10 API). **427 total tests**, all passing.
+
+### Removed
+- `ERROR_LOG.md` from git-tracked repo. Canonical error log lives in RAG/ (local project state, not repo content).
+
+### Housekeeping
+- Retired informal "v3.2"/"v3.3" version labels. Version scheme is now: spec/RAG = v3.1.x, Python rag_kernel = v0.x.x.
+
 ## [v0.2.0] — 2026-05-22
 
 ### Added — Zero-Touch Bootstrap & Capability Self-Discovery
@@ -42,19 +58,19 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 ### Security
 - `CLEANUP.ps1` updated: Cowork session data cleanup now enumerates individual session folders with age-based safety (≤3 days = skip). No longer offers to delete entire session storage as a unit.
 
-## [v3.2.1] — 2026-05-16
+## [v0.1.1] — 2026-05-16
 
 ### Added
 - **Formal verification with TLA+ and TLC model checker** — 136,193 states explored, 84,261 distinct, all 8 safety invariants verified with zero violations. Same technique used by Amazon for AWS infrastructure.
 - `formal/TLC_RESULTS.md` — full verification report.
-- GitHub Discussions tab launched with v3.2 announcement.
+- GitHub Discussions tab launched.
 
 ### Fixed
 - `formal/RAGKernel.cfg` — fixed INIT/NEXT+SPEC conflict that prevented TLC from running; added CHECK_DEADLOCK FALSE for terminal CLOSING state.
 - `formal/RAGKernel.tla` — strengthened fairness model: SF (strong fairness) on RecoveryComplete(READY) and WF on DirectTransition(READY) to prevent theoretical BOOTING-RECOVERY livelock.
 - `.gitignore` — added TLC generated artifacts (states/, TTrace files).
 
-## [v3.2.0] — 2026-05-14
+## [v0.1.0] — 2026-05-14
 
 ### Added
 - **Runtime Bridge** — 8 Python modules implementing ENFORCED mode: `state_machine.py`, `persistence.py`, `cold_manager.py`, `concurrency.py`, `api.py`, `mcp_transport.py`, `schemas.py`, `__main__.py`.
@@ -87,7 +103,7 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 ## [v3.1.4] — 2026-05-10
 
 ### Added
-- **v3.2 Architecture Design Document** (`docs/v3.2_ARCHITECTURE_DESIGN.md`) — complete design for the OS-level runtime bridge: localhost HTTP API, MCP server transport, state machine engine, persistence engine (atomic writes, WAL with fsync, hash verification), COLD partition manager, concurrency guard with split-brain detection. 13 sections, implementation-ready.
+- **Runtime Architecture Design Document** (`docs/v3.2_ARCHITECTURE_DESIGN.md`) — complete design for the OS-level runtime bridge: localhost HTTP API, MCP server transport, state machine engine, persistence engine (atomic writes, WAL with fsync, hash verification), COLD partition manager, concurrency guard with split-brain detection. 13 sections, implementation-ready.
 - Optional POV configuration at session-zero — users can skip multi-perspective validation entirely (`pov_mandate.mode: "disabled"`).
 - Runtime POV redefinition without reinitialization — POVs can be changed mid-session, applying prospectively only.
 - Session-zero boot scan offer — scan `root_project` immediately after RAG creation.
@@ -144,9 +160,9 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## Development Status
 
-**Current:** v3.1.8 specification (machine-parseable with rag-config blocks) and v0.2.0 Runtime Kernel (9 modules, 401 tests) released. Zero-touch bootstrap and capability self-discovery shipped. Formal verification complete: 389K states, 8 safety + 3 liveness invariants, 0 violations.
+**Current:** Spec v3.1.8 (machine-parseable, 25 rag-config blocks) and rag_kernel v0.2.1 (9 modules, 427 tests). Zero-touch bootstrap, capability self-discovery, and graduated POV shipped. Formal verification complete: 389K states, 8 safety + 3 liveness invariants, 0 violations.
 
-**Next:** v3.3 Phase 1 — Graduated POV enforcement (STRICT/ADVISORY/SILENT modes).
+**Next:** Delta checkpoints (ENH-006), conflict auto-categorization (ENH-005).
 
 **Repository:** [github.com/arcadamarket/rag-runtime-kernel](https://github.com/arcadamarket/rag-runtime-kernel)
 **Developer:** Artem Pakhol

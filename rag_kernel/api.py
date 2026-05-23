@@ -21,7 +21,8 @@ Satisfies: M-023 (core HTTP API)
   "endpoints": [
     "POST /boot", "GET /status", "GET /hot", "GET /cold/:partition",
     "POST /propose", "POST /commit", "POST /reject",
-    "POST /checkpoint", "GET /wal", "POST /recover", "POST /close"
+    "POST /checkpoint", "GET /wal", "POST /recover", "POST /close",
+    "GET /config/pov_mode", "PATCH /config/pov_mode", "POST /config/pov_mode/check"
   ],
   "use_when": "Running kernel as a persistent HTTP service",
   "never_bypass": false
@@ -51,6 +52,7 @@ from rag_kernel.persistence import (
     compute_hash,
     verify_hashes,
 )
+from rag_kernel.schemas import VALID_POV_MODES, validate_pov_mode, should_auto_escalate
 from rag_kernel.state_machine import State, StateMachine
 
 
@@ -199,6 +201,63 @@ class KernelApp:
             ],
             "cold_summary": self.cold.summary(),
             "lock_held": self.lock.is_locked,
+            "pov_mode": self.get_pov_mode(),
+        }
+
+    # -- POV mode -----------------------------------------------------------
+
+    def get_pov_mode(self) -> str:
+        """Return current POV mode from HOT."""
+        mandate = self._hot.get("pov_mandate", {})
+        return mandate.get("mode", "strict")
+
+    def set_pov_mode(self, mode: str) -> dict:
+        """Set POV mode. Validates against VALID_POV_MODES.
+
+        Returns status dict with success/error.
+        """
+        valid, errors = validate_pov_mode(mode)
+        if not valid:
+            return {"updated": False, "errors": errors}
+
+        # Ensure pov_mandate exists
+        if "pov_mandate" not in self._hot:
+            self._hot["pov_mandate"] = {"count": 0, "mode": "strict"}
+
+        old_mode = self._hot["pov_mandate"].get("mode", "strict")
+        self._hot["pov_mandate"]["mode"] = mode
+
+        # Atomic write
+        atomic_write_json(self.hot_path, self._hot)
+
+        # WAL
+        self.wal.append(
+            "PROPOSAL_COMMITTED",
+            action="update_pov_mode",
+            session_id=self.session_id,
+            old_mode=old_mode,
+            new_mode=mode,
+        )
+
+        return {
+            "updated": True,
+            "old_mode": old_mode,
+            "new_mode": mode,
+        }
+
+    def check_auto_escalate(self, operation_type: str) -> dict:
+        """Check if an operation requires auto-escalation to strict POV mode.
+
+        Returns dict with escalated flag and the effective mode.
+        """
+        current_mode = self.get_pov_mode()
+        escalated = should_auto_escalate(operation_type)
+
+        return {
+            "configured_mode": current_mode,
+            "effective_mode": "strict" if escalated else current_mode,
+            "escalated": escalated,
+            "operation_type": operation_type,
         }
 
     # -- HOT ----------------------------------------------------------------
@@ -473,6 +532,7 @@ class KernelHTTPHandler(BaseHTTPRequestHandler):
             "/hot": self._handle_hot,
             "/cold": self._handle_cold,
             "/wal": self._handle_wal,
+            "/config/pov_mode": self._handle_get_pov_mode,
         }
 
         # Check for parameterized routes
@@ -487,6 +547,15 @@ class KernelHTTPHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": f"Not found: {path}"}, 404)
 
+    def do_PATCH(self) -> None:
+        """Handle PATCH requests."""
+        path = self.path.split("?")[0]
+
+        if path == "/config/pov_mode":
+            self._handle_set_pov_mode()
+        else:
+            self._send_json({"error": f"Not found: {path}"}, 404)
+
     def do_POST(self) -> None:
         """Handle POST requests."""
         path = self.path.split("?")[0]
@@ -497,6 +566,7 @@ class KernelHTTPHandler(BaseHTTPRequestHandler):
             "/checkpoint": self._handle_checkpoint,
             "/recover": self._handle_recover,
             "/close": self._handle_close,
+            "/config/pov_mode/check": self._handle_check_auto_escalate,
         }
 
         # Parameterized routes
@@ -600,6 +670,36 @@ class KernelHTTPHandler(BaseHTTPRequestHandler):
         app = self.server.app  # type: ignore[attr-defined]
         result = app.close()
         self._send_json(result)
+
+    def _handle_get_pov_mode(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        self._send_json({
+            "pov_mode": app.get_pov_mode(),
+        })
+
+    def _handle_set_pov_mode(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        body = self._read_body()
+        if body is None:
+            return
+        mode = body.get("mode")
+        if mode is None:
+            self._send_json({"error": "Missing 'mode' field"}, 400)
+            return
+        result = app.set_pov_mode(mode)
+        code = 200 if result.get("updated") else 400
+        self._send_json(result, code)
+
+    def _handle_check_auto_escalate(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        body = self._read_body()
+        if body is None:
+            return
+        op_type = body.get("operation_type")
+        if op_type is None:
+            self._send_json({"error": "Missing 'operation_type' field"}, 400)
+            return
+        self._send_json(app.check_auto_escalate(op_type))
 
     # -- Helpers ------------------------------------------------------------
 

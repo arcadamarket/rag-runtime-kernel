@@ -311,3 +311,84 @@ class TestValidateCold:
     def test_not_a_dict(self):
         valid, errors = validate_cold("string")
         assert not valid
+
+
+# ── POV Mode Validation ──────────────────────────────────────────────────
+
+
+class TestValidatePovMode:
+    """Tests for validate_pov_mode and should_auto_escalate."""
+
+    def test_valid_strict(self):
+        from rag_kernel.schemas import validate_pov_mode
+        valid, errors = validate_pov_mode("strict")
+        assert valid
+        assert errors == []
+
+    def test_valid_advisory(self):
+        from rag_kernel.schemas import validate_pov_mode
+        valid, errors = validate_pov_mode("advisory")
+        assert valid
+
+    def test_valid_silent(self):
+        from rag_kernel.schemas import validate_pov_mode
+        valid, errors = validate_pov_mode("silent")
+        assert valid
+
+    def test_valid_disabled(self):
+        from rag_kernel.schemas import validate_pov_mode
+        valid, errors = validate_pov_mode("disabled")
+        assert valid
+
+    def test_invalid_mode(self):
+        from rag_kernel.schemas import validate_pov_mode
+        valid, errors = validate_pov_mode("turbo")
+        assert not valid
+        assert len(errors) == 1
+        assert "turbo" in errors[0]
+
+    def test_non_string(self):
+        from rag_kernel.schemas import validate_pov_mode
+        valid, errors = validate_pov_mode(42)
+        assert not valid
+        assert "string" in errors[0]
+
+    def test_auto_escalate_state_machine_change(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("state_machine_change") is True
+
+    def test_auto_escalate_persistence_change(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("persistence_change") is True
+
+    def test_auto_escalate_concurrency_change(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("concurrency_change") is True
+
+    def test_auto_escalate_formal_verification(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("formal_verification") is True
+
+    def test_auto_escalate_schema_change(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("schema_change") is True
+
+    def test_auto_escalate_security_decision(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("security_decision") is True
+
+    def test_no_auto_escalate_file_read(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("file_read") is False
+
+    def test_no_auto_escalate_status_check(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("status_check") is False
+
+    def test_no_auto_escalate_empty(self):
+        from rag_kernel.schemas import should_auto_escalate
+        assert should_auto_escalate("") is False
+
+    def test_update_pov_mode_is_valid_action(self):
+        from rag_kernel.schemas import VALID_ACTIONS
+        assert "update_pov_mode" in VALID_ACTIONS

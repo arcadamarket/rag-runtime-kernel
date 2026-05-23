@@ -42,9 +42,9 @@ All v3.1.4 defect fixes (DEF-001 through DEF-003) and spec clarifications shippe
 
 ---
 
-## v3.2 — Released (2026-05-14), evolved to v0.2.0
+## v0.1.0 — Released (2026-05-14), evolved to v0.2.0
 
-Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Superseded by v0.2.0 (9 modules, 401 tests, zero-touch bootstrap).
+Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Superseded by v0.2.0 (9 modules, 427 tests, zero-touch bootstrap, graduated POV).
 
 | Component | Status |
 |---|---|
@@ -70,18 +70,18 @@ Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Sup
 
 ---
 
-## v3.3 — In Progress
+## v0.3.0 — In Progress (UX & Efficiency)
 
-Target: Reduce user friction, improve autonomous-mode reliability. Zero-touch bootstrap (V33-BOOTSTRAP) and kernel linkage (V33-LINKAGE) shipped in v0.2.0.
+Target: Reduce user friction, improve autonomous-mode reliability, cut I/O waste. Zero-touch bootstrap and kernel linkage shipped in v0.2.0. Graduated POV shipped in v0.2.1.
 
 ### Enhancements
 
-| ID | Enhancement | Priority | Source |
+| ID | Enhancement | Priority | Status |
 |---|---|---|---|
-| ENH-004 | Graduated POV enforcement: add "advisory" mode (POVs generate analysis but don't block decisions) | HIGH | DEF-001, user onboarding friction |
-| ENH-005 | Conflict auto-categorization: classify by type (temporal drift, source disagreement, data quality) with suggested resolution | MEDIUM | WEAK-005, user decision fatigue |
-| ENH-006 | Delta-only checkpoints: save only changed fields since last checkpoint | MEDIUM | Token cost reduction |
-| ENH-008 | Archive extraction with depth control: top-level only, recursive, or selective | LOW | DEF-003 |
+| ENH-004 | Graduated POV enforcement (STRICT/ADVISORY/SILENT modes) | HIGH | **Shipped v0.2.1** |
+| ENH-006 | Delta-only checkpoints: save only changed fields since last checkpoint | MEDIUM | Next |
+| ENH-005 | Conflict auto-categorization: classify by type with suggested resolution | MEDIUM | After ENH-006 |
+| ENH-008 | Archive extraction with depth control: top-level only, recursive, or selective | LOW | Planned |
 
 ### Troubleshooting Improvements
 
@@ -114,7 +114,7 @@ Target: Multi-step workflow orchestration with dependency tracking.
 
 Target: Give GPT Web real filesystem access without requiring platform changes.
 
-Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_kernel serve` locally, configures GPT custom action pointing to `http://localhost:PORT`. All file operations route through local API. Already supported by v3.2 Runtime Bridge.
+Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_kernel serve` locally, configures GPT custom action pointing to `http://localhost:PORT`. All file operations route through local API. Already supported by v0.1.0+ runtime.
 
 ---
 
@@ -122,7 +122,7 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **SHIPPED** | v3.1.4–v3.1.8 spec, v0.2.0 kernel (zero-touch bootstrap, capability discovery), FV Phase 1+2 (389K states) | Done |
-| **HIGH** | ENH-004 graduated POV, v3.3 remaining UX improvements | v3.3 |
-| **MEDIUM** | Conflict auto-categorization, delta checkpoints | v3.3 |
-| **LOW** | Graph orchestrator, formal guard generation | v4.0 |
+| **SHIPPED** | Spec v3.1.4–v3.1.8, rag_kernel v0.1.0–v0.2.1 (graduated POV, zero-touch bootstrap, capability discovery), FV Phase 1+2 (389K states) | Done |
+| **HIGH** | ENH-006 delta checkpoints | v0.3.0 |
+| **MEDIUM** | ENH-005 conflict auto-categorization | v0.3.0 |
+| **LOW** | Graph orchestrator, formal guard generation | v0.4.0+ |
