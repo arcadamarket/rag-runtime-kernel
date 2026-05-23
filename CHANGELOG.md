@@ -2,6 +2,18 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.2.3] — 2026-05-23
+
+### Added — Session Logger (Universal Observability)
+- **`session_logger.py`** — structured JSONL session logger for debug/patch/release cycles. Universal (not project-specific), self-contained logs interpretable by Claude without additional context.
+- `SessionLogger`: open/close lifecycle, fsync guarantees, monotonic sequence, level filtering.
+- Convenience methods: `state_transition()`, `io_operation()`, `rag_mutation()`, `checkpoint()`, `error()`, `warning()`, `tool_invocation()`, `validation()`, `recovery()`.
+- `timed()` context manager for automatic duration measurement.
+- `load_session_log()`: read back JSONL logs into structured entries.
+- `summarize_session_log()`: produce LLM-friendly analysis summaries (level counts, state transitions, I/O summary, error listing).
+- Module registered in `discover()` with `@rag-kernel-manifest` block.
+- 53 new tests across 9 test classes. **540 total tests**, all passing.
+
 ## [v0.2.2] — 2026-05-23
 
 ### Added — Delta Checkpoints (ENH-006)
@@ -168,9 +180,9 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## Development Status
 
-**Current:** Spec v3.1.8 (machine-parseable, 25 rag-config blocks) and rag_kernel v0.2.1 (9 modules, 427 tests). Zero-touch bootstrap, capability self-discovery, and graduated POV shipped. Formal verification complete: 389K states, 8 safety + 3 liveness invariants, 0 violations.
+**Current:** Spec v3.1.8 (machine-parseable, 25 rag-config blocks) and rag_kernel v0.2.3 (10 modules, 540 tests). Zero-touch bootstrap, capability self-discovery, graduated POV, delta checkpoints, and session logger shipped. Formal verification complete: 389K states, 8 safety + 3 liveness invariants, 0 violations.
 
-**Next:** Delta checkpoints (ENH-006), conflict auto-categorization (ENH-005).
+**Next:** Conflict auto-categorization (ENH-005).
 
 **Repository:** [github.com/arcadamarket/rag-runtime-kernel](https://github.com/arcadamarket/rag-runtime-kernel)
 **Developer:** Artem Pakhol
