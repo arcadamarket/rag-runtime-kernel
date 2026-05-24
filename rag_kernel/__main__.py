@@ -264,6 +264,7 @@ def cmd_health(args: argparse.Namespace) -> int:
         "rag_kernel.api",
         "rag_kernel.mcp_transport",
         "rag_kernel.spec_parser",
+        "rag_kernel.session_logger",
         "rag_kernel.__main__",
     ]
 

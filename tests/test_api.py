@@ -503,3 +503,106 @@ class TestHTTPRoutes:
         code, data = _get(server, "/wal?since=999999")
         assert code == 200
         assert data == []
+
+
+# ===== ENH-007: SessionLogger wiring tests =====
+
+class TestSessionLoggerWiring:
+    """Verify SessionLogger is automatically wired into KernelApp lifecycle."""
+
+    def test_logger_exists_on_app(self, app):
+        """KernelApp should have a logger attribute."""
+        from rag_kernel.session_logger import SessionLogger
+        assert hasattr(app, "logger")
+        assert isinstance(app.logger, SessionLogger)
+
+    def test_boot_opens_logger(self, app):
+        """boot() should open the session logger."""
+        app.boot()
+        assert app.logger.is_open
+        app.close()
+
+    def test_boot_creates_log_file(self, app, project_dir):
+        """boot() should create a session log JSONL file."""
+        app.boot()
+        log_path = app.logger.log_path
+        assert log_path.exists()
+        app.close()
+
+    def test_boot_logs_session_start_and_transition(self, app, project_dir):
+        """boot() should log session_start and state_transition events."""
+        app.boot()
+        log_path = app.logger.log_path
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        events = [json.loads(line)["event"] for line in lines]
+        assert "session_start" in events
+        assert "state_transition" in events
+        app.close()
+
+    def test_commit_logs_rag_mutation(self, booted_app, project_dir):
+        """commit() should log a rag_mutation event."""
+        app = booted_app
+        proposal = app.propose({"action": "test_write", "payload": {"test_key": "val"}})
+        app.commit(proposal["proposal_id"])
+        log_path = app.logger.log_path
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        events = [json.loads(line)["event"] for line in lines]
+        assert "rag_mutation" in events
+        app.close()
+
+    def test_checkpoint_logs_checkpoint_event(self, booted_app, project_dir):
+        """checkpoint() should log a checkpoint event."""
+        app = booted_app
+        app.checkpoint(force_full=True)
+        log_path = app.logger.log_path
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        events = [json.loads(line)["event"] for line in lines]
+        assert "checkpoint" in events
+        app.close()
+
+    def test_close_logs_session_end(self, booted_app, project_dir):
+        """close() should log info and session_end events, then close logger."""
+        app = booted_app
+        app.close()
+        log_path = app.logger.log_path
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        events = [json.loads(line)["event"] for line in lines]
+        assert "session_end" in events
+        assert not app.logger.is_open
+
+    def test_full_lifecycle_log_sequence(self, app, project_dir):
+        """Full boot->propose->commit->checkpoint->close produces correct log sequence."""
+        app.boot()
+        proposal = app.propose({"action": "lifecycle_test", "payload": {"x": 1}})
+        app.commit(proposal["proposal_id"])
+        app.checkpoint(force_full=True)
+        app.close()
+
+        log_path = app.logger.log_path
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        events = [json.loads(line)["event"] for line in lines]
+
+        # Verify ordering: session_start comes first, session_end comes last
+        assert events[0] == "session_start"
+        assert events[-1] == "session_end"
+        # All key lifecycle events present
+        assert "state_transition" in events
+        assert "rag_mutation" in events
+        assert "checkpoint" in events
+        assert "info" in events  # close logs an info event
+
+    def test_logger_session_id_matches_app(self, app):
+        """Logger session_id should match KernelApp session_id."""
+        assert app.logger.session_id == app.session_id
+
+    def test_recovery_logs_error(self, project_dir):
+        """Boot into recovery should log an error event."""
+        hot_path = project_dir / "RAG_MASTER.json"
+        hot_path.write_text("NOT VALID JSON", encoding="utf-8")
+        app = KernelApp(project_dir, session_id="TEST-RECOVERY")
+        result = app.boot()
+        assert result["status"] == "HOT_LOAD_FAILED"
+        log_path = app.logger.log_path
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        events = [json.loads(line)["event"] for line in lines]
+        assert "error" in events

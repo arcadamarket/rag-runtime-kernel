@@ -54,6 +54,7 @@ from rag_kernel.persistence import (
     DeltaCheckpointManager,
 )
 from rag_kernel.schemas import VALID_POV_MODES, validate_pov_mode, should_auto_escalate
+from rag_kernel.session_logger import SessionLogger, EventCategory
 from rag_kernel.state_machine import State, StateMachine
 
 
@@ -107,6 +108,12 @@ class KernelApp:
         # Delta checkpoint manager (ENH-006)
         self._delta_mgr = DeltaCheckpointManager(max_deltas=10)
 
+        # Session logger (ENH-007) — automatic observability
+        self.logger = SessionLogger(
+            session_id=self.session_id,
+            log_dir=project_dir,
+        )
+
     # -- Boot ---------------------------------------------------------------
 
     def boot(self) -> dict:
@@ -122,10 +129,18 @@ class KernelApp:
 
         Returns status dict.
         """
+        # 0. Open session logger
+        self.logger.open()
+        self.logger.info(f"Booting kernel session {self.session_id}", category=EventCategory.LIFECYCLE)
+
         # 1. Lock
         if not self.lock.acquire(self.session_id):
             info = self.lock.read_lock()
             self.state_machine.transition(State.RECOVERY)
+            self.logger.error(
+                "Boot failed: project locked by another session",
+                category=EventCategory.LIFECYCLE,
+            )
             return {
                 "status": "LOCKED",
                 "state": self.state_machine.current.value,
@@ -142,6 +157,11 @@ class KernelApp:
                 self._hot = json.loads(raw)
             except (json.JSONDecodeError, OSError) as e:
                 self.state_machine.transition(State.RECOVERY)
+                self.logger.error(
+                    "HOT load failed",
+                    category=EventCategory.IO,
+                    exc=e,
+                )
                 return {
                     "status": "HOT_LOAD_FAILED",
                     "state": State.RECOVERY.value,
@@ -165,6 +185,10 @@ class KernelApp:
                 hash_errors=hash_errors,
                 split_brain=str(split) if split else None,
             )
+            self.logger.error(
+                "Boot entered RECOVERY: integrity issues detected",
+                category=EventCategory.RECOVERY,
+            )
             return {
                 "status": "RECOVERY",
                 "state": State.RECOVERY.value,
@@ -186,6 +210,8 @@ class KernelApp:
 
         # Set delta checkpoint base snapshot
         self._delta_mgr.set_base(self._hot, self.wal.seq)
+
+        self.logger.state_transition("BOOTING", "READY", trigger="boot")
 
         return {
             "status": "OK",
@@ -379,6 +405,13 @@ class KernelApp:
             session_id=self.session_id,
         )
 
+        self.logger.rag_mutation(
+            target="HOT",
+            mutation_type="proposal_commit",
+            proposal_id=proposal_id,
+            action=proposal["action"],
+        )
+
         return {
             "committed": True,
             "proposal_id": proposal_id,
@@ -454,6 +487,8 @@ class KernelApp:
             # Back to READY
             self.state_machine.transition(State.READY)
 
+            self.logger.checkpoint("full", seq=self.wal.seq)
+
             return {
                 "checkpointed": True,
                 "checkpoint_type": "full",
@@ -484,6 +519,12 @@ class KernelApp:
 
             # Back to READY
             self.state_machine.transition(State.READY)
+
+            self.logger.checkpoint(
+                "delta", seq=self.wal.seq,
+                delta_count=delta.delta_count,
+                deltas_since_full=self._delta_mgr.delta_count,
+            )
 
             return {
                 "checkpointed": True,
@@ -521,6 +562,10 @@ class KernelApp:
                     )
                     if self.state_machine.current == State.RECOVERY:
                         self.state_machine.transition(State.READY)
+                    self.logger.info(
+                        "Recovery succeeded from .bak file",
+                        category=EventCategory.RECOVERY,
+                    )
                     return {
                         "recovered": True,
                         "method": "bak",
@@ -569,6 +614,10 @@ class KernelApp:
 
         # Release lock
         self.lock.release()
+
+        # Close session logger (after all other operations)
+        self.logger.info(f"Session {self.session_id} closing", category=EventCategory.LIFECYCLE)
+        self.logger.close()
 
         return {
             "closed": True,
