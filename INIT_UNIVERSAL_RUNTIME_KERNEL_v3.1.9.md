@@ -1459,6 +1459,7 @@ The Pre-Flight Gate (§21) requires checking tool fitness before acting. This se
 | PAT / credential files | May be outside connected workspace folder, inaccessible to Filesystem MCP | Use `wsl-exec` to read via `/mnt/c/...` path, or ask user |
 | `wsl-exec` + `&&` chaining | `wsl-exec` strips `&&` from commands, causing second command to be interpreted as arguments to the first | Use separate `wsl-exec` calls, or use `working_dir` parameter instead of `cd && cmd` chains |
 | `wsl-exec` + `~` expansion | `wsl-exec` does not expand `~` in paths | Use full absolute paths (e.g., `/mnt/c/Users/...` instead of `~/...`) |
+| `wsl-exec` + subshell expansion | `wsl-exec` strips backticks, `$()`, and pipe `\|` characters from commands. Commands using subshell expansion (e.g., `$(cat file)`) are silently mangled, causing credential leaks or wrong execution (E-011, E-032) | Write a self-deleting temp bash script and execute it via `wsl-exec`. NEVER pass subshell operators inline to `wsl-exec` |
 
 ### Maintenance
 
@@ -1483,7 +1484,8 @@ In AUTONOMOUS mode (no Python runtime), only the init prompt is needed. The mode
       "powershell_git_path": "PowerShell default PATH may not include git. Full path: C:\\Program Files\\Git\\cmd\\git.exe",
       "wsl_exec_ampersand": "wsl-exec strips && from commands. Use separate commands or working_dir param.",
       "wsl_exec_tilde": "wsl-exec does not expand ~ in paths. Use full absolute paths.",
-      "sandbox_mount_truncation": "CRITICAL. Cowork sandbox bash mount (mcp__workspace__bash): (1) silently truncates large files, (2) caches stale .pyc bytecode on read-only mount that CANNOT be deleted, (3) Python -B flag cannot override stale .pyc on this mount. RULE: if sandbox causes truncation or stale bytecode, switch to wsl-exec with working_dir immediately. Do NOT retry in sandbox. Do NOT fall back to sandbox after switching away."
+      "sandbox_mount_truncation": "CRITICAL. Cowork sandbox bash mount (mcp__workspace__bash): (1) silently truncates large files, (2) caches stale .pyc bytecode on read-only mount that CANNOT be deleted, (3) Python -B flag cannot override stale .pyc on this mount. RULE: if sandbox causes truncation or stale bytecode, switch to wsl-exec with working_dir immediately. Do NOT retry in sandbox. Do NOT fall back to sandbox after switching away.",
+      "wsl_exec_subshell": "CRITICAL. wsl-exec strips backticks, $(), and pipe | characters. NEVER pass subshell expansion inline. Use temp bash script for commands requiring subshell operators (e.g., git push with $(cat PAT)). Violations caused credential leaks E-011, E-032."
     }
   }
 }
