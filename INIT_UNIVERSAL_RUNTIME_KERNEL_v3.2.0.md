@@ -1,12 +1,12 @@
-﻿# INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.9
+﻿# INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0
 
 > Integrated runtime-kernel specification for a filesystem-backed, event-sourced, prompt-controlled project memory system.
 > Works standalone (prompt-only inside LLM context) OR paired with an external runtime wrapper for hard enforcement.
 > Designed for cross-platform interoperability: Claude Projects, ChatGPT, and any LLM environment with or without filesystem access.
-> Derived from v3.1.8 + patches: inference ledger protocol, session scope discipline, sandbox mount known issue, SessionLogger KernelApp wiring.
-> Supersedes: all prior versions through v3.1.8.
+> Derived from v3.1.9 + eBay audit fixes: web access protocol, environment audit, strengthened circuit breaker, tier enforcement, AskUserQuestion echo-back, requirements.txt template, known-issues additions.
+> Supersedes: all prior versions through v3.1.9.
 >
-> **v3.1.9 milestone:** Inference capture at point of generation — ideas/solutions verbalized during LLM reasoning are now tracked as structured state (not narrative prose) via the inference ledger. Session scope discipline prevents context compaction by enforcing one milestone per session. SessionLogger wired into KernelApp for automatic observability.
+> **v3.2.0 milestone:** Operational hardening from first external project deployment (eBay platform). New §26a web access protocol with 3-tier enforcement. Environment audit protocol in §37 prevents panic-driven tool-hopping. Rule 5 strengthened with environment-switch gate. Rule 9 extended with web operations tier gate. Session-zero gains requirements.txt template and known-issues inheritance. AskUserQuestion echo-back prevents silent input loss. Known-issues registry expanded with curl_cffi and Python 3.14 entries.
 
 ---
 
@@ -58,7 +58,7 @@ All paths resolve from exactly three anchors, set once at session-zero:
 | cold | RAG_COLD.json | Archival vault — loaded on-demand |
 | backup | RAG_MASTER.json.bak | Last verified HOT backup |
 | snapshot_log | RUNTIME_SNAPSHOT.log | Append-only event log / WAL |
-| init_prompt | INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.9.md | This specification |
+| init_prompt | INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md | This specification |
 
 ### Invariant
 All persistent project memory must exist in HOT, COLD, event log, source inventory, or deliverables index. Nothing important may live only in chat.
@@ -927,6 +927,8 @@ On halt:
 
 **Prohibition:** Retrying a blocked operation with a different tool, different shell, different quoting, or different path encoding counts as retrying the SAME operation. The circuit breaker does not reset by changing the tool. Bouncing between tools (CMD → PowerShell → Git Bash → short paths → env vars) without diagnosing the root cause IS the error — each bounce is a new failure, not a new attempt.
 
+**Environment-switch gate:** Before switching execution environment (WSL → PowerShell, wsl-exec → sandbox, Linux → Windows), the model MUST first diagnose the root cause of the failure. Environment-switching is NOT a valid first response to connection, authentication, or permission errors. The model must determine whether the failure is environment-dependent (path format, binary availability, mount point) or environment-independent (TLS fingerprinting, API rate limit, credential expiry). Only environment-dependent failures justify an environment switch. Switching environments for an environment-independent failure wastes context and does not resolve the issue.
+
 ### Pre-Flight Gate (mandatory — §41)
 
 **Before ANY sequence of 2+ tool calls toward one goal,** the model MUST write out in its response — before the first tool call:
@@ -937,6 +939,16 @@ On halt:
 4. **MAX ATTEMPTS:** 2 (hard cap, no exceptions).
 
 Failure to write the pre-flight declaration before acting is a violation. Exceeding max attempts after declaring is a violation.
+
+### Web operations tier gate
+
+If a task involves fetching data from a website, the pre-flight gate MUST additionally enforce tier ordering:
+
+1. **Tier 1 (script):** The FIRST action must be building or invoking a dedicated scraper/fetcher script (e.g., Python + curl_cffi, requests). The script is a persistent, reusable asset.
+2. **Tier 2 (MCP fetch):** Platform web-fetch tools (WebFetch, web_fetch) for one-off page reads or when Tier 1 is not yet available.
+3. **Tier 3 (search):** WebSearch or similar search-aggregator tools. These consume high token counts and return noisy results. Use ONLY for initial reconnaissance when the target URL is unknown.
+
+**Violation:** Using Tier 3 (WebSearch) to fetch data that a Tier 1 script would fetch is a tier violation. Using Tier 2 repeatedly for the same endpoint instead of building a Tier 1 script is an efficiency violation. The pre-flight declaration must state which tier is being used and why higher tiers are not applicable.
 
 ### Stop-and-diagnose protocol (on first failure)
 
@@ -958,7 +970,9 @@ On any halt: (1) log to ERROR_LOG.md (§39) first, (2) notify user with what fai
 {
   "operating_protocol": {
     "circuit_breaker": "Rule 5. (1) Pre-state before 3+ tool calls: state approach + fallback + cost estimate. (2) Two-Strike Rule: same tool fails or non-advances twice -> HALT, present alternatives, switch to cheapest fallback. (3) Edit-First: exact strings known -> edit directly.",
-    "pre_flight_gate": "Rule 9. MANDATORY before ANY sequence of 2+ tool calls toward one goal. MUST write in response BEFORE first tool call: (1) TOOL FITNESS, (2) APPROACH, (3) FALLBACK, (4) MAX ATTEMPTS: 2. ON FIRST FAILURE: STOP, DIAGNOSE, LOG to ERROR_LOG.md. THEN decide fallback."
+    "pre_flight_gate": "Rule 9. MANDATORY before ANY sequence of 2+ tool calls toward one goal. MUST write in response BEFORE first tool call: (1) TOOL FITNESS, (2) APPROACH, (3) FALLBACK, (4) MAX ATTEMPTS: 2. ON FIRST FAILURE: STOP, DIAGNOSE, LOG to ERROR_LOG.md. THEN decide fallback. Web operations: enforce tier gate (Tier 1 script > Tier 2 MCP fetch > Tier 3 search). Using Tier 3 to fetch data a Tier 1 script would fetch is a tier violation.",
+    "web_access_protocol": "Web data retrieval MUST follow tier ordering: Tier 1 = dedicated script (curl_cffi/requests, persistent asset). Tier 2 = platform WebFetch/web_fetch (one-off reads). Tier 3 = WebSearch (reconnaissance only, high token cost). Using a higher-numbered tier when a lower tier is available is a violation. Pre-flight gate must state tier and justification.",
+    "ask_user_question_echo": "After receiving a response from AskUserQuestion (or any structured user-input tool), always echo the received answer back to the user for confirmation before acting on it. If the answer is empty or unreadable, ask the user to paste the value directly in chat. This prevents silent data loss from platform-level parsing failures."
   }
 }
 ```
@@ -977,6 +991,12 @@ Confirmed decisions in the RAG are final unless the user explicitly instructs ot
 - Short answers for short questions. Depth only when task demands it.
 - No unsolicited suggestions, menus, caveats, or next-step offers unless requested.
 - Do not skip an outstanding issue to move to another unless explicitly told to.
+
+### Structured input echo-back
+
+When the model receives a response from any structured user-input mechanism (AskUserQuestion, form fields, platform-specific input tools), it MUST echo the received value back to the user in the next response before acting on it. Example: "You selected: API key = sk-***. Proceeding with this value."
+
+If the received value is empty, malformed, or unreadable, the model MUST NOT proceed silently. Instead, ask the user to paste the value directly in chat. This rule exists because platform-level parsing failures can silently drop user input, causing the model to act on null data.
 
 ---
 
@@ -1014,6 +1034,28 @@ When any information is missing from the RAG, read source files from root_projec
 - **Pre-commit hygiene:** Before `git add -A`, verify `.gitignore` covers all generated/temp directories (pytest cache, `__pycache__`, `.pytest_cache`, build artifacts, temp files). If not, add the entries FIRST.
 - **Post-push verification:** After every `git push`, verify the push succeeded by checking the remote ref or reading the push output for the new commit hash. If push says "Everything up-to-date" after a fresh commit, HALT — the branch tracking is misconfigured. Do NOT proceed as if the push succeeded.
 - **Pre-task tool verification:** Before starting any task that requires git operations, verify that git is accessible from the current tool environment. If not, log to ERROR_LOG.md and surface to user BEFORE starting the work that depends on git. Do NOT complete work and then discover you can't deliver it.
+
+---
+
+## §26a — WEB ACCESS PROTOCOL
+
+When a task requires retrieving data from websites, the model MUST follow a tiered approach that minimizes token waste and maximizes reliability.
+
+### Tier ordering (mandatory)
+
+| Tier | Method | When to use | Token cost |
+|---|---|---|---|
+| 1 | Dedicated script (Python + curl_cffi, requests, httpx) | Default for any repeatable web data retrieval. The script is a persistent, reusable project asset. | Lowest — data stays on disk |
+| 2 | Platform WebFetch / web_fetch | One-off page reads during research, or when building a Tier 1 script (e.g., inspecting page structure) | Medium — raw HTML in context |
+| 3 | WebSearch / search tools | Initial reconnaissance ONLY — when the target URL is unknown and needs to be discovered | Highest — noisy results, high token count |
+
+### Rules
+
+- The pre-flight gate (§21) MUST state which tier is being used and why higher tiers are not applicable.
+- Using Tier 3 to fetch data that a Tier 1 script could fetch is a **tier violation**.
+- Using Tier 2 repeatedly for the same endpoint instead of building a Tier 1 script is an **efficiency violation**.
+- When building a Tier 1 scraper with `curl_cffi`: consult the known-issues registry (§41) for the `curl_cffi_headers` entry before writing code. NEVER pass custom `headers=` when using `impersonate=`.
+- Scraper scripts MUST be saved to root_project (not ephemeral) so they persist across sessions.
 
 ---
 
@@ -1129,12 +1171,26 @@ Ask for: (1) total number of POVs, (2) role definition for each (short label + o
 
 **POV redefinition (any time):** User may add/remove/redefine POV roles at any point. On change: update HOT, set mode to `strict` if transitioning from `disabled`, log in session entry, apply to subsequent outputs. Prior outputs are NOT retroactively re-evaluated unless explicitly requested.
 
+### Step 3b: Dependencies (recommended, not mandatory)
+
+If the project involves external libraries (web scraping, data processing, API clients, etc.), create a `requirements.txt` in root_project listing all Python dependencies with version pins.
+
+**Rationale:** Without a requirements.txt, dependency installation becomes ad-hoc — the LLM discovers missing packages at runtime, hits environment issues (wrong Python version, broken pip), and wastes context on trial-and-error installation. A deterministic install step at session-zero prevents this.
+
+**Install protocol:**
+1. Write `requirements.txt` to root_project.
+2. Run install via the project's Python environment (prefer WSL Python 3.12+ over Windows Python). Consult the known-issues registry (§41) for Python/pip compatibility.
+3. Verify installation succeeded before proceeding. Log any failures to ERROR_LOG.md.
+
+**If user skips:** No requirements.txt is created. Dependencies are installed ad-hoc as needed during sessions. The LLM must still follow the environment audit protocol (§37) before any install attempt.
+
 ### Step 4: Confirmation and RAG creation
 Once all inputs validated:
 1. Create initial RAG (HOT + COLD) per schemas in §32–§33.
-2. Populate `operating_protocol` with a compact summary of the highest-priority behavioral rules for this project — extracted from this specification and the project context. At minimum include: execution mode, POV mandate enforcement, COLD load trigger rule (§8), tool fallback chain availability (§3a), and any user-defined runtime directives. An empty `operating_protocol` at session-zero completion is a schema violation.
-3. Write both files to root_rag.
-4. Generate pointer block (§34).
+2. Populate `operating_protocol` with a compact summary of the highest-priority behavioral rules for this project — extracted from this specification and the project context. At minimum include: execution mode, POV mandate enforcement, COLD load trigger rule (§8), tool fallback chain availability (§3a), known-issues registry entries relevant to the project's environment (§41), and any user-defined runtime directives. An empty `operating_protocol` at session-zero completion is a schema violation.
+3. **Known-issues inheritance:** Copy applicable entries from the spec's known-issues registry (§41) into the new project's `operating_protocol.known_issues_registry`. Subsequent sessions MUST reference these RAG entries — never restate rules independently. Independent restatement risks divergence when the spec is updated.
+4. Write both files to root_rag.
+5. Generate pointer block (§34).
 
 ---
 
@@ -1359,11 +1415,29 @@ For the protocol to work deterministically, the user's environment should have:
 
 If any prerequisite is missing, operate in autonomous mode per §0 with applicable fallbacks per §3a, §10c, §13, and §14.
 
+### Environment audit protocol (mandatory before install/env-switch)
+
+Before ANY package installation attempt or execution environment switch, the model MUST run a systematic environment audit. This is not optional — it prevents panic-driven tool-hopping when the first attempt fails.
+
+**Audit scope:**
+1. **AI environment:** Enumerate all available MCPs, connectors, custom scripts, and their capabilities.
+2. **OS environment:** Enumerate ALL Python versions (Windows + WSL), pip/pip3/uv variants, package managers, and their versions. Check which are functional (pip on Python 3.14 is known broken — see §41).
+3. **Project environment:** Check for existing virtualenvs, requirements.txt, installed packages.
+
+**Audit output:** A written summary of available tools and versions. This establishes ground truth BEFORE acting.
+
+**Rules:**
+- Do NOT skip the audit because the first tool that comes to mind seems obvious.
+- Do NOT panic-switch environments on first failure — diagnose first (§21 environment-switch gate).
+- The audit result should inform the pre-flight gate (§21) TOOL FITNESS assessment.
+- If the audit reveals no viable path, HALT and present findings to the user.
+
 
 ```rag-config
 {
   "operating_protocol": {
-    "github_deploy_method": "wsl-exec + git CLI (use working_dir param for paths with parentheses)"
+    "github_deploy_method": "wsl-exec + git CLI (use working_dir param for paths with parentheses)",
+    "environment_audit": "MANDATORY before ANY install attempt or environment switch. Enumerate all available tools in AI env (MCPs, connectors, scripts) and OS env (all Python versions, pip variants, package managers across Windows + WSL). Establish ground truth BEFORE acting. Do NOT panic-switch on first failure."
   }
 }
 ```
@@ -1460,6 +1534,8 @@ The Pre-Flight Gate (§21) requires checking tool fitness before acting. This se
 | `wsl-exec` + `&&` chaining | `wsl-exec` strips `&&` from commands, causing second command to be interpreted as arguments to the first | Use separate `wsl-exec` calls, or use `working_dir` parameter instead of `cd && cmd` chains |
 | `wsl-exec` + `~` expansion | `wsl-exec` does not expand `~` in paths | Use full absolute paths (e.g., `/mnt/c/Users/...` instead of `~/...`) |
 | `wsl-exec` + subshell expansion | `wsl-exec` strips backticks, `$()`, and pipe `\|` characters from commands. Commands using subshell expansion (e.g., `$(cat file)`) are silently mangled, causing credential leaks or wrong execution (E-011, E-032) | Write a self-deleting temp bash script and execute it via `wsl-exec`. NEVER pass subshell operators inline to `wsl-exec` |
+| `curl_cffi` + custom `headers=` with `impersonate=` | Passing custom `headers=` overrides the impersonated TLS/header fingerprint, breaking anti-bot bypass and re-triggering 403/captcha responses | NEVER pass custom `headers=` when using `impersonate=`. The impersonation profile provides all necessary headers. If specific headers are needed, use `requests` or `httpx` instead of `curl_cffi` impersonation |
+| Python 3.14 + `pip` | `pip`'s vendored `rich` library crashes on Python 3.14 due to `NamedTuple` breaking change. `pip install` is broken system-wide on 3.14 | Use WSL Python 3.12 (`/usr/bin/python3`) for all package installation. See environment audit protocol (§37) |
 
 ### Maintenance
 
@@ -1485,7 +1561,9 @@ In AUTONOMOUS mode (no Python runtime), only the init prompt is needed. The mode
       "wsl_exec_ampersand": "wsl-exec strips && from commands. Use separate commands or working_dir param.",
       "wsl_exec_tilde": "wsl-exec does not expand ~ in paths. Use full absolute paths.",
       "sandbox_mount_truncation": "CRITICAL. Cowork sandbox bash mount (mcp__workspace__bash): (1) silently truncates large files, (2) caches stale .pyc bytecode on read-only mount that CANNOT be deleted, (3) Python -B flag cannot override stale .pyc on this mount. RULE: if sandbox causes truncation or stale bytecode, switch to wsl-exec with working_dir immediately. Do NOT retry in sandbox. Do NOT fall back to sandbox after switching away.",
-      "wsl_exec_subshell": "CRITICAL. wsl-exec strips backticks, $(), and pipe | characters. NEVER pass subshell expansion inline. Use temp bash script for commands requiring subshell operators (e.g., git push with $(cat PAT)). Violations caused credential leaks E-011, E-032."
+      "wsl_exec_subshell": "CRITICAL. wsl-exec strips backticks, $(), and pipe | characters. NEVER pass subshell expansion inline. Use temp bash script for commands requiring subshell operators (e.g., git push with $(cat PAT)). Violations caused credential leaks E-011, E-032.",
+      "curl_cffi_headers": "curl_cffi: NEVER pass custom headers= when using impersonate=. Custom headers override the impersonated TLS/header fingerprint and break the bypass.",
+      "python314_pip": "Windows has ONLY Python 3.14. pip is broken on 3.14 (rich NamedTuple crash). WSL has Python 3.12.3 with working pip. ALL Python execution via wsl-exec. Run environment audit (§37) before any install attempt."
     }
   }
 }
@@ -1745,6 +1823,7 @@ Narrative session summaries compress ideas into footnotes that get lost across s
 
 ## §38 — VERSION HISTORY
 
+- **v3.2.0** (2026-05-26): Operational hardening from eBay first-run audit (INS-010–017). New §26a Web Access Protocol (3-tier enforcement: script > MCP fetch > search). §37 Environment Audit Protocol (mandatory tool/version enumeration before install or env-switch). §21 strengthened: environment-switch gate (diagnose before switching), web operations tier gate. §31 session-zero: requirements.txt template (Step 3b), known-issues inheritance (Step 3→4). §23 structured input echo-back (AskUserQuestion). §41 known-issues: curl_cffi header override, Python 3.14 pip. rag-config blocks updated with web_access_protocol, environment_audit, ask_user_question_echo. 51 sections. Schema 5.3.
 - **v3.1.9** (2026-05-24): Inference ledger and session discipline release. New §47 Session Scope Discipline (one milestone per session). New §48 Inference Ledger Protocol (involuntary capture of ideas at point of generation). §41 known-issues: sandbox_mount_truncation. Full document revision: fixed stale version references from blind replace_all, removed retired v3.2 labels, compressed verbose sections (§8 chopping, §10c-post, §18 audit, §21 post-halt, §37 tool hierarchy, §31 POV config, version history), tightened rationale sections. rag_kernel v0.2.4: 11 modules, 550 tests. 50 sections (§0–§48 + §3a). Schema 5.3.
 - **v3.1.8** (2026-05-22): Zero-touch bootstrap release. Machine-parseable `rag-config` blocks in all policy sections. `spec_parser.py` for deterministic RAG creation (`rag_kernel init --spec`). CLI commands: `init`, `health`. Kernel linkage with module manifests and `discover()`. 48 sections + rag-config blocks. Schema 5.3.
 - **v3.1.7** (2026-05-20): RAG/memory reconciliation. All behavioral rules consolidated into RAG operating_protocol for cross-platform portability. New §42–§46: File Sync Protocol, Context Window Management, Resolved Item Protocol, Garbage Collector, RAG as Single Source of Truth. 48 sections. Schema 5.3.
@@ -1761,4 +1840,4 @@ Narrative session summaries compress ideas into footnotes that get lost across s
 
 ---
 
-END OF INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.9
+END OF INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0
