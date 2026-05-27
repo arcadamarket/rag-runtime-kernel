@@ -14,9 +14,15 @@
 | `rag_kernel init --spec` — zero-touch bootstrap from spec | Shipped |
 | `rag_kernel configure` — project-specific context merge | Shipped |
 | `discover()` — capability self-discovery registry | Shipped |
-| `@rag-kernel-manifest` — structured module metadata | Shipped (all 9 modules) |
+| `@rag-kernel-manifest` — structured module metadata | Shipped (all 12 modules) |
 | Invocation protocol — MUST_USE_KERNEL vs DIRECT_IO_OK | Shipped |
 | 64 new tests (401 total) | Shipped |
+
+---
+
+## v3.2.0 — Released (2026-05-27)
+
+Operational hardening release: 51 sections. New §26a Web Access Protocol, §37 Environment Audit. Strengthened Rule 5 (env-switch gate), Rule 9 (web tier gate). Session-zero: requirements.txt + known-issues inheritance. AskUserQuestion echo-back. §41: curl_cffi + Python 3.14 entries. All 8 eBay audit findings (INS-010–017) shipped as spec prose.
 
 ---
 
@@ -44,7 +50,7 @@ All v3.1.4 defect fixes (DEF-001 through DEF-003) and spec clarifications shippe
 
 ## v0.1.0 — Released (2026-05-14), evolved to v0.2.0
 
-Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Superseded by v0.2.0 (9 modules, 427 tests, zero-touch bootstrap, graduated POV).
+Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Superseded by v0.2.0+ (12 modules, 676 tests, zero-touch bootstrap, graduated POV, delta checkpoints, conflict engine, session CLI).
 
 | Component | Status |
 |---|---|
@@ -70,18 +76,20 @@ Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Sup
 
 ---
 
-## v0.3.0 — In Progress (UX & Efficiency)
+## v0.3.0 — Released (2026-05-27, v0.2.7)
 
-Target: Reduce user friction, improve autonomous-mode reliability, cut I/O waste. Zero-touch bootstrap and kernel linkage shipped in v0.2.0. Graduated POV shipped in v0.2.1.
+**Milestone complete.** All UX & efficiency enhancements shipped. 12 modules, 676 tests.
 
 ### Enhancements
 
 | ID | Enhancement | Priority | Status |
 |---|---|---|---|
 | ENH-004 | Graduated POV enforcement (STRICT/ADVISORY/SILENT modes) | HIGH | **Shipped v0.2.1** |
-| ENH-006 | Delta-only checkpoints: save only changed fields since last checkpoint | MEDIUM | Next |
-| ENH-005 | Conflict auto-categorization: classify by type with suggested resolution | MEDIUM | After ENH-006 |
-| ENH-008 | Archive extraction with depth control: top-level only, recursive, or selective | LOW | Planned |
+| ENH-006 | Delta-only checkpoints: save only changed fields since last checkpoint | MEDIUM | **Shipped v0.2.2** |
+| ENH-005 | Conflict auto-categorization: 7 categories, rule-based classifier, auto-resolve | MEDIUM | **Shipped v0.2.7** |
+| ENH-007 | Session logger: universal JSONL observability, KernelApp auto-wiring | MEDIUM | **Shipped v0.2.3** |
+| ENH-008 | Session/Checkpoint/GC CLI: `session start/close`, `checkpoint`, `gc` commands | MEDIUM | **Shipped v0.2.5** |
+| ENH-009 | Spec v3.2.0 kernel enforcement: audit-env, init --requirements, tier gate, echo-back | MEDIUM | **Shipped v0.2.6** |
 
 ### Troubleshooting Improvements
 
@@ -122,7 +130,5 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **SHIPPED** | Spec v3.1.4–v3.1.8, rag_kernel v0.1.0–v0.2.1 (graduated POV, zero-touch bootstrap, capability discovery), FV Phase 1+2 (389K states) | Done |
-| **HIGH** | ENH-006 delta checkpoints | v0.3.0 |
-| **MEDIUM** | ENH-005 conflict auto-categorization | v0.3.0 |
-| **LOW** | Graph orchestrator, formal guard generation | v0.4.0+ |
+| **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.2.7 (12 modules, 676 tests, zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), v0.3.0 milestone complete | Done |
+| **LOW** | Graph orchestrator, formal guard generation | v4.0+ |
