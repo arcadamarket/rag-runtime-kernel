@@ -5,7 +5,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.2.4",
+  "version": "0.2.7",
   "description": "OS-level runtime bridge for LLM memory persistence",
   "spec_version": "3.1.9",
   "python_requires": ">=3.10",
@@ -19,7 +19,8 @@ Zero external dependencies. Python 3.10+ standard library only.
     "api": "HTTP JSON API server (port 7437)",
     "mcp_transport": "MCP stdio transport for Claude Desktop (JSON-RPC 2.0)",
     "spec_parser": "Deterministic MD→RAG parser (zero tokens, zero LLM)",
-    "session_logger": "Structured JSONL session logger — universal observability"
+    "session_logger": "Structured JSONL session logger — universal observability",
+    "conflict_engine": "Rule-based conflict auto-categorization with suggested resolutions"
   },
   "cli_commands": {
     "init": "python -m rag_kernel init --spec <path.md> [--output RAG/] [--dry-run]",
@@ -47,7 +48,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.2.4"
+__version__ = "0.2.7"
 
 
 # ── Capability Discovery ──────────────────────────────────────
@@ -66,6 +67,7 @@ _KERNEL_MODULES = [
     "rag_kernel.mcp_transport",
     "rag_kernel.spec_parser",
     "rag_kernel.session_logger",
+    "rag_kernel.conflict_engine",
     "rag_kernel.__main__",
 ]
 

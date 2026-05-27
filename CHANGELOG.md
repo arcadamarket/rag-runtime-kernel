@@ -2,6 +2,22 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.2.7] — 2026-05-27
+
+### Added — Conflict Auto-Categorization (ENH-005)
+- **`conflict_engine.py`** — rule-based conflict classification engine. Zero dependencies, zero ML. Categorizes data conflicts by type with suggested resolution paths.
+- 7 conflict categories: `TEMPORAL_DRIFT`, `SOURCE_DISAGREEMENT`, `DATA_QUALITY`, `SCHEMA_MISMATCH`, `DUPLICATE_ENTRY`, `PRIORITY_CONFLICT`, `UNCATEGORIZED`.
+- Pattern-matching classifier: analyzes difference text, field names, value types, source relationships, and timestamps. Scoring-based with confidence levels (high/medium/low).
+- Auto-resolution for low-risk, high-confidence conflicts: temporal drift (accept newer), duplicates (keep first), data quality (prefer valid value). Source disagreement, schema mismatch, and priority conflicts always escalate to user.
+- `ConflictRecord`: full §11-compatible record with ENH-005 extensions (category, suggested_resolution, auto_resolved).
+- `ConflictEngine`: stateful lifecycle manager — add, classify, resolve, load/export ledger, summary by category.
+- `validate_conflict_payload()`: proposal validation for add_conflict actions.
+- `KernelApp` integration: `add_conflict()`, `resolve_conflict()`, `get_conflict_summary()` methods.
+- 3 new HTTP endpoints: `POST /conflicts/add`, `POST /conflicts/resolve`, `GET /conflicts/summary`.
+- Proposal pipeline: `add_conflict` proposals auto-validated for required fields.
+- Module registered in `discover()` and health check (12 modules total).
+- 77 new tests across 9 test classes. **676 total tests**, all passing.
+
 ## [v0.2.3] — 2026-05-23
 
 ### Added — Session Logger (Universal Observability)

@@ -22,7 +22,8 @@ Satisfies: M-023 (core HTTP API)
     "POST /boot", "GET /status", "GET /hot", "GET /cold/:partition",
     "POST /propose", "POST /commit", "POST /reject",
     "POST /checkpoint", "GET /wal", "POST /recover", "POST /close",
-    "GET /config/pov_mode", "PATCH /config/pov_mode", "POST /config/pov_mode/check"
+    "GET /config/pov_mode", "PATCH /config/pov_mode", "POST /config/pov_mode/check",
+    "POST /conflicts/add", "POST /conflicts/resolve", "GET /conflicts/summary"
   ],
   "use_when": "Running kernel as a persistent HTTP service",
   "never_bypass": false
@@ -45,6 +46,10 @@ from rag_kernel.concurrency import (
     ProjectLock,
     LockConflictError,
     detect_split_brain,
+)
+from rag_kernel.conflict_engine import (
+    ConflictEngine,
+    validate_conflict_payload,
 )
 from rag_kernel.persistence import (
     WAL,
@@ -113,6 +118,9 @@ class KernelApp:
             session_id=self.session_id,
             log_dir=project_dir,
         )
+
+        # Conflict engine (ENH-005) — auto-categorization
+        self.conflicts = ConflictEngine()
 
     # -- Boot ---------------------------------------------------------------
 
@@ -298,6 +306,101 @@ class KernelApp:
             "operation_type": operation_type,
         }
 
+    # -- Conflict engine (ENH-005) -----------------------------------------
+
+    def add_conflict(self, conflict_data: dict) -> dict:
+        """Add a conflict via the engine. Auto-classifies and suggests resolution.
+
+        Required payload fields: source_a, source_b, difference.
+        Optional: source_a_tier, source_b_tier, source_a_value,
+                  source_b_value, field_name.
+
+        Returns the classified conflict record as a dict.
+        """
+        valid, errors = validate_conflict_payload(conflict_data)
+        if not valid:
+            return {"added": False, "errors": errors}
+
+        record = self.conflicts.add_conflict(
+            source_a=conflict_data["source_a"],
+            source_b=conflict_data["source_b"],
+            difference=conflict_data["difference"],
+            source_a_tier=conflict_data.get("source_a_tier"),
+            source_b_tier=conflict_data.get("source_b_tier"),
+            source_a_value=conflict_data.get("source_a_value"),
+            source_b_value=conflict_data.get("source_b_value"),
+            field_name=conflict_data.get("field_name"),
+        )
+
+        # Update HOT active_conflicts_count
+        self._hot["active_conflicts_count"] = self.conflicts.active_count
+
+        # Atomic write to persist count
+        atomic_write_json(self.hot_path, self._hot)
+
+        # WAL
+        self.wal.append(
+            "PROPOSAL_COMMITTED",
+            action="add_conflict",
+            session_id=self.session_id,
+            conflict_id=record.conflict_id,
+            category=record.category.value,
+            auto_resolved=record.auto_resolved,
+        )
+
+        self.logger.info(
+            f"Conflict {record.conflict_id} added: "
+            f"category={record.category.value}, "
+            f"auto_resolved={record.auto_resolved}",
+            category=EventCategory.LIFECYCLE,
+        )
+
+        return {
+            "added": True,
+            "conflict": record.to_dict(),
+            "active_count": self.conflicts.active_count,
+        }
+
+    def resolve_conflict(self, conflict_id: str, resolution: str, resolver: str = "user") -> dict:
+        """Manually resolve an active conflict.
+
+        Returns the resolved record or error.
+        """
+        record = self.conflicts.resolve_conflict(conflict_id, resolution, resolver)
+        if record is None:
+            return {
+                "resolved": False,
+                "error": f"Conflict '{conflict_id}' not found in active conflicts.",
+            }
+
+        # Update HOT
+        self._hot["active_conflicts_count"] = self.conflicts.active_count
+        atomic_write_json(self.hot_path, self._hot)
+
+        # WAL
+        self.wal.append(
+            "PROPOSAL_COMMITTED",
+            action="resolve_conflict",
+            session_id=self.session_id,
+            conflict_id=record.conflict_id,
+            resolver=resolver,
+        )
+
+        self.logger.info(
+            f"Conflict {record.conflict_id} resolved by {resolver}",
+            category=EventCategory.LIFECYCLE,
+        )
+
+        return {
+            "resolved": True,
+            "conflict": record.to_dict(),
+            "active_count": self.conflicts.active_count,
+        }
+
+    def get_conflict_summary(self) -> dict:
+        """Return a summary of all conflicts by category and status."""
+        return self.conflicts.summary()
+
     # -- HOT ----------------------------------------------------------------
 
     def get_hot(self) -> dict:
@@ -428,6 +531,12 @@ class KernelApp:
 
         # Echo-back enforcement (INS-015)
         errors.extend(self.validate_echo_back(proposal))
+
+        # Conflict payload validation (ENH-005)
+        if proposal.get("action") == "add_conflict" and "payload" in proposal:
+            valid, conflict_errors = validate_conflict_payload(proposal["payload"])
+            if not valid:
+                errors.extend(conflict_errors)
 
         result = {
             "proposal_id": proposal_id,
@@ -739,6 +848,7 @@ class KernelHTTPHandler(BaseHTTPRequestHandler):
             "/cold": self._handle_cold,
             "/wal": self._handle_wal,
             "/config/pov_mode": self._handle_get_pov_mode,
+            "/conflicts/summary": self._handle_conflict_summary,
         }
 
         # Check for parameterized routes
@@ -773,6 +883,8 @@ class KernelHTTPHandler(BaseHTTPRequestHandler):
             "/recover": self._handle_recover,
             "/close": self._handle_close,
             "/config/pov_mode/check": self._handle_check_auto_escalate,
+            "/conflicts/add": self._handle_add_conflict,
+            "/conflicts/resolve": self._handle_resolve_conflict,
         }
 
         # Parameterized routes
@@ -906,6 +1018,37 @@ class KernelHTTPHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Missing 'operation_type' field"}, 400)
             return
         self._send_json(app.check_auto_escalate(op_type))
+
+    def _handle_conflict_summary(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        self._send_json(app.get_conflict_summary())
+
+    def _handle_add_conflict(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        body = self._read_body()
+        if body is None:
+            return
+        result = app.add_conflict(body)
+        code = 200 if result.get("added") else 400
+        self._send_json(result, code)
+
+    def _handle_resolve_conflict(self) -> None:
+        app = self.server.app  # type: ignore[attr-defined]
+        body = self._read_body()
+        if body is None:
+            return
+        conflict_id = body.get("conflict_id")
+        resolution = body.get("resolution")
+        if not conflict_id or not resolution:
+            self._send_json(
+                {"error": "Missing 'conflict_id' and/or 'resolution' fields"},
+                400,
+            )
+            return
+        resolver = body.get("resolver", "user")
+        result = app.resolve_conflict(conflict_id, resolution, resolver)
+        code = 200 if result.get("resolved") else 404
+        self._send_json(result, code)
 
     # -- Helpers ------------------------------------------------------------
 
