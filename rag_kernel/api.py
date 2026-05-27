@@ -314,12 +314,94 @@ class KernelApp:
 
     # -- Propose / Commit / Reject ------------------------------------------
 
+    # -- Tier gate validation ------------------------------------------------
+
+    # Valid web access tiers and their numeric rank (lower = preferred)
+    _WEB_TIERS = {"script": 1, "fetch": 2, "search": 3}
+
+    def validate_web_tier(self, proposal: dict) -> list[str]:
+        """Validate web access tier compliance (INS-012, kernel-enforced).
+
+        If the proposal declares a ``web_tier`` field, verify:
+        1. It is a recognized tier name.
+        2. The ``tier_justification`` field explains why a higher tier is used.
+        3. Using Tier 3 (search) when a Tier 1 script exists is a violation.
+
+        Returns a list of error strings (empty = valid).
+        """
+        errors: list[str] = []
+        tier = proposal.get("web_tier")
+        if tier is None:
+            return errors  # Not a web-access proposal — skip
+
+        tier_lower = str(tier).lower()
+        if tier_lower not in self._WEB_TIERS:
+            errors.append(
+                f"Unknown web_tier '{tier}'. "
+                f"Valid tiers: {', '.join(self._WEB_TIERS)}."
+            )
+            return errors
+
+        rank = self._WEB_TIERS[tier_lower]
+
+        # Tier > 1 requires justification
+        if rank > 1 and not proposal.get("tier_justification"):
+            errors.append(
+                f"web_tier '{tier_lower}' (rank {rank}) requires a "
+                f"'tier_justification' field explaining why Tier 1 (script) "
+                f"is not applicable."
+            )
+
+        # Check for existing scraper scripts in the project
+        if rank >= 3:
+            scripts_dir = self.project_dir.parent  # project root (RAG is subdir)
+            has_scripts = any(
+                f.endswith(".py")
+                for f in os.listdir(scripts_dir)
+                if "scrape" in f.lower() or "fetch" in f.lower()
+            ) if scripts_dir.exists() else False
+
+            if has_scripts:
+                errors.append(
+                    f"Tier violation: web_tier 'search' used but scraper/fetcher "
+                    f"scripts exist in project. Use Tier 1 (script) instead."
+                )
+
+        return errors
+
+    # -- Echo-back validation -----------------------------------------------
+
+    @staticmethod
+    def validate_echo_back(proposal: dict) -> list[str]:
+        """Validate echo-back compliance for user-input proposals (INS-015).
+
+        If the proposal declares ``user_input_consumed: true``, it MUST also
+        include ``echo_value`` with the value that was echoed back to the user
+        for confirmation.
+
+        Returns a list of error strings (empty = valid).
+        """
+        errors: list[str] = []
+        if proposal.get("user_input_consumed") and not proposal.get("echo_value"):
+            errors.append(
+                "Echo-back violation: proposal consumes user input "
+                "(user_input_consumed=true) but does not include 'echo_value'. "
+                "The received value must be echoed to the user before acting on it."
+            )
+        return errors
+
     def propose(self, proposal: dict) -> dict:
         """Submit a mutation proposal for validation.
 
         The proposal must include:
         - action: str (e.g., "update_status", "add_session")
         - payload: dict (the data to write)
+
+        Optional enforcement fields:
+        - web_tier: str — declares which web access tier is being used
+        - tier_justification: str — why a higher tier is necessary
+        - user_input_consumed: bool — whether this proposal uses user input
+        - echo_value: str — the value echoed back to the user
 
         Returns proposal_id and validation result.
         """
@@ -340,6 +422,12 @@ class KernelApp:
                 f"Cannot propose in state {current.value}. "
                 f"Must be READY, WORKING, or INGESTING."
             )
+
+        # Tier gate enforcement (INS-012)
+        errors.extend(self.validate_web_tier(proposal))
+
+        # Echo-back enforcement (INS-015)
+        errors.extend(self.validate_echo_back(proposal))
 
         result = {
             "proposal_id": proposal_id,

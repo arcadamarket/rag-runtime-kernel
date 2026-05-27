@@ -358,3 +358,119 @@ class TestInitPathStyle:
             rag = json.loads(rag_path.read_text(encoding="utf-8"))
             # Auto-detect: C: drive letter -> windows style
             assert "\\" in rag["meta"]["root_project"]
+
+
+# ===== ENH-009a: audit-env tests =====
+
+class TestAuditEnv:
+    """Tests for the audit-env command (INS-017, kernel-enforced)."""
+
+    def test_audit_env_runs(self, tmp_path):
+        """audit-env returns 0 and produces output."""
+        result = main(["audit-env", "--path", str(tmp_path)])
+        assert result == 0
+
+    def test_audit_env_json_output(self, tmp_path, capsys):
+        """audit-env --json produces valid JSON."""
+        result = main(["audit-env", "--path", str(tmp_path), "--json"])
+        assert result == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert "python_versions" in data
+        assert "pip_variants" in data
+        assert "package_managers" in data
+        assert "project_env" in data
+        assert "platform" in data
+
+    def test_audit_env_detects_python(self, tmp_path, capsys):
+        """audit-env finds at least one Python version."""
+        main(["audit-env", "--path", str(tmp_path), "--json"])
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert len(data["python_versions"]) >= 1
+        # Each entry should have required fields
+        for entry in data["python_versions"]:
+            assert "version" in entry
+            assert "pip_works" in entry
+            assert "command" in entry
+
+    def test_audit_env_detects_requirements(self, tmp_path, capsys):
+        """audit-env finds requirements.txt when present."""
+        req = tmp_path / "requirements.txt"
+        req.write_text("requests>=2.0\nflask==2.3.0\n", encoding="utf-8")
+        main(["audit-env", "--path", str(tmp_path), "--json"])
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["project_env"]["requirements_txt"] is not None
+        assert data["project_env"]["requirements_count"] == 2
+        assert "requests>=2.0" in data["project_env"]["requirements_packages"]
+
+    def test_audit_env_no_requirements(self, tmp_path, capsys):
+        """audit-env reports None when no requirements.txt."""
+        main(["audit-env", "--path", str(tmp_path), "--json"])
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["project_env"]["requirements_txt"] is None
+
+    def test_audit_env_platform_info(self, tmp_path, capsys):
+        """audit-env includes platform info."""
+        main(["audit-env", "--path", str(tmp_path), "--json"])
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["platform"]["system"] != ""
+        assert data["platform"]["python_default"] != ""
+
+
+# ===== ENH-009b: init --requirements tests =====
+
+class TestInitRequirements:
+    """Tests for init --requirements flag (INS-010, kernel-enforced)."""
+
+    def test_init_requirements_with_packages(self, tmp_path):
+        """init --requirements pkg1 pkg2 creates requirements.txt with those packages."""
+        result = main([
+            "init", "--output", str(tmp_path),
+            "--root-project", str(tmp_path),
+            "--project-name", "Test",
+            "--requirements", "curl_cffi", "beautifulsoup4",
+        ])
+        req_path = tmp_path / "requirements.txt"
+        assert req_path.exists()
+        content = req_path.read_text(encoding="utf-8")
+        assert "curl_cffi" in content
+        assert "beautifulsoup4" in content
+
+    def test_init_requirements_empty_template(self, tmp_path):
+        """init --requirements (no args) creates template requirements.txt."""
+        result = main([
+            "init", "--output", str(tmp_path),
+            "--root-project", str(tmp_path),
+            "--project-name", "Test",
+            "--requirements",
+        ])
+        req_path = tmp_path / "requirements.txt"
+        assert req_path.exists()
+        content = req_path.read_text(encoding="utf-8")
+        assert "# Add your project dependencies" in content
+
+    def test_init_no_requirements_flag(self, tmp_path):
+        """init without --requirements does not create requirements.txt."""
+        result = main([
+            "init", "--output", str(tmp_path),
+            "--root-project", str(tmp_path),
+            "--project-name", "Test",
+        ])
+        req_path = tmp_path / "requirements.txt"
+        assert not req_path.exists()
+
+    def test_init_requirements_dry_run(self, tmp_path):
+        """init --requirements --dry-run does not create the file."""
+        result = main([
+            "init", "--output", str(tmp_path),
+            "--root-project", str(tmp_path),
+            "--project-name", "Test",
+            "--requirements", "flask",
+            "--dry-run",
+        ])
+        req_path = tmp_path / "requirements.txt"
+        assert not req_path.exists()

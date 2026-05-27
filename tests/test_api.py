@@ -606,3 +606,155 @@ class TestSessionLoggerWiring:
         lines = log_path.read_text(encoding="utf-8").strip().splitlines()
         events = [json.loads(line)["event"] for line in lines]
         assert "error" in events
+
+
+# ===== ENH-009c: Tier gate enforcement (INS-012) =====
+
+class TestWebTierGate:
+    """Tests for web access tier enforcement in proposal validation."""
+
+    def test_valid_tier_1_no_justification(self, booted_app):
+        """Tier 1 (script) does not require justification."""
+        result = booted_app.propose({
+            "action": "web_fetch",
+            "payload": {"url": "https://example.com"},
+            "web_tier": "script",
+        })
+        assert result["valid"] is True
+
+    def test_tier_2_requires_justification(self, booted_app):
+        """Tier 2 (fetch) without justification is rejected."""
+        result = booted_app.propose({
+            "action": "web_fetch",
+            "payload": {"url": "https://example.com"},
+            "web_tier": "fetch",
+        })
+        assert result["valid"] is False
+        assert any("tier_justification" in e for e in result["errors"])
+
+    def test_tier_2_with_justification_passes(self, booted_app):
+        """Tier 2 (fetch) with justification is accepted."""
+        result = booted_app.propose({
+            "action": "web_fetch",
+            "payload": {"url": "https://example.com"},
+            "web_tier": "fetch",
+            "tier_justification": "One-off page read to inspect structure before building scraper",
+        })
+        assert result["valid"] is True
+
+    def test_tier_3_requires_justification(self, booted_app):
+        """Tier 3 (search) without justification is rejected."""
+        result = booted_app.propose({
+            "action": "web_search",
+            "payload": {"query": "test"},
+            "web_tier": "search",
+        })
+        assert result["valid"] is False
+        assert any("tier_justification" in e for e in result["errors"])
+
+    def test_tier_3_with_justification_passes(self, booted_app):
+        """Tier 3 (search) with justification passes (when no scripts exist)."""
+        result = booted_app.propose({
+            "action": "web_search",
+            "payload": {"query": "test"},
+            "web_tier": "search",
+            "tier_justification": "Reconnaissance — target URL unknown",
+        })
+        assert result["valid"] is True
+
+    def test_unknown_tier_rejected(self, booted_app):
+        """Unknown tier names are rejected."""
+        result = booted_app.propose({
+            "action": "web_fetch",
+            "payload": {"url": "https://example.com"},
+            "web_tier": "magic",
+        })
+        assert result["valid"] is False
+        assert any("Unknown web_tier" in e for e in result["errors"])
+
+    def test_no_web_tier_field_passes(self, booted_app):
+        """Proposals without web_tier field skip tier validation entirely."""
+        result = booted_app.propose({
+            "action": "update_status",
+            "payload": {"status": "READY"},
+        })
+        assert result["valid"] is True
+
+    def test_tier_3_blocked_when_scraper_exists(self, booted_app, project_dir):
+        """Tier 3 rejected when scraper scripts exist in project."""
+        # Create a scraper script in the parent of the RAG dir
+        parent = project_dir.parent
+        scraper = parent / "scrape_data.py"
+        scraper.write_text("# scraper", encoding="utf-8")
+        try:
+            result = booted_app.propose({
+                "action": "web_search",
+                "payload": {"query": "test"},
+                "web_tier": "search",
+                "tier_justification": "Need data",
+            })
+            assert result["valid"] is False
+            assert any("Tier violation" in e for e in result["errors"])
+        finally:
+            scraper.unlink(missing_ok=True)
+
+    def test_case_insensitive_tier(self, booted_app):
+        """Tier names are case-insensitive."""
+        result = booted_app.propose({
+            "action": "web_fetch",
+            "payload": {"url": "https://example.com"},
+            "web_tier": "Script",
+        })
+        assert result["valid"] is True
+
+
+# ===== ENH-009d: Echo-back enforcement (INS-015) =====
+
+class TestEchoBackEnforcement:
+    """Tests for echo-back validation in proposal pipeline."""
+
+    def test_no_user_input_passes(self, booted_app):
+        """Proposals not consuming user input skip echo-back check."""
+        result = booted_app.propose({
+            "action": "update_status",
+            "payload": {"status": "WORKING"},
+        })
+        assert result["valid"] is True
+
+    def test_user_input_without_echo_rejected(self, booted_app):
+        """Consuming user input without echo_value is rejected."""
+        result = booted_app.propose({
+            "action": "configure_api_key",
+            "payload": {"key": "sk-..."},
+            "user_input_consumed": True,
+        })
+        assert result["valid"] is False
+        assert any("Echo-back violation" in e for e in result["errors"])
+
+    def test_user_input_with_echo_passes(self, booted_app):
+        """Consuming user input with echo_value is accepted."""
+        result = booted_app.propose({
+            "action": "configure_api_key",
+            "payload": {"key": "sk-..."},
+            "user_input_consumed": True,
+            "echo_value": "API key = sk-***. Confirmed by user.",
+        })
+        assert result["valid"] is True
+
+    def test_user_input_false_passes(self, booted_app):
+        """user_input_consumed=False skips the check."""
+        result = booted_app.propose({
+            "action": "update_config",
+            "payload": {"setting": "value"},
+            "user_input_consumed": False,
+        })
+        assert result["valid"] is True
+
+    def test_echo_value_without_flag_passes(self, booted_app):
+        """echo_value without user_input_consumed is harmless."""
+        result = booted_app.propose({
+            "action": "update_config",
+            "payload": {"setting": "value"},
+            "echo_value": "some value",
+        })
+        assert result["valid"] is True
