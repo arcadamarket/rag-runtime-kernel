@@ -6,175 +6,175 @@
 
 > **LLM proposes. System decides. State persists.**
 
-Enterprise-grade memory and state management for any LLM — crash recovery, conflict tracking, audit trails, and deterministic lifecycle control. Single file. Zero dependencies. Zero lock-in. Outperforms multi-tool stacks while fitting inside a chat window.
+Persistent memory and deterministic state control for any LLM. The kernel keeps state management **out of the language model** — bootstrap, validation, persistence, and crash recovery run as deterministic code, so the model spends its tokens on reasoning, not on bookkeeping.
+
+It ships in **two tiers** so it fits both a non-technical user pasting one file into a chat, and a developer running a serious, long-lived, token-critical project on a hardened Python backbone.
+
+---
+
+## Choose Your Path
+
+| | **Tier 1 — Simple** | **Tier 2 — Enforced** |
+|---|---|---|
+| **Who it's for** | Anyone. No Python, no Node, no install. | Builders of large, multi-session, token-critical projects who want hard guarantees. |
+| **What you run** | One markdown specification, dropped into a chat session. | The `rag_kernel` Python runtime (MCP or HTTP server) alongside the spec. |
+| **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
+| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 676 passing tests. |
+| **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
+| **Version** | Specification **v3.2.0** | Runtime kernel **v0.2.7** |
+| **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
+
+> **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
+
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.0`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.2.7`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
 ## What Problem This Solves
 
-Every LLM session starts from zero. Close the tab, lose the state. The industry "solutions" are duct tape: chat history dumps, vector DBs that hallucinate retrieval, framework lock-in that breaks across platforms.
+Every LLM session starts from zero. Close the tab, lose the state. The common workarounds are fragile: chat-history dumps, vector stores that retrieve the wrong thing, and framework lock-in that breaks when you switch platforms. Underneath all of them sits a deeper problem — **the language model is doing its own bookkeeping.** Tracking what's done, what's pending, which decision superseded which, whether a write actually landed: every one of those is reasoning the model has to redo each session, and every one of them costs tokens and invites drift.
 
-**RAG Runtime Kernel wraps around your project** — it doesn't replace your workflow, it adds a structured memory and orchestration layer on top. One markdown file. Zero dependencies. Drop it into any LLM session and you get: deterministic state persistence, crash recovery, conflict tracking, and cross-session memory that actually works — across Claude, GPT, and any LLM.
+RAG Runtime Kernel moves that bookkeeping out of the model. State lives in plain files on disk. The lifecycle is a fixed state machine. And in **Enforced mode** the transitions, validation, and persistence are executed by deterministic Python — not proposed by the model and hoped for.
 
-In [head-to-head benchmarks](#how-it-compares), this single-file specification matches or exceeds multi-tool stacks (Claude Code, lean-ctx, LLM Wiki) on state management, crash recovery, and cross-platform interoperability — while requiring zero installation.
+**The shift this represents (Tier 2):**
 
-**Key benefits:**
-- **Persistence** — your project state survives across sessions, tabs, and platforms
-- **Reduced context loss** — HOT/COLD memory tiers keep only what's needed in context
-- **Improved autonomy** — the LLM self-enforces all rules without external tooling
-- **Audit trail** — every decision, conflict, and state change is logged and traceable
+- **State management leaves the LLM entirely.** The model proposes a JSON action; the kernel validates it against policy and either commits or rejects it. The model never directly mutates state.
+- **Bootstrap costs zero LLM tokens.** `rag_kernel init` parses the ~100 KB specification and produces `RAG_MASTER.json` deterministically — no model call. The work that used to mean "feed the model a 20K-token spec and ask it to build the RAG" is now a function call.
+- **Determinism is proven, not asserted.** The state machine is verified with TLA+ (the same class of formal method Amazon uses for AWS) and exercised by 676 unit tests — all passing.
+
+**What you get in both tiers:**
+
+- **Persistence** — project state survives across sessions, tabs, and platforms.
+- **Lean context** — HOT/COLD memory tiers keep only active state in the window; archival data loads on demand.
+- **Audit trail** — every state transition, decision, and conflict is logged and traceable.
+- **Conflict ledger** — when a new fact contradicts a stored one, both are preserved, never silently overwritten.
 
 ---
 
 ## Quick Start
 
-### Cowork (Fastest Path)
+### Tier 1 — Simple (no install)
 
-1. Create a project folder with a `RAG/` subfolder
-2. Copy `rag_kernel/` into your project (see below)
-3. Open Cowork, select the folder, start a session
-4. Run: `python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md --output RAG/` — deterministic bootstrap, zero tokens, zero LLM
-5. Optionally merge project-specific context: `python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context your_context.json`
+Best for Claude Projects, ChatGPT, or any chat interface.
 
-**Copy `rag_kernel/` into your project:**
+1. Open a new project or conversation.
+2. Add [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md) to the session as a file (it's a full specification, ~100 KB — it goes into a **project/session**, not the short system-prompt field).
+3. Send: **"Initialize the project."** The LLM self-bootstraps, scans your folder if it has file access, and builds the `RAG/` state.
+4. On ChatGPT / GPT Web without file tools: download the generated RAG files at session end and re-upload them at the start of each session to restore state.
 
-PowerShell:
-```powershell
-git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
-Copy-Item -Recurse temp-clone\rag_kernel YOUR_PROJECT\rag_kernel
-Remove-Item -Recurse -Force temp-clone
-```
+That's it — no Python, no dependencies.
 
-CMD:
-```cmd
-git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
-xcopy temp-clone\rag_kernel YOUR_PROJECT\rag_kernel\ /E /I
-rmdir /s /q temp-clone
-```
+### Tier 2 — Enforced (Python runtime)
 
-Bash:
+Best for long-lived, multi-session, token-critical projects where you want hard guarantees.
+
+**1. Copy the runtime into your project:**
+
 ```bash
 git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
 cp -r temp-clone/rag_kernel YOUR_PROJECT/rag_kernel
 rm -rf temp-clone
 ```
 
-Then run as MCP server or HTTP server:
-```bash
-python -m rag_kernel mcp --project /path/to/your/RAG    # MCP mode (Claude Desktop)
-python -m rag_kernel serve --project /path/to/your/RAG   # HTTP mode (GPT / any LLM)
+<details>
+<summary>PowerShell / CMD equivalents</summary>
+
+```powershell
+# PowerShell
+git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
+Copy-Item -Recurse temp-clone\rag_kernel YOUR_PROJECT\rag_kernel
+Remove-Item -Recurse -Force temp-clone
 ```
 
-Full platform-specific setup: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
+```cmd
+:: CMD
+git clone https://github.com/arcadamarket/rag-runtime-kernel.git temp-clone
+xcopy temp-clone\rag_kernel YOUR_PROJECT\rag_kernel\ /E /I
+rmdir /s /q temp-clone
+```
+</details>
 
-### Claude Projects / ChatGPT
-
-> **Note:** The Init Prompt is a full specification (~16K tokens). It goes into a **project session**, not the Instructions/System Prompt field (which has size limitations on most platforms).
-
-### Claude Desktop / Claude Projects
-
-1. Create a new Project (or open an existing one)
-2. Copy `rag_kernel/` into your project folder and place [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md) in `RAG/`
-3. Start a new session, run: `python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md --output RAG/`
-4. The kernel parses the spec deterministically and produces RAG_MASTER.json — zero LLM tokens
-5. Copy the generated **pointer block** into your Project Instructions when prompted
-6. All subsequent sessions auto-load the RAG and enforce all rules
-
-**Without rag_kernel (Autonomous mode):** Drop [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md) into a session as a file and send "Initialize the project." — the LLM self-bootstraps.
-
-### ChatGPT / GPT Web
-
-1. Open a new conversation (or use Custom GPT if available)
-2. Upload or paste the contents of [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md)
-3. Send your first message — the system bootstraps in autonomous mode
-4. Follow on-screen steps (same as above)
-5. At session end, download the generated RAG files and save to your project folder
-6. Upload RAG files at the start of each new session to restore state
-
-### Works for both new projects and existing ones being refined.
-
-### ENFORCED Mode (v0.2.7 Runtime Kernel)
-
-For hard runtime validation of every state transition, use the Python runtime:
+**2. Bootstrap the RAG deterministically (zero LLM tokens):**
 
 ```bash
-# HTTP mode (for GPT Chat Custom Actions or any HTTP client)
-python -m rag_kernel serve --project /path/to/your/RAG --port 7437
-
-# MCP mode (for Claude Desktop)
-python -m rag_kernel mcp --project /path/to/your/RAG
+python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md --output RAG/
+# optional: merge project-specific context
+python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context your_context.json
 ```
 
-Full setup instructions for all platforms and modes: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md)
+**3. Run the kernel as a server:**
+
+```bash
+python -m rag_kernel mcp   --project /path/to/your/RAG               # MCP mode (Claude Desktop)
+python -m rag_kernel serve --project /path/to/your/RAG --port 7437   # HTTP mode (GPT Custom Actions / any client)
+```
+
+Every state mutation now flows through the kernel's proposal → validation → commit pipeline. Full platform-specific setup: [`docs/LAUNCH_MANUAL.md`](docs/LAUNCH_MANUAL.md).
+
+> Works for **both new projects and existing ones**. On an existing project, the boot scan inventories your files, classifies them by tier, and extracts knowledge into COLD storage — your prior work becomes queryable, trackable, and persistent.
 
 ---
 
-## Using with Cowork
+## What's Actually Proven
 
-[Cowork](https://docs.claude.com) is Anthropic's desktop tool for non-developers to automate file and task management.
+This section states only what is measured or formally verified — no marketing percentages.
 
-**New project:** Create a project folder with a `RAG/` subfolder, open Cowork, start a session, and drop the Init Prompt file in. The system bootstraps, scans your project folder, and builds the RAG.
+**Determinism (Tier 2):**
 
-**Existing project:** Point the system to your existing project folder during bootstrap. The boot scan inventories all existing files, classifies them by tier, and extracts knowledge into COLD storage. Your existing work becomes queryable, trackable, and persistent.
+- **676 / 676 unit tests passing** across 12 runtime modules (state machine, persistence/WAL, COLD manager, concurrency, conflict engine, schemas, CLI, MCP transport, spec parser, session logger).
+- **TLA+ formal verification:** the TLC model checker exhaustively explored **389,522 states (168,520 distinct)** to depth 19 and confirmed **8 safety invariants + 3 liveness properties with zero violations**. The TLA+ spec is a 1:1 transcription of the Python state machine. Two genuine liveness bugs were found and fixed during verification.
+- Unit tests prove "these 676 scenarios work." TLA+ proves "no reachable state can violate the invariants, and the system always makes progress." The second is a strictly stronger guarantee.
 
-**Benefits:** Cowork's file access lets the kernel read/write RAG files directly — no manual copy-paste. Task automation pairs naturally with the kernel's checkpoint and audit system.
+**Token economy (Tier 2):**
 
----
+- **Bootstrap: 0 LLM tokens.** `rag_kernel init` parses the ~100 KB / ~20K-token specification in Python. No model is involved.
+- **State operations: 0 LLM reasoning tokens.** Validation, atomic writes, WAL, checkpointing, COLD partitioning, and crash recovery all execute as code. The model's only job is to *propose*; it never spends tokens managing or re-deriving state.
+- **Lean active context.** HOT memory holds only live state (on the order of ~15 KB); archival data is loaded on demand rather than carried in every prompt.
 
-## Using with Claude Code
-
-[Claude Code](https://docs.claude.com) is Anthropic's CLI tool for agentic coding tasks.
-
-**New project:** Initialize your project directory, reference the Init Prompt in a Claude Code session, and the system creates RAG files in your `RAG/` directory via direct filesystem access.
-
-**Existing project:** Add a `RAG/` directory to your existing codebase, bootstrap the kernel — it scans your project, builds inventory, and starts tracking state.
-
-**How it enhances Claude Code:** Context persistence across stateless sessions. Deterministic state machine structures long-running development. Zero-token file ops via direct filesystem access. Conflict ledger preserves both sides when code changes contradict prior decisions.
+We deliberately do **not** publish a single headline "X% token savings" number — the honest claim is structural: the entire state-management layer is removed from the model's token budget. Your actual savings depend on your project size and platform.
 
 ---
 
 ## How It Compares
 
-Full benchmark: [`docs/benchmark_comparison.md`](docs/benchmark_comparison.md)
+A positioning comparison, not a controlled benchmark. Full notes: [`docs/benchmark_comparison.md`](docs/benchmark_comparison.md).
 
 | Capability | RAG Runtime Kernel | Claude Code | lean-ctx | LLM Wiki |
 |---|---|---|---|---|
-| **Cross-session memory** | Full: HOT/COLD + WAL + crash recovery | Partial: CLAUDE.md, no crash recovery | None | Pattern only |
-| **Deterministic state machine** | BOOTING > READY > WORKING > CHECKPOINTING > CLOSING + RECOVERY | None | None | None |
-| **Token efficiency** | 60-90% reduction (HOT-only boot ~4K tokens) | Unbounded growth without curation | 60-99% raw compression (best-in-class I/O) | Depends on wiki quality |
-| **Cross-platform** | Claude + GPT + any LLM, same spec | Claude Code only | Editor-focused | Platform-agnostic pattern |
-| **Dependencies** | Zero. Single markdown file | Node.js + CLI | Rust binary | Varies |
+| **Cross-session memory** | Full: HOT/COLD + WAL + crash recovery | Partial: CLAUDE.md + auto-memory, no crash recovery | None (compresses I/O, doesn't persist state) | Pattern only |
+| **Deterministic state machine** | Yes — formally verified (TLA+), 676 tests | No | No | No |
+| **Where state work runs** | Off the LLM, in Python (Tier 2) | In-session, model-mediated | N/A — I/O compression layer | In the LLM / external tooling |
+| **Token approach** | State ops cost **0 LLM tokens**; lean HOT boot | Grows without curation | **60–99% raw I/O compression (best in class)** | Depends on wiki quality |
+| **Cross-platform** | Claude + GPT + any LLM, one spec | Claude Code CLI only | Editor-focused | Platform-agnostic pattern |
+| **Dependencies** | Tier 1: none. Tier 2: Python only | Node.js + CLI | Rust binary | Varies |
 | **Crash recovery** | WAL replay + .bak rotation + RECOVERY state | File-history checkpoints | N/A | None |
 | **Conflict tracking** | Explicit ledger — both sources preserved | None | N/A | None |
 
-### Key Differentiators
-
-1. **Only system with a formal state machine on LLM workflows** — deterministic transition guards, not ad-hoc
-2. **Only system that works identically across Claude and GPT** — the spec is the invariant
-3. **Only system with atomic write protocol + WAL + backup rotation** — enterprise-grade persistence
-4. **Formally verified with TLA+** — the same technique Amazon uses for AWS infrastructure (see below)
-5. **Zero install, zero dependencies** — the specification IS the product
-6. **Conflict ledger is unique** — no other system tracks disagreements between sources
+**Honest take:** if raw token compression is your only goal, **lean-ctx wins** — it's purpose-built for that and pairs cleanly with this kernel (lean-ctx compresses the I/O layer; the kernel manages the state layer). Where this project is genuinely distinct is the combination of a **formally-verified deterministic state machine, atomic persistence with crash recovery, a conflict ledger, and one spec that runs across Claude and GPT** — no other system in this list offers that set.
 
 ---
 
 ## What This Is
 
-A **specification** — a complete protocol that turns any LLM into a controlled, auditable agent with persistent project memory. 3-layer architecture:
+A **specification** plus an optional **runtime that enforces it** — together they turn any LLM into a controlled, auditable agent with persistent project memory. Three layers:
 
 ```
 LLM (reasoning engine)
   | JSON proposals
-Policy Layer (this specification)
+Policy Layer (the specification)
   | validated transitions
-Runtime Kernel (state + persistence)
+Runtime Kernel (state + persistence)   <- enforced by Python in Tier 2
   | atomic writes
 Filesystem (source of truth)
 ```
 
+In Tier 1 the LLM plays the role of the runtime by following the spec. In Tier 2 the Python kernel *is* the runtime, and the LLM can only propose.
+
+---
+
 ## Formally Verified with TLA+
 
-The state machine is verified using [TLA+](https://lamport.azurewebsites.net/tla/tla.html) and the TLC model checker — the same formal methods technique [used by Amazon to verify AWS infrastructure](https://lamport.azurewebsites.net/tla/amazon-excerpt.html).
+The state machine is verified using [TLA+](https://lamport.azurewebsites.net/tla/tla.html) and the TLC model checker — the same formal-methods technique [Amazon uses to verify AWS infrastructure](https://lamport.azurewebsites.net/tla/amazon-excerpt.html).
 
 TLC exhaustively explored **389,522 states** (168,520 distinct) at depth 19 and verified all 8 safety invariants + 3 liveness properties with zero violations:
 
@@ -183,7 +183,7 @@ TLC exhaustively explored **389,522 states** (168,520 distinct) at depth 19 and 
 | TypeInvariant | All state variables hold valid types at all times |
 | TransitionSafety | Every reachable state is legal per the transition graph |
 | SingleWriter | At most one proposal staged at any time (no concurrent mutations) |
-| WALConsistency | Write-ahead log is append-only, monotone, and never lags behind state |
+| WALConsistency | Write-ahead log is append-only, monotone, never lags behind state |
 | TerminalSafety | CLOSING is irreversible — no exit, no crash, no pending proposals |
 | NoDeadlock | Every non-terminal state has at least one enabled action |
 | CrashRecoveryConsistency | Crash flag is only true when state is RECOVERY |
@@ -191,102 +191,86 @@ TLC exhaustively explored **389,522 states** (168,520 distinct) at depth 19 and 
 
 | Liveness Property | What It Proves |
 |---|---|
-| EventualReady | The system always eventually reaches READY from any reachable state |
-| EventualCheckpoint | Once in WORKING, the system always eventually checkpoints |
-| EventualClose | The system always eventually reaches CLOSING (no infinite loops) |
+| EventualProgress | The system always eventually returns to READY from any reachable state |
+| EventualTermination | CLOSING is stable — once reached, it stays (no infinite loops) |
+| ProposalEventuallyResolved | A staged proposal always reaches COMMITTED, REJECTED, or NONE |
 
-Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING/RECOVERY direct-transition loop, and a crash-at-full-WAL deadlock.
-
-The TLA+ specification (`formal/RAGKernel.tla`) is a direct transcription of the Python state machine — every transition, guard, and invariant maps 1:1 to the runtime code. Full results in [`formal/TLC_RESULTS.md`](formal/TLC_RESULTS.md).
-
-Unit tests prove "these 676 scenarios work." TLA+ proves "no scenario can ever violate the invariants — and the system always makes progress." That is a fundamentally stronger guarantee.
+Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING↔RECOVERY direct-transition loop, and a crash-at-full-WAL deadlock. The TLA+ specification (`formal/RAGKernel.tla`) maps 1:1 to the runtime code. Full results in [`formal/TLC_RESULTS.md`](formal/TLC_RESULTS.md).
 
 ---
 
 ## Core Features
 
-**Structured Memory (HOT/COLD)** — Active state stays lean (~15KB). Archival data loads on-demand with automatic partitioning.
+**Structured Memory (HOT/COLD)** — Active state stays lean; archival data loads on demand with automatic partitioning.
 
-**Deterministic State Machine** — `BOOTING > READY > WORKING > CHECKPOINTING > CLOSING` with `RECOVERY` path.
+**Deterministic State Machine** — `BOOTING → READY → WORKING → CHECKPOINTING → CLOSING` with a `RECOVERY` path.
 
-**Proposal > Validation > Commit** — LLM proposes JSON actions. System validates against policy, then commits or rejects.
+**Proposal → Validation → Commit** — The LLM proposes JSON actions; the system validates against policy, then commits or rejects.
 
-**Atomic Persistence** — All writes atomic and verified. WAL enables crash recovery.
+**Atomic Persistence** — All writes are atomic and hash-verified. A write-ahead log enables crash recovery.
 
-**COLD Partitioning** — Auto-splits into sessions/inventory/conflicts/evidence with sub-partitioning and integrity-preserving chopping.
+**COLD Partitioning** — Auto-splits into sessions / inventory / conflicts / evidence with sub-partitioning and integrity-preserving chopping.
+
+**Conflict Engine** — Auto-categorizes conflicts into 7 types, scores confidence, and auto-resolves low-risk cases; preserves both sides otherwise.
 
 **Tool Fallback Chain** — Ordered fallback for file operations across platform tools.
 
 **Cross-Platform** — Claude Projects, ChatGPT, Cowork, Claude Code, any LLM.
 
-**Multi-Account Safety** — Session identity tagging, write collision detection, anti-corruption guards.
+**Multi-Account Safety** — Session identity tagging, write-collision detection, anti-corruption guards.
 
 **Full Audit Trail** — Every state transition, decision, and conflict logged.
 
-**Token Efficiency** — 70-95% reduction vs. naive approaches.
+---
 
-## Two Execution Modes
+## Using with Cowork
 
-| Mode | How It Works |
-|---|---|
-| **Autonomous** | LLM self-enforces all rules. No external software needed. Default mode. |
-| **Enforced** | Python runtime (v0.2.7) intercepts all mutations. 12 modules, 676 tests. Zero-touch bootstrap: `rag_kernel init` parses spec deterministically — no LLM needed. |
+[Cowork](https://docs.claude.com) is Anthropic's desktop tool for non-developers to automate file and task management. Its direct file access lets the kernel read and write `RAG/` files with no manual copy-paste, and its task automation pairs naturally with the kernel's checkpoint and audit system. For a new project, drop the Init Prompt in and the system bootstraps and scans your folder; for an existing one, point it at the folder during bootstrap and your work becomes tracked state.
+
+## Using with Claude Code
+
+[Claude Code](https://docs.claude.com) is Anthropic's CLI for agentic coding. The kernel adds context persistence across its stateless sessions, a deterministic state machine to structure long-running development, zero-token file ops via direct filesystem access, and a conflict ledger that preserves both sides when new code contradicts a prior decision. Add a `RAG/` directory, bootstrap, and it starts tracking state.
+
+---
 
 ## Prerequisites
 
-**Minimum:** An LLM that supports file uploads or long-form input + a project folder.
+**Tier 1 minimum:** an LLM that supports file uploads or long-form input, plus a project folder.
 
-**Recommended:** [Filesystem MCP](https://github.com/modelcontextprotocol/servers) for direct file read/write.
-
-**Optional:** Shell/PowerShell MCP, Python 3.10+ (ENFORCED mode), Claude Code or Cowork.
+**Tier 2:** Python 3.10+. [Filesystem MCP](https://github.com/modelcontextprotocol/servers) recommended for direct file read/write; a shell/PowerShell MCP is optional.
 
 ## Repository Structure
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md   # The specification (current version)
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md   # Previous version (archived)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md   # The specification (Tier 1 + Tier 2)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md   # Previous spec version (archived)
 ├── CONTRIBUTING.md                            # How to report issues
-├── CHANGELOG.md                              # Version history
+├── CHANGELOG.md                               # Version history
 ├── docs/
 │   ├── architecture.md                        # System architecture
-│   ├── benchmark_comparison.md                # Head-to-head vs alternatives
+│   ├── benchmark_comparison.md                # Positioning vs alternatives
 │   ├── design_principles.md                   # Core design philosophy
-│   ├── test_analysis_gpt_web.md               # GPT Web test findings
-│   ├── LAUNCH_MANUAL.md                       # Full setup guide (all platforms + modes)
+│   ├── test_analysis_gpt_web.md               # GPT Web platform findings
+│   ├── LAUNCH_MANUAL.md                       # Full setup guide (all platforms + tiers)
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
-│   ├── v3.2_ARCHITECTURE_DESIGN.md            # Runtime architecture (v0.1.0 design doc)
+│   ├── v3.2_ARCHITECTURE_DESIGN.md            # Runtime architecture design doc
 │   └── ROADMAP.md                             # Development roadmap
-├── rag_kernel/                                # v0.2.7 Runtime Kernel (ENFORCED mode)
+├── rag_kernel/                                # Tier 2 runtime kernel (v0.2.7)
 │   ├── __init__.py                            # Package entry, discover() capability registry
-│   ├── __main__.py                            # CLI entry point (init / configure / health / serve / mcp / session / checkpoint / gc)
+│   ├── __main__.py                            # CLI (init / configure / health / serve / mcp / session / checkpoint / gc)
 │   ├── api.py                                 # HTTP API (FastAPI)
 │   ├── state_machine.py                       # Deterministic state engine
 │   ├── persistence.py                         # Atomic writes, WAL, hash verification
 │   ├── cold_manager.py                        # COLD partition manager
-│   ├── concurrency.py                         # Lock manager, write collision guard
-│   ├── conflict_engine.py                     # Conflict auto-categorization (7 categories, classifier, auto-resolve)
+│   ├── concurrency.py                         # Lock manager, write-collision guard
+│   ├── conflict_engine.py                     # Conflict auto-categorization (7 categories, auto-resolve)
 │   ├── mcp_transport.py                       # MCP tool interface
 │   ├── schemas.py                             # Pydantic models for proposals/state
 │   ├── session_logger.py                      # Universal JSONL session observability
 │   └── spec_parser.py                         # Deterministic MD→RAG parser (zero LLM)
 ├── tests/                                     # 676 tests
-│   ├── test_state_machine.py                  # State machine unit tests
-│   ├── test_persistence.py                    # Persistence + WAL tests
-│   ├── test_cold_manager.py                   # COLD partition tests
-│   ├── test_concurrency.py                    # Lock + collision tests
-│   ├── test_api.py                            # HTTP API tests
-│   ├── test_mcp_transport.py                  # MCP transport tests
-│   ├── test_schemas.py                        # Schema validation tests
-│   ├── test_main.py                           # CLI entry point tests
-│   ├── test_spec_parser.py                    # Spec parser + init/configure tests
-│   ├── test_session_logger.py                 # Session logger tests
-│   ├── test_conflict_engine.py                # Conflict engine tests (77)
-│   ├── UNIT_TEST_CLAUDE_DESKTOP.md            # Claude Desktop spec-level tests (42)
-│   └── UNIT_TEST_GPT_WEB.md                   # GPT Web spec-level tests (43)
-├── .github/
-│   ├── FUNDING.yml                            # GitHub Sponsors
-│   └── ISSUE_TEMPLATE/                        # Bug report + feature request templates
+├── .github/                                   # FUNDING.yml + issue templates
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
 │   ├── RAGKernel.cfg                          # TLC model checker configuration
@@ -297,38 +281,32 @@ rag-runtime-kernel/
 
 ## Session Lifecycle
 
-1. **BOOTING** — Load HOT, verify consistency, check WAL, probe tools
-2. **READY** — Accept tasks
-3. **WORKING / INGESTING** — Execute tasks, ingest files, extract knowledge
-4. **CHECKPOINTING** — Save atomically with backup rotation
-5. **CLOSING** — Audit findings, final save
+1. **BOOTING** — Load HOT, verify consistency, check WAL, probe tools.
+2. **READY** — Accept tasks.
+3. **WORKING / INGESTING** — Execute tasks, ingest files, extract knowledge.
+4. **CHECKPOINTING** — Save atomically with backup rotation.
+5. **CLOSING** — Audit findings, final save.
 
-## Disclaimer
+## Disclaimer & Known Limitations
 
-- **Autonomous mode is self-enforced** — the LLM follows the spec by instruction, not by hard runtime constraints
-- **Persistence depends on platform** — full atomic writes with MCP; manual file management on GPT Web
-- **Context window ceiling** — spec consumes ~16K tokens; large projects may hit limits
-- **Not a database** — structured file-based memory, not a production database replacement
+- **Tier 1 is self-enforced** — the LLM follows the spec by instruction, not by hard runtime constraints. For hard guarantees, use Tier 2.
+- **Persistence depends on platform** — full atomic writes with file/MCP access; manual file management on GPT Web (no atomic writes, no real token counter).
+- **Context window ceiling** — the spec is ~100 KB / ~20K tokens; in Tier 1 it occupies the window, so very large projects may hit limits. Tier 2 keeps the spec out of the model via deterministic parsing.
+- **Single-writer** — concurrent writes are detected and halted, not auto-merged.
+- **Not a database** — this is structured file-based memory, not a production database replacement.
 
-See [`docs/test_analysis_gpt_web.md`](docs/test_analysis_gpt_web.md) for detailed platform-specific findings.
+See [`docs/test_analysis_gpt_web.md`](docs/test_analysis_gpt_web.md) for platform-specific findings.
 
-## Known Limitations
+## Roadmap
 
-1. **Context window bound** — spec ~16K tokens; large projects may hit limits
-2. **No cross-filesystem bridge yet** — relies on platform tools; user-assisted I/O without them
-3. **Single-writer** — concurrent writes detected-and-halted, not auto-merged
-4. **GPT Web** — no atomic writes, no real token counter, manual persistence
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 
-## Future Development
-
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for complete roadmap.
-
-| Release | Status | Focus |
-|---|---|---|
-| **v3.2.0** | Released | Operational hardening: 51 sections. Web Access Protocol, Environment Audit, strengthened tier/env-switch gates, session-zero requirements.txt + known-issues inheritance. |
-| **v0.2.7** | Released | 12 modules, 676 tests. v0.3.0 milestone complete: graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
-| **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). Paradigm shift: fully autonomous OS-level Python backbone. |
-| **v0.4.0+** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking |
+| Line | Version | Status | Focus |
+|---|---|---|---|
+| Spec | **v3.2.0** | Released | Operational hardening, 51 sections: Web Access Protocol, Environment Audit, strengthened tier/env-switch gates, session-zero requirements + known-issues inheritance. |
+| Runtime | **v0.2.7** | Released | 12 modules, 676 tests. Graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
+| Runtime | **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). |
+| Runtime | **v0.4.0+** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking, kernel-enforced context-truncation policy. |
 
 ## Reporting Issues
 
@@ -341,6 +319,6 @@ Found a bug? Please [open an issue](../../issues/new/choose) using the provided 
 
 ## License
 
-This project is licensed under the [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html) — see [LICENSE](LICENSE).
+Licensed under the [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html) — see [LICENSE](LICENSE).
 
-**What this means:** You may use, modify, and distribute this software, but any modified version you deploy (including as a network service) must also be released under AGPL-3.0 with attribution to the original project.
+**What this means:** you may use, modify, and distribute this software, but any modified version you deploy (including as a network service) must also be released under AGPL-3.0 with attribution to the original project.
