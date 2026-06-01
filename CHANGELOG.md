@@ -94,10 +94,18 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 ### Security
 - `CLEANUP.ps1` updated: Cowork session data cleanup now enumerates individual session folders with age-based safety (≤3 days = skip). No longer offers to delete entire session storage as a unit.
 
+## [Formal Verification — Phase 2] — 2026-05-19
+
+### Added — Liveness Verification (TLA+ Phase 2)
+- **`WALCompaction` action** added to `formal/RAGKernel.tla`, modeling real-world WAL truncation so the finite-bound liveness check no longer produces false counterexamples.
+- TLC re-verification: **389,522 states explored (168,520 distinct), depth 19** — all **8 safety invariants + 3 liveness properties** (`EventualProgress`, `EventualTermination`, `ProposalEventuallyResolved`) pass with **zero violations**.
+- Two genuine liveness bugs found and fixed: (1) BOOTING↔RECOVERY direct-transition livelock (fixed via strong fairness on `RecoveryComplete(READY)`); (2) **crash-at-full-WAL deadlock** (fixed by allowing WAL compaction during recovery).
+- `formal/TLC_RESULTS.md` updated with full Phase 2 results. Commit `ddd7af6`.
+
 ## [v0.1.1] — 2026-05-16
 
 ### Added
-- **Formal verification with TLA+ and TLC model checker** — 136,193 states explored, 84,261 distinct, all 8 safety invariants verified with zero violations. Same technique used by Amazon for AWS infrastructure.
+- **Formal verification with TLA+ and TLC model checker (Phase 1 — safety)** — 136,193 states explored, 84,261 distinct, all 8 safety invariants verified with zero violations. Same technique used by Amazon for AWS infrastructure. (Liveness verified later in Phase 2 — see entry above.)
 - `formal/TLC_RESULTS.md` — full verification report.
 - GitHub Discussions tab launched.
 
@@ -196,9 +204,9 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## Development Status
 
-**Current:** Spec v3.1.8 (machine-parseable, 25 rag-config blocks) and rag_kernel v0.2.3 (10 modules, 540 tests). Zero-touch bootstrap, capability self-discovery, graduated POV, delta checkpoints, and session logger shipped. Formal verification complete: 389K states, 8 safety + 3 liveness invariants, 0 violations.
+**Current:** Spec v3.2.0 (51 sections) and rag_kernel v0.2.7 (12 modules, 676 tests). Zero-touch bootstrap, capability self-discovery, graduated POV, delta checkpoints, session logger, and conflict auto-categorization (ENH-005) shipped. Formal verification complete through Phase 2: 389,522 states (168,520 distinct), 8 safety + 3 liveness invariants, 0 violations.
 
-**Next:** Conflict auto-categorization (ENH-005).
+**Next:** Formal Verification Phase 3 (auto-generate transition guards from the TLA+ model) and the v4.0 Graph Orchestrator.
 
 **Repository:** [github.com/arcadamarket/rag-runtime-kernel](https://github.com/arcadamarket/rag-runtime-kernel)
 **Developer:** Artem Pakhol
