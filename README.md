@@ -121,9 +121,10 @@ This section states only what is measured or formally verified — no marketing 
 
 **Determinism (Tier 2):**
 
-- **676 / 676 unit tests passing** across 12 runtime modules (state machine, persistence/WAL, COLD manager, concurrency, conflict engine, schemas, CLI, MCP transport, spec parser, session logger).
+- **728 / 728 unit tests passing** (on `main`, post-v0.2.7) across 12 runtime modules (state machine with TLA+-enforced transition guards, persistence/WAL, COLD manager, concurrency, conflict engine, schemas, HTTP API, MCP transport, spec parser, session logger, generated guards, guard generator).
 - **TLA+ formal verification:** the TLC model checker exhaustively explored **389,522 states (168,520 distinct)** to depth 19 and confirmed **8 safety invariants + 3 liveness properties with zero violations**. The TLA+ spec is a 1:1 transcription of the Python state machine. Two genuine liveness bugs were found and fixed during verification.
-- Unit tests prove "these 676 scenarios work." TLA+ proves "no reachable state can violate the invariants, and the system always makes progress." The second is a strictly stronger guarantee.
+- **The verified model is now mechanically enforced at runtime (FV-PHASE4):** the state machine's transition table is *generated* from the TLA+ model and legality is checked through the generated predicate — the runtime can no longer drift from what TLC proved. A `guardgen --check` gate detects any model/code divergence.
+- Unit tests prove "these 728 scenarios work." TLA+ proves "no reachable state can violate the invariants, and the system always makes progress." The second is a strictly stronger guarantee.
 
 **Token economy (Tier 2):**
 
@@ -304,6 +305,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 | Line | Version | Status | Focus |
 |---|---|---|---|
 | Spec | **v3.2.0** | Released | Operational hardening, 51 sections: Web Access Protocol, Environment Audit, strengthened tier/env-switch gates, session-zero requirements + known-issues inheritance. |
+| Runtime | **`main`** | Unreleased | Post-v0.2.7: TLA+ guards now **enforced** at runtime (FV-PHASE4) — transition table generated from the model, `guardgen`/`generated_guards` registered. 12 modules, 728 tests. |
 | Runtime | **v0.2.7** | Released | 12 modules, 676 tests. Graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
 | Runtime | **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). |
 | Runtime | **v0.4.0+** | Planned | Graph Orchestrator: DAG execution, parallel tasks, dependency tracking, kernel-enforced context-truncation policy. |

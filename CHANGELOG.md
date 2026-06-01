@@ -2,6 +2,19 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [Unreleased] — `main` (post-v0.2.7)
+
+### Added — Runtime Enforcement of the Verified Model (FV-PHASE4)
+- The state machine's `TRANSITIONS` table is now **derived** from `generated_guards.GENERATED_TRANSITIONS` (the TLA+-generated projection) instead of a hand-maintained literal — one source of truth, so the runtime can never silently drift from what TLC proved.
+- `StateMachine.transition()` enforces legality through the generated `legal_transition()` predicate (non-bypassable structural guard; `force_state()` remains the only sanctioned recovery bypass). Contextual policy guards via `add_guard()` are unchanged.
+- Import-time drift guard: the `State` enum and the generated state space must match exactly or import fails loud.
+- `generated_guards` and `guardgen` registered in `_KERNEL_MODULES`, `discover()`, and `cmd_health` (INS-019). **Module count reconciled to 12 functional modules** (manifest dict); convention documented to close INS-003.
+- 10 new enforcement/registration tests. **728 total tests**, all passing; `guardgen --check` drift gate green.
+
+### Added — TLA+ → Python Guard Generator (FV-PHASE3)
+- **`guardgen.py`** — deterministic, stdlib-only, zero-LLM generator that parses `formal/RAGKernel.tla` and emits `generated_guards.py` (transition table + per-action enabling guards). Fail-loud on any unrecognized precondition; byte-deterministic output with source SHA-256 provenance and a `--check` drift gate.
+- **`generated_guards.py`** — generated artifact: `GENERATED_TRANSITIONS`, `KernelContext`, 8 per-action guards, `ACTION_GUARDS`, `legal_transition()`.
+
 ## [v0.2.7] — 2026-05-27
 
 ### Added — Conflict Auto-Categorization (ENH-005)

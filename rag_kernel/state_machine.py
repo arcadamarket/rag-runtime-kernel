@@ -27,6 +27,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
+# FV-PHASE4: the runtime's structural truth is the TLA+-generated projection.
+# generated_guards.py is a byte-deterministic artifact of the formally-verified
+# model (formal/RAGKernel.tla); importing it here makes the state machine
+# *consume* the verified table rather than mirror it by hand. generated_guards
+# imports only stdlib (dataclasses) — no import cycle.
+from .generated_guards import (
+    GENERATED_TRANSITIONS as _GENERATED_TRANSITIONS,
+    SOURCE_SHA256 as GUARDS_SOURCE_SHA256,
+    legal_transition as _legal_transition,
+)
+
 
 class State(Enum):
     """All legal session states.
@@ -57,32 +68,41 @@ class EventType(Enum):
 
 
 # ---------------------------------------------------------------------------
-# Transition table — the single source of truth for legal state moves.
+# Transition table — DERIVED from the TLA+-verified model (FV-PHASE4).
 #
 # CS lens: This is a directed graph adjacency list. Every node (state) has
 # an explicit set of reachable neighbors. CLOSING is a terminal (sink) node.
+# It is no longer a hand-maintained literal: it is *projected* from
+# generated_guards.GENERATED_TRANSITIONS (itself byte-deterministically
+# generated from formal/RAGKernel.tla and checked by TLC). One source of
+# truth -> the runtime table can never silently drift from the model.
 #
 # ML lens: Compact representation — fits in a single LLM tool-call response.
 # No ambiguity for the LLM to misinterpret.
 # ---------------------------------------------------------------------------
 
-TRANSITIONS: dict[State, frozenset[State]] = {
-    State.BOOTING: frozenset({State.READY, State.RECOVERY}),
-    State.READY: frozenset(
-        {State.INGESTING, State.WORKING, State.CHECKPOINTING, State.CLOSING}
-    ),
-    State.INGESTING: frozenset(
-        {State.READY, State.CHECKPOINTING, State.RECOVERY}
-    ),
-    State.WORKING: frozenset(
-        {State.READY, State.CHECKPOINTING, State.RECOVERY}
-    ),
-    State.CHECKPOINTING: frozenset(
-        {State.READY, State.CLOSING, State.RECOVERY}
-    ),
-    State.CLOSING: frozenset(),  # terminal — no exits
-    State.RECOVERY: frozenset({State.READY, State.BOOTING}),
-}
+def _derive_transitions() -> dict[State, frozenset[State]]:
+    """Project the str-keyed GENERATED_TRANSITIONS onto the State enum.
+
+    Fail-loud: a generated state name with no matching State member (or vice
+    versa) raises at import, so a model/enum divergence can never be silently
+    tolerated. Returns the same shape the runtime has always exposed —
+    dict[State, frozenset[State]] — so existing callers and tests are unaffected.
+    """
+    table: dict[State, frozenset[State]] = {}
+    for src_name, target_names in _GENERATED_TRANSITIONS.items():
+        try:
+            src = State(src_name)
+        except ValueError as exc:  # pragma: no cover - guarded by validator below
+            raise RuntimeError(
+                f"generated_guards declares state {src_name!r} absent from "
+                f"State enum — model/runtime drift"
+            ) from exc
+        table[src] = frozenset(State(t) for t in target_names)
+    return table
+
+
+TRANSITIONS: dict[State, frozenset[State]] = _derive_transitions()
 
 
 @dataclass(frozen=True)
@@ -208,8 +228,13 @@ class StateMachine:
         with self._lock:
             current = self._state
 
-            # 1. Check transition legality (graph edge exists?)
-            if target not in TRANSITIONS[current]:
+            # 1. Structural legality — ENFORCED by the TLA+-generated projection
+            #    (FV-PHASE4). This is the non-bypassable structural guard: the
+            #    only sanctioned escape is force_state() for crash recovery.
+            #    Equivalent to `target in TRANSITIONS[current]` (TRANSITIONS is
+            #    derived from the same table) but routed through the generated
+            #    predicate so the enforcement source is explicit and auditable.
+            if not _legal_transition(current.value, target.value):
                 self._append_event(
                     EventType.INVALID_TRANSITION,
                     current,
@@ -321,6 +346,18 @@ def _validate_transition_table() -> None:
     if missing:
         raise RuntimeError(
             f"Transition table missing states: {[s.value for s in missing]}"
+        )
+
+    # FV-PHASE4 drift guard: the generated projection and the State enum must
+    # describe exactly the same state space. If the model adds/removes a state
+    # without a matching enum change (or vice versa), fail at import.
+    enum_names = {s.value for s in State}
+    generated_names = set(_GENERATED_TRANSITIONS.keys())
+    if enum_names != generated_names:
+        raise RuntimeError(
+            "State enum and generated_guards.GENERATED_TRANSITIONS disagree on "
+            f"the state space (enum-only={enum_names - generated_names}, "
+            f"generated-only={generated_names - enum_names}) — model/runtime drift"
         )
 
     # Every target must be a valid state

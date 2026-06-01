@@ -20,7 +20,9 @@ Zero external dependencies. Python 3.10+ standard library only.
     "mcp_transport": "MCP stdio transport for Claude Desktop (JSON-RPC 2.0)",
     "spec_parser": "Deterministic MD→RAG parser (zero tokens, zero LLM)",
     "session_logger": "Structured JSONL session logger — universal observability",
-    "conflict_engine": "Rule-based conflict auto-categorization with suggested resolutions"
+    "conflict_engine": "Rule-based conflict auto-categorization with suggested resolutions",
+    "generated_guards": "TLA+-derived transition table + per-action enabling guards (FV-PHASE4 enforced structural source)",
+    "guardgen": "Deterministic TLA+ → Python transition-guard generator (build-time, zero-LLM)"
   },
   "cli_commands": {
     "init": "python -m rag_kernel init --spec <path.md> [--output RAG/] [--dry-run]",
@@ -57,6 +59,13 @@ import importlib
 import json
 from typing import Any
 
+# Module-count convention (closes INS-003 / INS-019):
+#   * "12 capability modules" == the manifest `modules` dict above — the
+#     functional units, excluding the __init__ package marker and the
+#     __main__ CLI entry point.
+#   * _KERNEL_MODULES below additionally includes __main__ as a 13th import
+#     target so discover()/cmd_health verify the CLI imports cleanly too.
+#   The __init__ package marker is never counted (it IS the package).
 _KERNEL_MODULES = [
     "rag_kernel.state_machine",
     "rag_kernel.persistence",
@@ -68,6 +77,8 @@ _KERNEL_MODULES = [
     "rag_kernel.spec_parser",
     "rag_kernel.session_logger",
     "rag_kernel.conflict_engine",
+    "rag_kernel.generated_guards",
+    "rag_kernel.guardgen",
     "rag_kernel.__main__",
 ]
 
