@@ -2,7 +2,24 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
-## [Unreleased] — `main` (post-v0.2.7)
+## [Unreleased] — `main` (post-v0.3.0)
+
+_No unreleased changes._
+
+## [v0.3.0] — 2026-06-01
+
+This release bundles the formal-verification enforcement work (FV-PHASE3 +
+FV-PHASE4, previously unreleased on `main`) together with the new
+kernel-enforced context-truncation policy (M-009).
+
+### Added — Kernel-Enforced Context-Truncation Policy (M-009)
+- **`context_policy.py`** — deterministic, stdlib-only policy for context-window management. Per-region token accounting (`MemoryRegion`: HOT / COLD / WAL / CONVERSATION) over a `TokenLedger`; **HOT is pinned and structurally never evictable** (the source-of-truth guarantee).
+- Three strictly-increasing threshold bands drive the action: **NONE → CHECKPOINT → EVICT-to-COLD → HALT**. `evaluate()` is a pure function — identical ledger + policy + scores always yield an identical decision and an identical ordered eviction plan.
+- **Dual-POV resolution:** an optional `candidate_scores` relevance signal (ML) may only *reorder candidates within the evictable tier*; ordering, atomicity, and the HOT guarantee are owned by the deterministic policy. _LLM proposes, system decides, state persists._
+- **`KernelApp.enforce_context_policy()`** — kernel-owned enforcement (not LLM discretion): persists a full safe point through the guarded `CHECKPOINTING` transition, then frees evictable regions in deterministic order (COLD partitions via `cold.evict`, WAL via `truncate`), emits conversation drop directives, and HALTs with a transfer directive when eviction cannot drop below the hard ceiling without touching HOT.
+- New proposal action `truncate_context` and WAL event `CONTEXT_TRUNCATION`; the action routes through the propose → validate → commit pipeline without merging its payload into HOT.
+- `context_policy` registered in `_KERNEL_MODULES`, `discover()`, and `cmd_health`. **Module count reconciled to 13 functional modules.**
+- 30 new tests (`tests/test_context_policy.py`). **758 total tests**, all passing.
 
 ### Added — Runtime Enforcement of the Verified Model (FV-PHASE4)
 - The state machine's `TRANSITIONS` table is now **derived** from `generated_guards.GENERATED_TRANSITIONS` (the TLA+-generated projection) instead of a hand-maintained literal — one source of truth, so the runtime can never silently drift from what TLC proved.
@@ -217,9 +234,9 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## Development Status
 
-**Current:** Spec v3.2.0 (51 sections) and rag_kernel v0.2.7 (12 modules, 676 tests). Zero-touch bootstrap, capability self-discovery, graduated POV, delta checkpoints, session logger, and conflict auto-categorization (ENH-005) shipped. Formal verification complete through Phase 2: 389,522 states (168,520 distinct), 8 safety + 3 liveness invariants, 0 violations.
+**Current:** Spec v3.2.0 (51 sections) and rag_kernel v0.3.0 (13 modules, 758 tests). Zero-touch bootstrap, capability self-discovery, graduated POV, delta checkpoints, session logger, conflict auto-categorization (ENH-005), the formally-verified guard generator now enforced at runtime (FV-PHASE3 + FV-PHASE4), and the kernel-enforced context-truncation policy (M-009) shipped. Formal verification complete through Phase 2: 389,522 states (168,520 distinct), 8 safety + 3 liveness invariants, 0 violations.
 
-**Next:** Formal Verification Phase 3 (auto-generate transition guards from the TLA+ model) and the v4.0 Graph Orchestrator.
+**Next:** the v4.0 Graph Orchestrator (DAG execution, dependency tracking, checkpoint-per-node, rollback).
 
 **Repository:** [github.com/arcadamarket/rag-runtime-kernel](https://github.com/arcadamarket/rag-runtime-kernel)
 **Developer:** Artem Pakhol

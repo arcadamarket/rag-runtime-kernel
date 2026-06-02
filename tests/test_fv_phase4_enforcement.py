@@ -86,10 +86,15 @@ class TestModuleRegistration:
         registry = rag_kernel.discover()
         assert "generated_guards" in registry["critical_modules"]
 
-    def test_manifest_module_count_is_twelve(self):
-        """The functional-capability count (manifest dict) is 12 post-FV-PHASE4."""
+    def test_manifest_module_count_is_thirteen(self):
+        """The functional-capability count (manifest dict) is 13 post-M-009.
+
+        FV-PHASE4 reconciled the count to 12; M-009 added context_policy as
+        the 13th functional module.
+        """
         registry = rag_kernel.discover()
         manifest_modules = registry["package"]["modules"]
-        assert len(manifest_modules) == 12
+        assert len(manifest_modules) == 13
         assert "generated_guards" in manifest_modules
         assert "guardgen" in manifest_modules
+        assert "context_policy" in manifest_modules

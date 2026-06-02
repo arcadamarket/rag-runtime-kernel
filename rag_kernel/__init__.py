@@ -5,9 +5,9 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "OS-level runtime bridge for LLM memory persistence",
-  "spec_version": "3.1.9",
+  "spec_version": "3.2.0",
   "python_requires": ">=3.10",
   "dependencies": "stdlib-only",
   "modules": {
@@ -22,7 +22,8 @@ Zero external dependencies. Python 3.10+ standard library only.
     "session_logger": "Structured JSONL session logger — universal observability",
     "conflict_engine": "Rule-based conflict auto-categorization with suggested resolutions",
     "generated_guards": "TLA+-derived transition table + per-action enabling guards (FV-PHASE4 enforced structural source)",
-    "guardgen": "Deterministic TLA+ → Python transition-guard generator (build-time, zero-LLM)"
+    "guardgen": "Deterministic TLA+ → Python transition-guard generator (build-time, zero-LLM)",
+    "context_policy": "Deterministic kernel-enforced context-truncation policy: per-region token accounting, pinned/evictable ordering (HOT never evicted), checkpoint/evict/halt actions (M-009)"
   },
   "cli_commands": {
     "init": "python -m rag_kernel init --spec <path.md> [--output RAG/] [--dry-run]",
@@ -50,7 +51,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.2.7"
+__version__ = "0.3.0"
 
 
 # ── Capability Discovery ──────────────────────────────────────
@@ -60,10 +61,10 @@ import json
 from typing import Any
 
 # Module-count convention (closes INS-003 / INS-019):
-#   * "12 capability modules" == the manifest `modules` dict above — the
+#   * "13 capability modules" == the manifest `modules` dict above — the
 #     functional units, excluding the __init__ package marker and the
-#     __main__ CLI entry point.
-#   * _KERNEL_MODULES below additionally includes __main__ as a 13th import
+#     __main__ CLI entry point. (M-009 added context_policy as the 13th.)
+#   * _KERNEL_MODULES below additionally includes __main__ as a final import
 #     target so discover()/cmd_health verify the CLI imports cleanly too.
 #   The __init__ package marker is never counted (it IS the package).
 _KERNEL_MODULES = [
@@ -79,6 +80,7 @@ _KERNEL_MODULES = [
     "rag_kernel.conflict_engine",
     "rag_kernel.generated_guards",
     "rag_kernel.guardgen",
+    "rag_kernel.context_policy",
     "rag_kernel.__main__",
 ]
 

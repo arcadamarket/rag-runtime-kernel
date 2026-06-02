@@ -76,7 +76,11 @@ Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Sup
 
 ---
 
-## v0.3.0 — Released (2026-05-27, v0.2.7)
+## UX & Efficiency Milestone — Released (2026-05-27, delivered as runtime v0.2.7)
+
+> Note: this roadmap milestone was historically labelled "v0.3.0"; it shipped as
+> runtime **v0.2.7**. The runtime semver **v0.3.0** is a later, distinct release
+> (FV-PHASE3/4 enforcement + M-009 context-truncation) — see the section below.
 
 **Milestone complete.** All UX & efficiency enhancements shipped. 12 modules, 676 tests.
 
@@ -98,6 +102,19 @@ Runtime Bridge: 8 Python modules, 337 tests, 5811 lines. ENFORCED mode live. Sup
 | TS-002 (BOOTING stall) | User must manually confirm tool availability | Auto-detect tool absence, skip verification with logged gap, proceed to fallback chain without blocking |
 | TS-005 (Conflict accumulation) | Conflicts grow silently | Add conflict count warning at boot: "X unresolved conflicts consuming ~Y tokens. Review recommended." |
 | TS-006 (Session close without audit) | Lost findings if tab closes | Emergency checkpoint before audit — save state first, then audit. Reverses current order. |
+
+---
+
+## v0.3.0 — Released (2026-06-01)
+
+**Runtime release.** Bundles the formal-verification enforcement work with the
+kernel-enforced context-truncation policy. 13 modules, 758 tests.
+
+| ID | Item | Status |
+|---|---|---|
+| FV-PHASE3 | Deterministic TLA+ → Python guard generator (`guardgen` + `generated_guards`) | **Shipped** |
+| FV-PHASE4 | Runtime enforces the generated guards; `TRANSITIONS` derived from the verified model; one source of truth | **Shipped** |
+| M-009 | Kernel-enforced context-truncation policy: per-region token accounting, deterministic eviction order (HOT never evicted), checkpoint/evict/halt threshold actions, WAL-logged through the proposal pipeline | **Shipped** |
 
 ---
 
@@ -130,5 +147,5 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.2.7 (12 modules, 676 tests, zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), v0.3.0 milestone complete | Done |
-| **LOW** | Graph orchestrator, formal guard generation | v4.0+ |
+| **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.3.0 (13 modules, 758 tests, zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), FV-PHASE3/4 (guard generation enforced at runtime), M-009 (context-truncation policy) | Done |
+| **LOW** | Graph orchestrator (v4.0) | v4.0+ |

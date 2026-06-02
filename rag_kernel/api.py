@@ -41,7 +41,21 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from rag_kernel.cold_manager import ColdManager, ColdFileError, PartitionNotFoundError
+from rag_kernel.cold_manager import (
+    ColdManager,
+    ColdFileError,
+    PartitionNotFoundError,
+    estimate_tokens,
+)
+from rag_kernel.context_policy import (
+    MemoryRegion,
+    PolicyAction,
+    RegionAccount,
+    TokenLedger,
+    TruncationPolicy,
+    evaluate as evaluate_context_policy,
+    default_policy as default_context_policy,
+)
 from rag_kernel.concurrency import (
     ProjectLock,
     LockConflictError,
@@ -577,6 +591,31 @@ class KernelApp:
         proposal = self._proposals.pop(proposal_id)
         payload = proposal["payload"]
 
+        # M-009: truncate_context is a context operation, not a HOT mutation.
+        # Route it through the kernel-enforced policy rather than merging the
+        # payload into HOT. This is the proposal -> validate -> commit path
+        # for context truncation (LLM proposes, system decides).
+        if proposal["action"] == "truncate_context":
+            self.wal.append(
+                "PROPOSAL_COMMITTED",
+                proposal_id=proposal_id,
+                action="truncate_context",
+                session_id=self.session_id,
+            )
+            pol = None
+            if isinstance(payload.get("max_budget"), int):
+                pol = default_context_policy(payload["max_budget"])
+            enforcement = self.enforce_context_policy(
+                conversation_tokens=payload.get("conversation_tokens", 0),
+                policy=pol,
+                candidate_scores=payload.get("candidate_scores"),
+            )
+            return {
+                "committed": True,
+                "proposal_id": proposal_id,
+                "truncation": enforcement,
+            }
+
         # Transition to WORKING if not already
         if self.state_machine.current == State.READY:
             self.state_machine.transition(State.WORKING)
@@ -731,6 +770,135 @@ class KernelApp:
                 "state_hash": state_hash,
                 "wal_seq": self.wal.seq,
             }
+
+    # -- Context truncation policy (M-009) ----------------------------------
+
+    def build_token_ledger(self, conversation_tokens: int = 0) -> TokenLedger:
+        """Snapshot per-region token consumption into a TokenLedger.
+
+        HOT is pinned (source of truth). COLD is subdivided by loaded
+        partition so the eviction plan can name exactly what to free. WAL
+        tokens are estimated from on-disk size with the same 4-chars/token
+        heuristic used elsewhere in the kernel.
+        """
+        hot_tokens = estimate_tokens(self._hot)
+
+        cold_items = tuple(
+            (name, self.cold.token_estimate(name))
+            for name in self.cold.loaded_partitions
+        )
+        cold_tokens = sum(t for _, t in cold_items)
+
+        try:
+            wal_bytes = self.wal_path.stat().st_size if self.wal_path.exists() else 0
+        except OSError:
+            wal_bytes = 0
+        wal_tokens = wal_bytes // 4
+
+        return TokenLedger(accounts=(
+            RegionAccount(MemoryRegion.HOT, hot_tokens, pinned=True),
+            RegionAccount(MemoryRegion.COLD, cold_tokens, items=cold_items),
+            RegionAccount(MemoryRegion.WAL, wal_tokens),
+            RegionAccount(
+                MemoryRegion.CONVERSATION, max(0, int(conversation_tokens))
+            ),
+        ))
+
+    def enforce_context_policy(
+        self,
+        conversation_tokens: int = 0,
+        policy: Optional[TruncationPolicy] = None,
+        candidate_scores: Optional[dict] = None,
+    ) -> dict:
+        """Evaluate and ENFORCE the context-truncation policy (M-009).
+
+        The decision is deterministic (``context_policy.evaluate``).
+        Enforcement is kernel-owned, never LLM discretion:
+
+        - CHECKPOINT / EVICT / HALT all first persist a full safe point
+          through the guarded CHECKPOINTING transition (``self.checkpoint``),
+          so HOT is durable before anything is freed.
+        - EVICT then frees evictable regions in the policy's deterministic
+          order: COLD partitions via ``cold.evict``; WAL via ``truncate``
+          (safe only after the checkpoint). HOT is never touched.
+        - CONVERSATION cannot be evicted by the kernel (it lives in the LLM
+          context), so the kernel returns an explicit drop directive instead.
+        - HALT sets ``transfer_required`` — the session must hand off.
+
+        Every enforcement appends a WAL ``CONTEXT_TRUNCATION`` event.
+        """
+        policy = policy or default_context_policy()
+        ledger = self.build_token_ledger(conversation_tokens)
+        decision = evaluate_context_policy(ledger, policy, candidate_scores)
+
+        result: dict = {
+            "action": decision.action.value,
+            "reason": decision.reason,
+            "ledger": ledger.to_dict(),
+            "decision": decision.to_dict(),
+            "executed": {
+                "checkpoint": None,
+                "evicted": [],
+                "wal_truncated": False,
+                "conversation_directives": [],
+            },
+        }
+
+        if decision.action == PolicyAction.NONE:
+            return result
+
+        # Enforcement requires a mutating state (so we can checkpoint).
+        if self.state_machine.current not in (
+            State.READY, State.WORKING, State.INGESTING
+        ):
+            result["error"] = (
+                f"cannot enforce truncation from state "
+                f"{self.state_machine.current.value}"
+            )
+            return result
+
+        # 1. Persist a full safe point through the guarded transition.
+        ckpt = self.checkpoint(force_full=True)
+        result["executed"]["checkpoint"] = ckpt
+        if not ckpt.get("checkpointed"):
+            # No safe point established — do NOT evict; surface the failure.
+            result["error"] = "checkpoint failed; eviction aborted"
+            return result
+
+        # 2. Execute the deterministic eviction plan (EVICT / HALT only).
+        if decision.action in (PolicyAction.EVICT, PolicyAction.HALT):
+            for step in decision.plan:
+                if step.region == MemoryRegion.COLD and step.target:
+                    if self.cold.evict(step.target):
+                        result["executed"]["evicted"].append(step.target)
+                elif step.region == MemoryRegion.WAL:
+                    self.wal.truncate()
+                    result["executed"]["wal_truncated"] = True
+                elif step.region == MemoryRegion.CONVERSATION:
+                    result["executed"]["conversation_directives"].append(
+                        {"drop_tokens": step.tokens_freed}
+                    )
+
+        # 3. WAL-log the enforcement as an auditable event.
+        self.wal.append(
+            "CONTEXT_TRUNCATION",
+            session_id=self.session_id,
+            decision=decision.action.value,
+            total_before=decision.total_before,
+            projected_after=decision.projected_after,
+            evicted=result["executed"]["evicted"],
+            wal_truncated=result["executed"]["wal_truncated"],
+        )
+        self.logger.info(
+            f"Context policy enforced: {decision.action.value} "
+            f"({decision.total_before} -> {decision.projected_after} tokens)",
+            category=EventCategory.LIFECYCLE,
+        )
+
+        if decision.action == PolicyAction.HALT:
+            result["transfer_required"] = True
+
+        return result
 
     # -- WAL ----------------------------------------------------------------
 

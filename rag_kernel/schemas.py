@@ -55,6 +55,7 @@ VALID_ACTIONS = frozenset({
     "resolve_conflict",
     "update_inventory",
     "update_pov_mode",
+    "truncate_context",
     "custom",
 })
 
@@ -168,6 +169,7 @@ VALID_EVENT_TYPES = frozenset({
     "CHECKPOINT",
     "SESSION_CLOSED",
     "RECOVERY_BAK_RESTORED",
+    "CONTEXT_TRUNCATION",
 })
 
 
