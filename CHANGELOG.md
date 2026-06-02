@@ -4,22 +4,8 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased] — `main` (post-v0.3.0)
 
-> ### 🚀 A new era begins: the v4.0 Graph Orchestrator
->
-> **This commit lays the foundation stone for the largest capability on the RAG
-> Runtime Kernel roadmap — the v4.0 Graph Orchestrator.** Until now the kernel
-> has governed a *linear* session lifecycle (BOOTING → READY → WORKING →
-> CHECKPOINTING → CLOSING). GRAPH-ORCH generalizes that discipline to arbitrary
-> **dependency graphs of work** — the same deterministic, crash-safe,
-> formally-grounded guarantees, now over a DAG instead of a straight line.
->
-> This is increment 1 of a multi-session build: the **pure DAG core**. It is
-> deliberately execution-free and not yet wired into the runtime — the execution
-> engine, checkpoint-per-node, parallel scheduling, and rollback land in the
-> increments that follow. What ships here is the bedrock every one of those
-> stages will stand on, and it is already complete, deterministic, and fully
-> tested. The shift it signals: **from orchestrating a session to orchestrating a
-> graph.**
+_Work in progress toward the v4.0 Graph Orchestrator. The headline announcement
+is intentionally deferred until the orchestrator is complete and runtime-wired._
 
 ### Added — Graph Orchestrator: Pure DAG Core (GRAPH-ORCH, increment 1)
 - **`graph_orchestrator.py`** — deterministic, stdlib-only directed-acyclic-graph core. Zero dependencies, execution-free, fully self-contained.
