@@ -1,26 +1,37 @@
-"""Graph Orchestrator — deterministic DAG core for the RAG Runtime Kernel.
+"""Graph Orchestrator — deterministic DAG core + execution engine.
 
-GRAPH-ORCH (v4.0), increment 1 of N: the *pure* directed-acyclic-graph core.
-This module models a workflow as a DAG of nodes with explicit dependency
-edges and provides deterministic, crash-safe-friendly primitives for ordering
-and scheduling that execution:
+GRAPH-ORCH (v4.0), increments 1–2 of N:
 
-  * fail-loud construction (unique ids, every dependency resolvable, NO cycles),
-  * a deterministic topological order,
-  * topological *level* assignment — the set of nodes eligible to run in
-    parallel at each depth (the "deterministic levels" scheduling model),
-  * a guarded per-node status lifecycle
-    (PENDING -> READY -> RUNNING -> DONE | FAILED, plus SKIPPED),
-  * pure ready/next-ready queries and deterministic failure propagation.
+  Increment 1 — the *pure* directed-acyclic-graph core (ExecutionDAG):
+    * fail-loud construction (unique ids, every dependency resolvable, NO cycles),
+    * a deterministic topological order,
+    * topological *level* assignment — the set of nodes eligible to run in
+      parallel at each depth (the "deterministic levels" scheduling model),
+    * a guarded per-node status lifecycle
+      (PENDING -> READY -> RUNNING -> DONE | FAILED, plus SKIPPED),
+    * pure ready/next-ready queries and deterministic failure propagation.
 
-SCOPE BOUNDARY (deliberate, mirrors FV-PHASE3):
-    This is the PURE core only. It does NOT execute nodes, spawn threads, write
-    the WAL, or touch KernelApp / the state machine. Execution + checkpoint-per-
-    node (through the guarded CHECKPOINTING transition and CONTEXT-style WAL
-    events) and rollback are later increments. Accordingly this module is NOT
-    yet registered in rag_kernel.__init__._KERNEL_MODULES / discover() /
-    cmd_health — wiring lands with the execution engine. The @rag-kernel-manifest
-    block below is present and discovery-ready for that step.
+  Increment 2 — the execution engine (GraphExecutor):
+    * drives nodes through the kernel's propose -> validate -> commit pipeline
+      (a node's "work" IS its proposal — no arbitrary code is executed here),
+    * a checkpoint after every committed node through the guarded CHECKPOINTING
+      transition (KernelApp.checkpoint), making each completed node a durable
+      crash-recovery boundary,
+    * a per-node WAL ``GRAPH_NODE_EXECUTED`` event for an auditable trail
+      (mirrors enforce_context_policy / M-009: persist a safe point, then log),
+    * deterministic sequential scheduling (lowest ready id first) with
+      deterministic failure propagation (a FAILED node SKIPs its downstream
+      closure; independent branches still run).
+
+SCOPE BOUNDARY (deliberate, mirrors FV-PHASE3 -> FV-PHASE4):
+    Increment 2 adds execution, but this module is still NOT registered in
+    rag_kernel.__init__._KERNEL_MODULES / discover() / cmd_health — that
+    registration (plus the module-count reconciliation and Rule 11 docs) lands
+    with increment 5 (INS-025), once parallel scheduling (increment 3, INS-023)
+    and rollback/recovery (increment 4, INS-024) are in. The @rag-kernel-manifest
+    block below is present and discovery-ready. GraphExecutor depends on a
+    KernelApp only structurally (duck-typed; imported under TYPE_CHECKING) so
+    this module never imports api.py at runtime — no import cycle.
 
 DESIGN POSTURE (dual-POV):
     CS lens — a DAG is an adjacency list; ordering is a topological sort; cycle
@@ -28,14 +39,19 @@ DESIGN POSTURE (dual-POV):
     total and fail-loud: an invalid graph can never be partially built. Node
     status transitions are themselves a small guarded state machine, so an
     illegal lifecycle move (e.g. DONE without RUNNING) is rejected, not silently
-    tolerated — the same discipline state_machine.py applies to sessions.
-    ML lens — same-level nodes are "parallel-eligible", but this module only
-    decides *scheduling eligibility*; the eventual execution engine will commit
-    each node's result through the serialized propose -> validate -> commit
-    pipeline so state mutations stay deterministic and WAL-recoverable even when
-    execution is concurrent. Concurrency is a scheduling property here, never a
-    state-mutation race. LLM proposes (which nodes/work), system decides
-    (legal order + legal status moves), state persists (later increments).
+    tolerated — the same discipline state_machine.py applies to sessions. The
+    execution engine never mutates state directly: it routes every node through
+    the serialized propose -> validate -> commit pipeline and checkpoints each
+    committed node, so progress is deterministic and WAL-recoverable.
+    ML lens — same-level nodes are "parallel-eligible", but this increment
+    executes them serially in deterministic id order; concurrency (increment 3)
+    is a scheduling property layered on top, never a state-mutation race, because
+    every result still commits through the one serialized pipeline. Checkpoint-
+    per-node trades a little IO for durability; using the delta-checkpoint
+    manager keeps that cost a small delta (full rewrite only every N) rather
+    than a full write per node. LLM proposes (which nodes/work), system decides
+    (legal order + legal status moves + legal transitions), state persists
+    (checkpoint-per-node + WAL).
 
 Spec reference: ROADMAP.md — v4.0 Graph Orchestrator
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md (orchestration section, TBD)
@@ -44,10 +60,10 @@ Design doc reference: v3.2_ARCHITECTURE_DESIGN.md (orchestration section, TBD)
 {
   "module": "rag_kernel.graph_orchestrator",
   "capability": "graph_orchestration",
-  "description": "Deterministic DAG core: fail-loud build, topological order + level scheduling, guarded node-status lifecycle",
+  "description": "Deterministic DAG core + execution engine: fail-loud build, topological order + level scheduling, guarded node-status lifecycle, propose->validate->commit execution with checkpoint-per-node",
   "states": ["PENDING", "READY", "RUNNING", "DONE", "FAILED", "SKIPPED"],
-  "exports": ["NodeStatus", "OrchestratorNode", "ExecutionDAG", "DAGBuildError", "NodeStateError"],
-  "use_when": "Modeling, ordering, or scheduling a dependency graph of work units",
+  "exports": ["NodeStatus", "OrchestratorNode", "ExecutionDAG", "DAGBuildError", "NodeStateError", "GraphExecutor", "NodeExecutionResult", "GraphExecutionError"],
+  "use_when": "Modeling, ordering, scheduling, or executing a dependency graph of work units",
   "never_bypass": false
 }
 """
@@ -56,7 +72,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Mapping, Optional
+from typing import TYPE_CHECKING, Iterable, Mapping, Optional
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import cycle
+    from rag_kernel.api import KernelApp
 
 
 # ---------------------------------------------------------------------------
@@ -447,4 +466,276 @@ class ExecutionDAG:
         return (
             f"ExecutionDAG(nodes={len(self._nodes)}, depth={self.depth}, "
             f"complete={self.is_complete()})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Execution engine (increment 2)
+# ---------------------------------------------------------------------------
+
+
+class GraphExecutionError(RuntimeError):
+    """Raised when the executor is misconfigured or misused.
+
+    Distinct from a *node* failure (which is normal, recoverable control flow
+    captured in the execution report): this signals a programming error such as
+    a node with no action to run, or re-running an executor that has already
+    run.
+    """
+
+
+#: WAL event type emitted once per executed node. Mirrors the way M-009 added
+#: ``CONTEXT_TRUNCATION``; registered in schemas.VALID_EVENT_TYPES.
+GRAPH_NODE_EVENT = "GRAPH_NODE_EXECUTED"
+
+
+@dataclass(frozen=True)
+class NodeExecutionResult:
+    """Immutable record of one node's trip through the execution pipeline.
+
+    Fields:
+        node_id:        the node executed.
+        action:         the proposal action routed through the kernel.
+        status:         terminal NodeStatus reached (DONE / FAILED / SKIPPED).
+        proposal_id:    kernel proposal id, if one was created (None if the
+                        proposal was rejected at validation).
+        committed:      whether the proposal committed to HOT.
+        checkpoint_seq: WAL seq of the per-node checkpoint (None if the node
+                        did not commit, so no checkpoint was taken).
+        skipped:        downstream node ids SKIPPED as a result of this node
+                        FAILING (empty unless status is FAILED).
+        errors:         validation/commit error strings (empty on success).
+    """
+
+    node_id: str
+    action: Optional[str]
+    status: NodeStatus
+    proposal_id: Optional[str] = None
+    committed: bool = False
+    checkpoint_seq: Optional[int] = None
+    skipped: frozenset[str] = field(default_factory=frozenset)
+    errors: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {
+            "node_id": self.node_id,
+            "action": self.action,
+            "status": self.status.value,
+            "proposal_id": self.proposal_id,
+            "committed": self.committed,
+            "checkpoint_seq": self.checkpoint_seq,
+            "skipped": sorted(self.skipped),
+            "errors": list(self.errors),
+        }
+
+
+class GraphExecutor:
+    """Drives an ExecutionDAG through the kernel's propose -> commit pipeline.
+
+    The executor owns *control flow*, never state mutation. For each node it:
+
+      1. marks the node RUNNING (guarded status transition),
+      2. submits ``{"action": node.action, "payload": node.payload}`` via
+         ``app.propose`` — the kernel validates it (state legality, tier/echo
+         gates, schema),
+      3. on a valid proposal, ``app.commit`` applies it to HOT atomically,
+      4. marks the node DONE and takes a per-node checkpoint through the guarded
+         CHECKPOINTING transition (``app.checkpoint``) — every committed node
+         becomes a durable crash-recovery boundary,
+      5. appends a ``GRAPH_NODE_EXECUTED`` WAL event for the audit trail.
+
+    A rejected proposal or a failed commit marks the node FAILED, which
+    deterministically SKIPs its entire downstream closure (those nodes can never
+    satisfy their dependencies). Independent branches keep running unless
+    ``stop_on_failure`` is set.
+
+    Determinism: nodes run in the DAG's deterministic ready order (lowest id
+    first). Given the same DAG and the same kernel responses, the executed order,
+    the per-node results, and the WAL event sequence are identical run to run.
+
+    The ``app`` argument is duck-typed (a KernelApp); only ``propose``,
+    ``commit``, ``checkpoint``, ``wal`` and ``session_id`` are used, so this
+    module never imports api.py at runtime.
+    """
+
+    def __init__(
+        self,
+        dag: ExecutionDAG,
+        app: "KernelApp",
+        *,
+        force_full_checkpoint: bool = False,
+        stop_on_failure: bool = False,
+    ) -> None:
+        # Fail-loud: every node must carry an action to route through the
+        # pipeline. Increment 1 allows action=None (purely descriptive); the
+        # executor cannot run such a node, so reject up front rather than fail
+        # mid-run (mirrors the module's "never partially built" posture).
+        missing = sorted(
+            nid for nid in dag.node_ids if not dag.node(nid).action
+        )
+        if missing:
+            raise GraphExecutionError(
+                f"cannot execute: nodes have no action to run: {missing}"
+            )
+
+        self.dag = dag
+        self.app = app
+        self.force_full_checkpoint = force_full_checkpoint
+        self.stop_on_failure = stop_on_failure
+
+        self._results: list[NodeExecutionResult] = []
+        self._executed_order: list[str] = []
+        self._has_run = False
+
+    # -- Execution ----------------------------------------------------------
+
+    def run(self) -> dict:
+        """Execute the whole DAG (deterministic sequential schedule).
+
+        Returns an execution report dict. Idempotent guard: a second call
+        raises GraphExecutionError (build a fresh executor to re-run).
+        """
+        if self._has_run:
+            raise GraphExecutionError("executor has already run")
+        self._has_run = True
+
+        while True:
+            node_id = self.dag.next_ready()
+            if node_id is None:
+                break
+            result = self._run_one(node_id)
+            self._results.append(result)
+            self._executed_order.append(node_id)
+            if self.stop_on_failure and result.status is NodeStatus.FAILED:
+                break
+
+        return self.report()
+
+    def _run_one(self, node_id: str) -> NodeExecutionResult:
+        """Run a single READY node through propose -> commit -> checkpoint."""
+        node = self.dag.node(node_id)
+        action = node.action
+
+        # 1. Guarded lifecycle move: READY -> RUNNING.
+        self.dag.mark_running(node_id)
+
+        # 2. Propose (kernel validates: state legality, gates, schema).
+        proposal = {"action": action, "payload": dict(node.payload)}
+        prop = self.app.propose(proposal)
+        proposal_id = prop.get("proposal_id")
+
+        if not prop.get("valid"):
+            return self._fail(
+                node_id, action, proposal_id,
+                errors=tuple(prop.get("errors", [])),
+            )
+
+        # 3. Commit (atomic HOT write + PROPOSAL_COMMITTED WAL).
+        commit = self.app.commit(proposal_id)
+        if not commit.get("committed"):
+            return self._fail(
+                node_id, action, proposal_id,
+                errors=(commit.get("error", "commit failed"),),
+            )
+
+        # 4. Success: mark DONE (promotes newly-eligible dependents) and take a
+        #    per-node checkpoint through the guarded CHECKPOINTING transition.
+        self.dag.mark_done(node_id)
+        ckpt = self.app.checkpoint(force_full=self.force_full_checkpoint)
+        checkpoint_seq = ckpt.get("wal_seq") if ckpt.get("checkpointed") else None
+
+        # 5. Auditable per-node WAL event (mirrors M-009's CONTEXT_TRUNCATION).
+        self.app.wal.append(
+            GRAPH_NODE_EVENT,
+            session_id=getattr(self.app, "session_id", None),
+            node_id=node_id,
+            action=action,
+            status=NodeStatus.DONE.value,
+            proposal_id=proposal_id,
+            committed=True,
+            checkpoint_seq=checkpoint_seq,
+        )
+
+        return NodeExecutionResult(
+            node_id=node_id,
+            action=action,
+            status=NodeStatus.DONE,
+            proposal_id=proposal_id,
+            committed=True,
+            checkpoint_seq=checkpoint_seq,
+        )
+
+    def _fail(
+        self,
+        node_id: str,
+        action: Optional[str],
+        proposal_id: Optional[str],
+        *,
+        errors: tuple[str, ...],
+    ) -> NodeExecutionResult:
+        """Mark a RUNNING node FAILED, SKIP its closure, and WAL-log it.
+
+        No checkpoint is taken: the node never committed, so HOT is unchanged;
+        the WAL event itself records the failure and the skipped closure.
+        """
+        skipped = self.dag.mark_failed(node_id)
+        self.app.wal.append(
+            GRAPH_NODE_EVENT,
+            session_id=getattr(self.app, "session_id", None),
+            node_id=node_id,
+            action=action,
+            status=NodeStatus.FAILED.value,
+            proposal_id=proposal_id,
+            committed=False,
+            checkpoint_seq=None,
+            skipped=sorted(skipped),
+        )
+        return NodeExecutionResult(
+            node_id=node_id,
+            action=action,
+            status=NodeStatus.FAILED,
+            proposal_id=proposal_id,
+            committed=False,
+            checkpoint_seq=None,
+            skipped=skipped,
+            errors=errors,
+        )
+
+    # -- Reporting ----------------------------------------------------------
+
+    @property
+    def results(self) -> list[NodeExecutionResult]:
+        """Per-node results in execution order."""
+        return list(self._results)
+
+    @property
+    def executed_order(self) -> list[str]:
+        """Node ids in the order they were dispatched."""
+        return list(self._executed_order)
+
+    def report(self) -> dict:
+        """Summarize the run: per-node results, status tally, completion."""
+        status_map = self.dag.status_map()
+        return {
+            "complete": self.dag.is_complete(),
+            "executed_order": list(self._executed_order),
+            "counts": self.dag.counts(),
+            "results": [r.to_dict() for r in self._results],
+            "done": sorted(
+                nid for nid, st in status_map.items() if st is NodeStatus.DONE
+            ),
+            "failed": sorted(
+                nid for nid, st in status_map.items()
+                if st is NodeStatus.FAILED
+            ),
+            "skipped": sorted(
+                nid for nid, st in status_map.items()
+                if st is NodeStatus.SKIPPED
+            ),
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"GraphExecutor(dag={self.dag!r}, ran={self._has_run}, "
+            f"executed={len(self._executed_order)})"
         )
