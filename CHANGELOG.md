@@ -4,7 +4,34 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased] — `main` (post-v0.3.0)
 
-_No unreleased changes._
+> ### 🚀 A new era begins: the v4.0 Graph Orchestrator
+>
+> **This commit lays the foundation stone for the largest capability on the RAG
+> Runtime Kernel roadmap — the v4.0 Graph Orchestrator.** Until now the kernel
+> has governed a *linear* session lifecycle (BOOTING → READY → WORKING →
+> CHECKPOINTING → CLOSING). GRAPH-ORCH generalizes that discipline to arbitrary
+> **dependency graphs of work** — the same deterministic, crash-safe,
+> formally-grounded guarantees, now over a DAG instead of a straight line.
+>
+> This is increment 1 of a multi-session build: the **pure DAG core**. It is
+> deliberately execution-free and not yet wired into the runtime — the execution
+> engine, checkpoint-per-node, parallel scheduling, and rollback land in the
+> increments that follow. What ships here is the bedrock every one of those
+> stages will stand on, and it is already complete, deterministic, and fully
+> tested. The shift it signals: **from orchestrating a session to orchestrating a
+> graph.**
+
+### Added — Graph Orchestrator: Pure DAG Core (GRAPH-ORCH, increment 1)
+- **`graph_orchestrator.py`** — deterministic, stdlib-only directed-acyclic-graph core. Zero dependencies, execution-free, fully self-contained.
+- **`OrchestratorNode`** — immutable, hashable work-unit descriptor (`id`, `deps`, optional `action`/`payload`); `payload` is excluded from identity so nodes stay hashable. Self-dependencies and malformed ids are rejected at construction.
+- **`ExecutionDAG`** — fail-loud construction: duplicate ids, dangling dependencies, and **cycles** all raise `DAGBuildError` (cycle detection via Kahn's algorithm), so a constructed graph is *always* a valid DAG.
+- **Deterministic topological order + level assignment** — `levels()[k]` is the set of mutually-independent, **parallel-eligible** nodes at depth `k`; ordering is reproducible (ids sorted within each level) regardless of input order.
+- **Guarded node-status lifecycle** — `PENDING → READY → RUNNING → DONE | FAILED`, plus `SKIPPED`; illegal moves raise `NodeStateError`. The status table is a small adjacency-list state machine, validated at import — the same discipline `state_machine.py` applies to sessions.
+- **Pure scheduling queries** — `ready_nodes()` / `next_ready()` (deterministic, lowest-id-first) expose exactly the nodes a scheduler may dispatch now.
+- **Deterministic failure propagation** — `mark_failed()` SKIPs the entire downstream closure of a failed node and returns the skipped set; siblings and completed work are untouched.
+- **Dual-POV posture:** same-level nodes are *scheduling-eligible* for concurrency, but every future node result will commit through the serialized propose → validate → commit pipeline — concurrency is a scheduling property here, never a state-mutation race. _LLM proposes, system decides, state persists._
+- **Scope boundary (deliberate):** not yet registered in `_KERNEL_MODULES` / `discover()` / `cmd_health` — the `@rag-kernel-manifest` block is present and discovery-ready, and wiring lands with the execution engine (mirrors how FV-PHASE3 shipped before FV-PHASE4 enforced it). Functional module count therefore unchanged at 13 until then.
+- 41 new tests (`tests/test_graph_orchestrator.py`). **799 total tests**, all passing; zero regressions; `guardgen --check` drift gate green; health 14/14.
 
 ## [v0.3.0] — 2026-06-01
 
