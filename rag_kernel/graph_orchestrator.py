@@ -23,15 +23,30 @@ GRAPH-ORCH (v4.0), increments 1–2 of N:
       deterministic failure propagation (a FAILED node SKIPs its downstream
       closure; independent branches still run).
 
+  Increment 3 — deterministic-levels parallel scheduling (Schedule.LEVELS):
+    * schedules the DAG one topological *level* at a time (ExecutionDAG.levels);
+      the nodes within a level are mutually independent and therefore
+      "parallel-eligible" — the schedule names that batch explicitly,
+    * but every node STILL commits through the one serialized
+      propose -> validate -> commit pipeline, in deterministic id order, so the
+      LEVELS schedule is provably equivalent to SEQUENTIAL: identical executed
+      order, identical final HOT, identical WAL event sequence,
+    * single-writer is made explicit and enforced: the executor asserts it holds
+      the project file-mutex (concurrency.ProjectLock, acquired at boot) for its
+      own session before committing a level, so concurrency can only ever be a
+      *scheduling* property, never a state-mutation race,
+    * failure propagation is unchanged — a FAILED node in an earlier level SKIPs
+      its downstream closure in later levels; independent branches still run.
+
 SCOPE BOUNDARY (deliberate, mirrors FV-PHASE3 -> FV-PHASE4):
-    Increment 2 adds execution, but this module is still NOT registered in
-    rag_kernel.__init__._KERNEL_MODULES / discover() / cmd_health — that
-    registration (plus the module-count reconciliation and Rule 11 docs) lands
-    with increment 5 (INS-025), once parallel scheduling (increment 3, INS-023)
-    and rollback/recovery (increment 4, INS-024) are in. The @rag-kernel-manifest
-    block below is present and discovery-ready. GraphExecutor depends on a
-    KernelApp only structurally (duck-typed; imported under TYPE_CHECKING) so
-    this module never imports api.py at runtime — no import cycle.
+    Increments 2-3 add execution + level scheduling, but this module is still
+    NOT registered in rag_kernel.__init__._KERNEL_MODULES / discover() /
+    cmd_health — that registration (plus the module-count reconciliation and
+    Rule 11 docs) lands with increment 5 (INS-025), once rollback/recovery
+    (increment 4, INS-024) is in. The @rag-kernel-manifest block below is
+    present and discovery-ready. GraphExecutor depends on a KernelApp only
+    structurally (duck-typed; imported under TYPE_CHECKING) so this module never
+    imports api.py at runtime — no import cycle.
 
 DESIGN POSTURE (dual-POV):
     CS lens — a DAG is an adjacency list; ordering is a topological sort; cycle
@@ -43,15 +58,17 @@ DESIGN POSTURE (dual-POV):
     execution engine never mutates state directly: it routes every node through
     the serialized propose -> validate -> commit pipeline and checkpoints each
     committed node, so progress is deterministic and WAL-recoverable.
-    ML lens — same-level nodes are "parallel-eligible", but this increment
-    executes them serially in deterministic id order; concurrency (increment 3)
-    is a scheduling property layered on top, never a state-mutation race, because
-    every result still commits through the one serialized pipeline. Checkpoint-
-    per-node trades a little IO for durability; using the delta-checkpoint
-    manager keeps that cost a small delta (full rewrite only every N) rather
-    than a full write per node. LLM proposes (which nodes/work), system decides
-    (legal order + legal status moves + legal transitions), state persists
-    (checkpoint-per-node + WAL).
+    ML lens — same-level nodes are "parallel-eligible"; Schedule.LEVELS makes
+    that batch structure explicit, while still executing each node through the
+    one serialized pipeline in deterministic id order. Concurrency is therefore a
+    scheduling property layered on top, never a state-mutation race, because every
+    result commits through the single pipeline under the project file-mutex. The
+    LEVELS schedule is, by construction, equivalent to SEQUENTIAL (same order,
+    same final state, same WAL). Checkpoint-per-node trades a little IO for
+    durability; using the delta-checkpoint manager keeps that cost a small delta
+    (full rewrite only every N) rather than a full write per node. LLM proposes
+    (which nodes/work), system decides (legal order + legal status moves + legal
+    transitions + single-writer), state persists (checkpoint-per-node + WAL).
 
 Spec reference: ROADMAP.md — v4.0 Graph Orchestrator
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md (orchestration section, TBD)
@@ -60,9 +77,9 @@ Design doc reference: v3.2_ARCHITECTURE_DESIGN.md (orchestration section, TBD)
 {
   "module": "rag_kernel.graph_orchestrator",
   "capability": "graph_orchestration",
-  "description": "Deterministic DAG core + execution engine: fail-loud build, topological order + level scheduling, guarded node-status lifecycle, propose->validate->commit execution with checkpoint-per-node",
+  "description": "Deterministic DAG core + execution engine: fail-loud build, topological order + deterministic-levels scheduling, guarded node-status lifecycle, propose->validate->commit execution with checkpoint-per-node under a single-writer file-mutex",
   "states": ["PENDING", "READY", "RUNNING", "DONE", "FAILED", "SKIPPED"],
-  "exports": ["NodeStatus", "OrchestratorNode", "ExecutionDAG", "DAGBuildError", "NodeStateError", "GraphExecutor", "NodeExecutionResult", "GraphExecutionError"],
+  "exports": ["NodeStatus", "OrchestratorNode", "ExecutionDAG", "DAGBuildError", "NodeStateError", "GraphExecutor", "NodeExecutionResult", "GraphExecutionError", "Schedule"],
   "use_when": "Modeling, ordering, scheduling, or executing a dependency graph of work units",
   "never_bypass": false
 }
@@ -489,6 +506,24 @@ class GraphExecutionError(RuntimeError):
 GRAPH_NODE_EVENT = "GRAPH_NODE_EXECUTED"
 
 
+class Schedule(Enum):
+    """How the executor walks the DAG.
+
+    SEQUENTIAL — increment 2: repeatedly dispatch the single lowest-id ready
+        node (``ExecutionDAG.next_ready``) until the graph is complete.
+    LEVELS — increment 3: walk one topological *level* at a time
+        (``ExecutionDAG.levels``). The ready nodes within a level are mutually
+        independent ("parallel-eligible"), but they are still committed through
+        the one serialized propose -> validate -> commit pipeline in deterministic
+        id order, under the project file-mutex. Provably equivalent to SEQUENTIAL
+        in executed order, final state, and WAL sequence — the parallelism is a
+        scheduling property, never a state-mutation race.
+    """
+
+    SEQUENTIAL = "sequential"
+    LEVELS = "levels"
+
+
 @dataclass(frozen=True)
 class NodeExecutionResult:
     """Immutable record of one node's trip through the execution pipeline.
@@ -549,13 +584,20 @@ class GraphExecutor:
     satisfy their dependencies). Independent branches keep running unless
     ``stop_on_failure`` is set.
 
+    Scheduling (``schedule``): SEQUENTIAL (default, increment 2) dispatches the
+    single lowest-id ready node at a time. LEVELS (increment 3) walks one
+    topological level at a time, exposing the parallel-eligible batch per level
+    while still committing every node through the one serialized pipeline in
+    deterministic id order under the project file-mutex. The two schedules are
+    equivalent by construction (same order, final state, and WAL).
+
     Determinism: nodes run in the DAG's deterministic ready order (lowest id
     first). Given the same DAG and the same kernel responses, the executed order,
     the per-node results, and the WAL event sequence are identical run to run.
 
     The ``app`` argument is duck-typed (a KernelApp); only ``propose``,
-    ``commit``, ``checkpoint``, ``wal`` and ``session_id`` are used, so this
-    module never imports api.py at runtime.
+    ``commit``, ``checkpoint``, ``wal``, ``lock`` and ``session_id`` are used, so
+    this module never imports api.py at runtime.
     """
 
     def __init__(
@@ -565,6 +607,7 @@ class GraphExecutor:
         *,
         force_full_checkpoint: bool = False,
         stop_on_failure: bool = False,
+        schedule: Schedule = Schedule.SEQUENTIAL,
     ) -> None:
         # Fail-loud: every node must carry an action to route through the
         # pipeline. Increment 1 allows action=None (purely descriptive); the
@@ -582,23 +625,35 @@ class GraphExecutor:
         self.app = app
         self.force_full_checkpoint = force_full_checkpoint
         self.stop_on_failure = stop_on_failure
+        self.schedule = schedule
 
         self._results: list[NodeExecutionResult] = []
         self._executed_order: list[str] = []
+        self._levels_executed: list[list[str]] = []
         self._has_run = False
 
     # -- Execution ----------------------------------------------------------
 
     def run(self) -> dict:
-        """Execute the whole DAG (deterministic sequential schedule).
+        """Execute the whole DAG using the configured schedule.
 
-        Returns an execution report dict. Idempotent guard: a second call
-        raises GraphExecutionError (build a fresh executor to re-run).
+        Dispatches to the SEQUENTIAL (increment 2) or LEVELS (increment 3)
+        scheduler. Returns an execution report dict. Idempotent guard: a second
+        call raises GraphExecutionError (build a fresh executor to re-run).
         """
         if self._has_run:
             raise GraphExecutionError("executor has already run")
         self._has_run = True
 
+        if self.schedule is Schedule.LEVELS:
+            self._run_levels()
+        else:
+            self._run_sequential()
+
+        return self.report()
+
+    def _run_sequential(self) -> None:
+        """Increment-2 schedule: dispatch the lowest-id ready node until done."""
         while True:
             node_id = self.dag.next_ready()
             if node_id is None:
@@ -609,7 +664,78 @@ class GraphExecutor:
             if self.stop_on_failure and result.status is NodeStatus.FAILED:
                 break
 
-        return self.report()
+    def _run_levels(self) -> None:
+        """Increment-3 schedule: walk one topological level at a time.
+
+        For each level (in topological order), the nodes that are currently READY
+        form the parallel-eligible batch. They are committed through the one
+        serialized pipeline in deterministic id order — concurrency is a
+        scheduling property here, never a state-mutation race. Single-writer is
+        asserted up front via the project file-mutex.
+
+        Determinism note: ``levels()`` is the same Kahn decomposition that drives
+        ``next_ready``; filtering each level to its READY members and committing
+        them in sorted id order yields exactly the SEQUENTIAL executed order. A
+        node in a level can only be non-READY because an *earlier-level* ancestor
+        FAILED (so it was SKIPPED); same-level nodes are mutually independent, so
+        running one never changes another's readiness.
+        """
+        self._assert_single_writer()
+
+        for level in self.dag.levels():
+            # 'level' is already deterministically sorted by id; keep only the
+            # nodes still READY (a SKIPPED node had an ancestor fail earlier).
+            batch = [
+                nid for nid in level
+                if self.dag.status_of(nid) is NodeStatus.READY
+            ]
+            if not batch:
+                continue
+            executed_in_level: list[str] = []
+            for node_id in batch:
+                result = self._run_one(node_id)
+                self._results.append(result)
+                self._executed_order.append(node_id)
+                executed_in_level.append(node_id)
+                if self.stop_on_failure and result.status is NodeStatus.FAILED:
+                    self._levels_executed.append(executed_in_level)
+                    return
+            self._levels_executed.append(executed_in_level)
+
+    def _assert_single_writer(self) -> None:
+        """Enforce the single-writer precondition via the project file-mutex.
+
+        The LEVELS schedule names parallel-eligible batches, so we make the
+        serialization guarantee explicit: this executor's kernel must hold the
+        project lock (concurrency.ProjectLock) for *its own* session before any
+        level is committed. If the lock is missing or owned by a different
+        session, refusing to run is the safe, deterministic choice — a foreign
+        writer could otherwise interleave commits and break WAL recoverability.
+
+        Duck-typed: if the app exposes no ``lock``, the check is skipped (the
+        executor stays usable against a minimal kernel stub).
+        """
+        lock = getattr(self.app, "lock", None)
+        if lock is None:
+            return
+        session_id = getattr(self.app, "session_id", None)
+        try:
+            info = lock.read_lock()
+        except Exception as exc:  # corrupt/unreadable lock file
+            raise GraphExecutionError(
+                f"cannot verify single-writer: project lock unreadable ({exc})"
+            ) from exc
+        if info is None:
+            raise GraphExecutionError(
+                "cannot run LEVELS schedule: project lock is not held "
+                "(boot the kernel so it owns the file-mutex)"
+            )
+        if info.session_id != session_id:
+            raise GraphExecutionError(
+                "cannot run LEVELS schedule: project lock is held by a "
+                f"different session ({info.session_id!r} != {session_id!r}); "
+                "single-writer guarantee would be violated"
+            )
 
     def _run_one(self, node_id: str) -> NodeExecutionResult:
         """Run a single READY node through propose -> commit -> checkpoint."""
@@ -713,12 +839,23 @@ class GraphExecutor:
         """Node ids in the order they were dispatched."""
         return list(self._executed_order)
 
+    @property
+    def levels_executed(self) -> list[list[str]]:
+        """Per-level batches of node ids actually dispatched (LEVELS schedule).
+
+        Empty for the SEQUENTIAL schedule. Each inner list is one topological
+        level's parallel-eligible batch, in deterministic id order.
+        """
+        return [list(b) for b in self._levels_executed]
+
     def report(self) -> dict:
         """Summarize the run: per-node results, status tally, completion."""
         status_map = self.dag.status_map()
         return {
             "complete": self.dag.is_complete(),
+            "schedule": self.schedule.value,
             "executed_order": list(self._executed_order),
+            "levels_executed": [list(b) for b in self._levels_executed],
             "counts": self.dag.counts(),
             "results": [r.to_dict() for r in self._results],
             "done": sorted(
@@ -736,6 +873,6 @@ class GraphExecutor:
 
     def __repr__(self) -> str:
         return (
-            f"GraphExecutor(dag={self.dag!r}, ran={self._has_run}, "
-            f"executed={len(self._executed_order)})"
+            f"GraphExecutor(dag={self.dag!r}, schedule={self.schedule.value}, "
+            f"ran={self._has_run}, executed={len(self._executed_order)})"
         )
