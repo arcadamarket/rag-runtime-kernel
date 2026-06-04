@@ -954,6 +954,64 @@ class KernelApp:
             "error": "No .bak file found. Manual intervention required.",
         }
 
+    def rollback_to_snapshot(self, snapshot: dict, reason: str = "") -> dict:
+        """Roll HOT back to a prior in-memory snapshot via a real RECOVERY path.
+
+        Used by the graph orchestrator's transactional (rollback-on-failure)
+        mode: when a node fails after earlier nodes in the same run already
+        committed, the whole run is undone by restoring the pre-run baseline so
+        the DAG is all-or-nothing.
+
+        The kernel — never the executor — owns this state mutation. Mirrors
+        recover(): enter RECOVERY (force_state is the only sanctioned escape,
+        since READY->RECOVERY is deliberately NOT a normal transition), replace
+        HOT atomically (which refreshes .bak), log a GRAPH_ROLLBACK WAL event,
+        reset the delta base to the restored state, then return RECOVERY->READY.
+        Single-writer is unchanged: this runs in the same session under the same
+        project lock.
+        """
+        import copy
+
+        self.state_machine.force_state(
+            State.RECOVERY, reason=reason or "graph rollback"
+        )
+
+        self._hot = copy.deepcopy(snapshot)
+        state_hash = compute_hash(self._hot)
+        if "meta" not in self._hot:
+            self._hot["meta"] = {}
+        self._hot["meta"]["state_hash"] = state_hash
+        self._hot["meta"]["last_checkpoint_seq"] = self.wal.seq
+        self._hot["meta"]["session_id"] = self.session_id
+
+        # Atomic restore (creates/refreshes .bak), then audit the rollback.
+        atomic_write_json(self.hot_path, self._hot)
+        self.wal.append(
+            "GRAPH_ROLLBACK",
+            session_id=self.session_id,
+            reason=reason,
+            restored_seq=self.wal.seq,
+        )
+
+        # The restored state is the new delta-checkpoint base.
+        self._delta_mgr.set_base(self._hot, self.wal.seq)
+        self._delta_mgr._first_full_done = True
+
+        # RECOVERY -> READY is a legal transition.
+        self.state_machine.transition(State.READY)
+
+        self.logger.info(
+            f"Graph rollback restored baseline ({reason})",
+            category=EventCategory.RECOVERY,
+        )
+
+        return {
+            "rolled_back": True,
+            "state": self.state_machine.current.value,
+            "state_hash": state_hash,
+            "restored_seq": self.wal.seq,
+        }
+
     # -- Close --------------------------------------------------------------
 
     def close(self) -> dict:

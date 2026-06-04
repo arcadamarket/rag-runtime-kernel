@@ -1,6 +1,6 @@
 """Graph Orchestrator — deterministic DAG core + execution engine.
 
-GRAPH-ORCH (v4.0), increments 1–2 of N:
+GRAPH-ORCH (v4.0), increments 1–4 of N:
 
   Increment 1 — the *pure* directed-acyclic-graph core (ExecutionDAG):
     * fail-loud construction (unique ids, every dependency resolvable, NO cycles),
@@ -38,12 +38,26 @@ GRAPH-ORCH (v4.0), increments 1–2 of N:
     * failure propagation is unchanged — a FAILED node in an earlier level SKIPs
       its downstream closure in later levels; independent branches still run.
 
+  Increment 4 — transactional rollback/recovery (rollback_on_failure):
+    * an opt-in mode (default OFF, so the keep-committed-prefix behaviour of
+      increments 2-3 is unchanged) that makes a DAG run all-or-nothing,
+    * at run start it snapshots the pre-run HOT as a baseline; on ANY node
+      FAILED it undoes the whole run by restoring that baseline through the
+      kernel's RECOVERY path (KernelApp.rollback_to_snapshot): force_state into
+      RECOVERY (the sanctioned escape — READY->RECOVERY is not a normal
+      transition), atomic HOT restore (refreshes .bak), a GRAPH_ROLLBACK WAL
+      event, delta-base reset, then a legal RECOVERY->READY,
+    * the kernel — never the executor — owns the state mutation, so the
+      single-writer + WAL-recoverable guarantees are preserved; no TLA+/guardgen
+      change is needed because the RECOVERY transitions already exist.
+
 SCOPE BOUNDARY (deliberate, mirrors FV-PHASE3 -> FV-PHASE4):
-    Increments 2-3 add execution + level scheduling, but this module is still
+    Increments 2-4 add execution, level scheduling, and rollback, but this
+    module is still
     NOT registered in rag_kernel.__init__._KERNEL_MODULES / discover() /
     cmd_health — that registration (plus the module-count reconciliation and
-    Rule 11 docs) lands with increment 5 (INS-025), once rollback/recovery
-    (increment 4, INS-024) is in. The @rag-kernel-manifest block below is
+    Rule 11 docs) is increment 5 (INS-025), the next increment now that
+    rollback/recovery (increment 4, INS-024) is in. The @rag-kernel-manifest block below is
     present and discovery-ready. GraphExecutor depends on a KernelApp only
     structurally (duck-typed; imported under TYPE_CHECKING) so this module never
     imports api.py at runtime — no import cycle.
@@ -87,6 +101,7 @@ Design doc reference: v3.2_ARCHITECTURE_DESIGN.md (orchestration section, TBD)
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Iterable, Mapping, Optional
@@ -582,7 +597,10 @@ class GraphExecutor:
     A rejected proposal or a failed commit marks the node FAILED, which
     deterministically SKIPs its entire downstream closure (those nodes can never
     satisfy their dependencies). Independent branches keep running unless
-    ``stop_on_failure`` is set.
+    ``stop_on_failure`` is set. With ``rollback_on_failure`` (default off,
+    increment 4) the run is instead transactional: the first node failure undoes
+    the whole run back to the pre-run baseline via the kernel's RECOVERY path,
+    so the DAG commits all-or-nothing.
 
     Scheduling (``schedule``): SEQUENTIAL (default, increment 2) dispatches the
     single lowest-id ready node at a time. LEVELS (increment 3) walks one
@@ -608,6 +626,7 @@ class GraphExecutor:
         force_full_checkpoint: bool = False,
         stop_on_failure: bool = False,
         schedule: Schedule = Schedule.SEQUENTIAL,
+        rollback_on_failure: bool = False,
     ) -> None:
         # Fail-loud: every node must carry an action to route through the
         # pipeline. Increment 1 allows action=None (purely descriptive); the
@@ -626,11 +645,16 @@ class GraphExecutor:
         self.force_full_checkpoint = force_full_checkpoint
         self.stop_on_failure = stop_on_failure
         self.schedule = schedule
+        self.rollback_on_failure = rollback_on_failure
 
         self._results: list[NodeExecutionResult] = []
         self._executed_order: list[str] = []
         self._levels_executed: list[list[str]] = []
         self._has_run = False
+        # Transactional-mode bookkeeping (rollback_on_failure).
+        self._baseline_hot: Optional[dict] = None
+        self._rolled_back = False
+        self._rollback_info: Optional[dict] = None
 
     # -- Execution ----------------------------------------------------------
 
@@ -644,6 +668,11 @@ class GraphExecutor:
         if self._has_run:
             raise GraphExecutionError("executor has already run")
         self._has_run = True
+
+        # Transactional mode: snapshot the pre-run HOT as the rollback baseline.
+        # Captured only when armed, so the default path perturbs nothing.
+        if self.rollback_on_failure:
+            self._baseline_hot = copy.deepcopy(self.app.get_hot())
 
         if self.schedule is Schedule.LEVELS:
             self._run_levels()
@@ -661,6 +690,8 @@ class GraphExecutor:
             result = self._run_one(node_id)
             self._results.append(result)
             self._executed_order.append(node_id)
+            if self._maybe_rollback(result):
+                break
             if self.stop_on_failure and result.status is NodeStatus.FAILED:
                 break
 
@@ -697,6 +728,9 @@ class GraphExecutor:
                 self._results.append(result)
                 self._executed_order.append(node_id)
                 executed_in_level.append(node_id)
+                if self._maybe_rollback(result):
+                    self._levels_executed.append(executed_in_level)
+                    return
                 if self.stop_on_failure and result.status is NodeStatus.FAILED:
                     self._levels_executed.append(executed_in_level)
                     return
@@ -736,6 +770,28 @@ class GraphExecutor:
                 f"different session ({info.session_id!r} != {session_id!r}); "
                 "single-writer guarantee would be violated"
             )
+
+    def _maybe_rollback(self, result: NodeExecutionResult) -> bool:
+        """Transactional mode: undo the whole run on a node failure.
+
+        When ``rollback_on_failure`` is set and ``result`` is FAILED, restore the
+        kernel to the pre-run baseline through the kernel's RECOVERY path
+        (KernelApp.rollback_to_snapshot) — making the DAG all-or-nothing — and
+        signal the caller to stop dispatching. A no-op (returns False) in the
+        default mode or for a successful node, so existing behaviour is
+        unchanged. The executor never mutates state itself: the kernel owns the
+        restore, the WAL event, and the RECOVERY->READY transition.
+        """
+        if not (self.rollback_on_failure
+                and result.status is NodeStatus.FAILED):
+            return False
+        info = self.app.rollback_to_snapshot(
+            self._baseline_hot,
+            reason=f"graph node {result.node_id!r} failed",
+        )
+        self._rolled_back = True
+        self._rollback_info = {"trigger_node": result.node_id, **info}
+        return True
 
     def _run_one(self, node_id: str) -> NodeExecutionResult:
         """Run a single READY node through propose -> commit -> checkpoint."""
@@ -840,6 +896,16 @@ class GraphExecutor:
         return list(self._executed_order)
 
     @property
+    def rolled_back(self) -> bool:
+        """True if a transactional rollback to baseline occurred during the run."""
+        return self._rolled_back
+
+    @property
+    def rollback_info(self) -> Optional[dict]:
+        """Details of the rollback (trigger node + kernel restore result), or None."""
+        return self._rollback_info
+
+    @property
     def levels_executed(self) -> list[list[str]]:
         """Per-level batches of node ids actually dispatched (LEVELS schedule).
 
@@ -854,6 +920,8 @@ class GraphExecutor:
         return {
             "complete": self.dag.is_complete(),
             "schedule": self.schedule.value,
+            "rolled_back": self._rolled_back,
+            "rollback": self._rollback_info,
             "executed_order": list(self._executed_order),
             "levels_executed": [list(b) for b in self._levels_executed],
             "counts": self.dag.counts(),
