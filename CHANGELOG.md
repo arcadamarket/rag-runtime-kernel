@@ -55,6 +55,13 @@ is intentionally deferred until the orchestrator is complete and runtime-wired._
 - 30 new tests (`tests/test_agent_supervisor.py` + a registration test). **908 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 16/16.
 - The Graph Orchestrator's core increments (1–7) are now **all on `main`**. It remains **unreleased**: runtime-wiring and the v4.0 release / headline announcement are deferred until the orchestrator is wired into the runtime entry points.
 
+### Added — Graph Orchestrator: Runtime-wiring (GRAPH-ORCH, final gate before v4.0)
+- **`KernelApp.run_graph(nodes, *, schedule, stop_on_failure, rollback_on_failure)`** — the orchestrator is now invokable **through the kernel runtime**, not merely importable. Callers pass a JSON-serializable node spec (`{id, deps?, action, payload?}`); the kernel builds the DAG fail-loud and drives every node through its one serialized `propose → validate → commit → per-node-checkpoint` pipeline via `GraphExecutor`. The kernel stays **sole writer**; the method adds **no new state mutation, WAL event type, or schema** (the existing `GRAPH_NODE_EXECUTED` events remain the audit trail). Bad spec / unknown schedule / wrong state **fail closed** with an `{"error": …}` and no HOT mutation.
+- **CLI `rag_kernel graph run <spec.json>`** — boots the app, runs the spec through `run_graph`, prints the JSON report (`--project`, `--session-id`, `--schedule`, `--stop-on-failure`, `--rollback-on-failure`).
+- **MCP tool `rag_graph_run`** — the same entry over JSON-RPC (tool count 11 → 12).
+- Only `sequential` and `levels` schedules cross the serialized (JSON/CLI/MCP) boundary; `process_levels` needs picklable `work` callables and stays an in-process `GraphExecutor` option.
+- 17 new tests (`tests/test_runtime_wiring.py`) across all three surfaces + updated MCP tool-inventory assertions. **925 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 16/16. Still **unreleased** — the v4.0 release / headline announcement (INS-026) is the next, separate milestone.
+
 ## [v0.3.0] — 2026-06-01
 
 This release bundles the formal-verification enforcement work (FV-PHASE3 +

@@ -176,6 +176,38 @@ TOOLS = [
             "properties": {},
         },
     },
+    {
+        "name": "rag_graph_run",
+        "description": (
+            "Execute a Graph Orchestrator DAG through the kernel's single "
+            "serialized propose->validate->commit pipeline (v4.0). The kernel "
+            "stays sole writer; every node is committed and checkpointed in "
+            "deterministic order."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "description": "DAG nodes; each {id, deps?, action, payload?}.",
+                    "items": {"type": "object"},
+                },
+                "schedule": {
+                    "type": "string",
+                    "description": "'sequential' (default) or 'levels'.",
+                },
+                "stop_on_failure": {
+                    "type": "boolean",
+                    "description": "Halt remaining branches on first node failure.",
+                },
+                "rollback_on_failure": {
+                    "type": "boolean",
+                    "description": "Transactional: undo the whole run on any failure.",
+                },
+            },
+            "required": ["nodes"],
+        },
+    },
 ]
 
 
@@ -333,6 +365,12 @@ class MCPServer:
             "rag_wal": lambda args: self.app.get_wal(since=args.get("since", 0)),
             "rag_recover": lambda args: self.app.recover(),
             "rag_close": lambda args: self.app.close(),
+            "rag_graph_run": lambda args: self.app.run_graph(
+                args["nodes"],
+                schedule=args.get("schedule", "sequential"),
+                stop_on_failure=args.get("stop_on_failure", False),
+                rollback_on_failure=args.get("rollback_on_failure", False),
+            ),
         }
 
         handler = tool_handlers.get(tool_name)

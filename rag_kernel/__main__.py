@@ -11,6 +11,7 @@ Usage:
     python -m rag_kernel checkpoint --rag RAG/RAG_MASTER.json --session S1 --summary "..."
     python -m rag_kernel gc [--path .] [--dry-run]
     python -m rag_kernel audit-env [--path .] [--json]
+    python -m rag_kernel graph run spec.json [--project .] [--schedule levels]
 
 Commands:
     init       Parse init prompt MD and create RAG_MASTER.json deterministically (zero tokens).
@@ -22,9 +23,10 @@ Commands:
     checkpoint Merge session summary into RAG_MASTER.json atomically.
     gc         Garbage collector — clean __pycache__, .pyc, .tmp, orphaned files.
     audit-env  Audit environment — enumerate Python versions, pip, package managers, project deps.
+    graph      Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime.
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md section 9
-Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (session/checkpoint/gc)
+Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (session/checkpoint/gc), GRAPH-ORCH runtime-wiring (graph command)
 
 @rag-kernel-manifest
 {
@@ -40,7 +42,8 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "session": "Start or close session logger (wraps SessionLogger)",
     "checkpoint": "Merge session summary into RAG_MASTER.json atomically",
     "gc": "Garbage collector — clean temp files, pycache, orphans",
-    "audit-env": "Audit environment — enumerate Python versions, pip, package managers, project deps"
+    "audit-env": "Audit environment — enumerate Python versions, pip, package managers, project deps",
+    "graph": "Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime"
   },
   "use_when": "Any CLI invocation of rag_kernel"
 }
@@ -49,6 +52,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -154,6 +158,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gc_parser.add_argument("--path", type=Path, default=Path("."), help="Project root to scan (default: .)")
     gc_parser.add_argument("--dry-run", action="store_true", help="Report findings without deleting")
+
+    # -- graph --
+    graph_parser = subparsers.add_parser(
+        "graph",
+        help="Run a Graph Orchestrator DAG through the kernel runtime.",
+    )
+    graph_sub = graph_parser.add_subparsers(dest="graph_action", help="run")
+    graph_run = graph_sub.add_parser("run", help="Execute a DAG spec (JSON) through the kernel.")
+    graph_run.add_argument("spec", type=Path, help='JSON spec file: {"nodes": [{"id","deps","action","payload"}], "schedule": "sequential|levels"}')
+    graph_run.add_argument("--project", type=Path, default=Path("."), help="Project directory (default: .)")
+    graph_run.add_argument("--session-id", type=str, default=None, help="Session identifier")
+    graph_run.add_argument("--schedule", type=str, default=None, help="Override schedule: sequential or levels")
+    graph_run.add_argument("--stop-on-failure", action="store_true", help="Halt remaining branches on first node failure")
+    graph_run.add_argument("--rollback-on-failure", action="store_true", help="Transactional: undo the whole run on any node failure")
 
     # -- audit-env --
     audit_parser = subparsers.add_parser(
@@ -475,6 +493,54 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     finally:
         app.close()
     return 0
+
+
+def cmd_graph(args: argparse.Namespace) -> int:
+    """Execute a Graph Orchestrator DAG through the kernel runtime.
+
+    Reads a JSON spec ({"nodes": [...], "schedule": "...", ...}), boots a
+    KernelApp on the project, and routes the DAG through KernelApp.run_graph
+    (the v4.0 runtime-wiring entry). Prints the execution report as JSON.
+    """
+    if args.graph_action != "run":
+        print("Usage: rag_kernel graph run <spec.json> [--project DIR]", file=sys.stderr)
+        return 1
+
+    spec_path = args.spec.resolve()
+    if not spec_path.exists():
+        print(f"Error: spec file does not exist: {spec_path}", file=sys.stderr)
+        return 1
+    try:
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Error: cannot read spec: {e}", file=sys.stderr)
+        return 1
+
+    nodes = spec.get("nodes", [])
+    schedule = args.schedule or spec.get("schedule", "sequential")
+    stop_on_failure = args.stop_on_failure or bool(spec.get("stop_on_failure", False))
+    rollback_on_failure = args.rollback_on_failure or bool(spec.get("rollback_on_failure", False))
+
+    project = args.project.resolve()
+    if not project.exists():
+        print(f"Error: project directory does not exist: {project}", file=sys.stderr)
+        return 1
+
+    app = KernelApp(project, session_id=args.session_id)
+    boot = app.boot()
+    if boot.get("status") not in ("OK", "READY"):
+        print(f"Warning: boot returned {boot.get('status')}: {boot}", file=sys.stderr)
+    try:
+        result = app.run_graph(
+            nodes,
+            schedule=schedule,
+            stop_on_failure=stop_on_failure,
+            rollback_on_failure=rollback_on_failure,
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    finally:
+        app.close()
+    return 1 if isinstance(result, dict) and "error" in result else 0
 
 
 def cmd_session(args: argparse.Namespace) -> int:
@@ -983,6 +1049,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "configure": cmd_configure, "health": cmd_health,
         "serve": cmd_serve, "mcp": cmd_mcp, "session": cmd_session,
         "checkpoint": cmd_checkpoint, "gc": cmd_gc, "audit-env": cmd_audit_env,
+        "graph": cmd_graph,
     }
     return commands[args.command](args)
 

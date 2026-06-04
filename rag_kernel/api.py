@@ -900,6 +900,111 @@ class KernelApp:
 
         return result
 
+    # -- Graph orchestration (v4.0 runtime-wiring) --------------------------
+
+    def run_graph(
+        self,
+        nodes: list,
+        *,
+        schedule: str = "sequential",
+        stop_on_failure: bool = False,
+        rollback_on_failure: bool = False,
+        force_full_checkpoint: bool = False,
+    ) -> dict:
+        """Build and execute a Graph Orchestrator DAG through THIS kernel.
+
+        This is the runtime entry point that makes the Graph Orchestrator
+        invokable through the kernel (CLI / MCP / direct API), not merely
+        importable. ``nodes`` is a JSON-serializable spec — each item is a
+        mapping ``{"id": str, "deps"?: [str], "action": str, "payload"?: {}}``
+        (an already-built ``OrchestratorNode`` is also accepted). The DAG is
+        built fail-loud, then every node is driven through this kernel's single
+        serialized propose -> validate -> commit -> per-node-checkpoint pipeline
+        by ``GraphExecutor``. The kernel remains the SOLE writer; this method
+        owns control-flow wiring only and adds no new state mutation, WAL event
+        type, or schema (the executor's existing GRAPH_NODE_EXECUTED events are
+        the audit trail).
+
+        Only the ``sequential`` and ``levels`` schedules are reachable from a
+        serialized spec; ``process_levels`` needs picklable ``work`` callables
+        that cannot cross the JSON/CLI/MCP boundary, so construct a
+        ``GraphExecutor`` in-process for that. Returns the executor report dict
+        (JSON-serializable), or ``{"error": ...}`` on a build/spec/state error
+        without mutating HOT.
+        """
+        # Lazy import: graph_orchestrator duck-types KernelApp (no import of
+        # api.py at its module scope), so importing it here avoids a cycle.
+        from rag_kernel.graph_orchestrator import (
+            DAGBuildError,
+            ExecutionDAG,
+            GraphExecutionError,
+            GraphExecutor,
+            OrchestratorNode,
+            Schedule,
+        )
+
+        # Resolve the schedule from the serialized name. PROCESS_LEVELS is
+        # deliberately unreachable from a spec (no picklable work callable).
+        schedule_map = {
+            "sequential": Schedule.SEQUENTIAL,
+            "levels": Schedule.LEVELS,
+        }
+        sched = schedule_map.get(str(schedule).lower())
+        if sched is None:
+            return {
+                "error": (
+                    f"unsupported schedule {schedule!r}; "
+                    f"use one of {sorted(schedule_map)} "
+                    f"(process_levels is in-process only)"
+                )
+            }
+
+        # Enforcement requires a state where proposals/checkpoints are legal.
+        if self.state_machine.current not in (
+            State.READY, State.WORKING, State.INGESTING
+        ):
+            return {
+                "error": (
+                    f"cannot run graph from state "
+                    f"{self.state_machine.current.value}"
+                )
+            }
+
+        # Build the node objects from the spec (fail-loud).
+        try:
+            built: list = []
+            for spec in nodes:
+                if isinstance(spec, OrchestratorNode):
+                    built.append(spec)
+                    continue
+                built.append(OrchestratorNode(
+                    id=spec["id"],
+                    deps=frozenset(spec.get("deps", ())),
+                    action=spec.get("action"),
+                    payload=spec.get("payload", {}) or {},
+                ))
+            dag = ExecutionDAG(built)
+            executor = GraphExecutor(
+                dag,
+                self,
+                schedule=sched,
+                stop_on_failure=stop_on_failure,
+                rollback_on_failure=rollback_on_failure,
+                force_full_checkpoint=force_full_checkpoint,
+            )
+            report = executor.run()
+        except (DAGBuildError, GraphExecutionError, KeyError, TypeError) as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
+        self.logger.info(
+            f"Graph executed via runtime: schedule={sched.value}, "
+            f"nodes={len(dag.node_ids)}, "
+            f"done={len(report.get('done', []))}, "
+            f"failed={len(report.get('failed', []))}",
+            category=EventCategory.LIFECYCLE,
+        )
+        return report
+
     # -- WAL ----------------------------------------------------------------
 
     def get_wal(self, since: int = 0) -> list[dict]:
