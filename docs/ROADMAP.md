@@ -118,20 +118,27 @@ kernel-enforced context-truncation policy. 13 modules, 758 tests.
 
 ---
 
-## v4.0 — Graph Orchestrator (Planned)
+## v4.0 — Graph Orchestrator (In progress — unreleased on `main`)
 
 Target: Multi-step workflow orchestration with dependency tracking.
 
-| Component | Description |
-|---|---|
-| DAG execution engine | LangGraph-class directed graph for multi-step workflows |
-| Dependency tracking | Task B waits for Task A completion before starting |
-| Parallel execution | Independent tasks run concurrently where safe |
-| Checkpoint-per-node | Each graph node checkpoints independently |
-| Rollback support | Failed node rolls back to last valid state without corrupting siblings |
+Built incrementally (one milestone per session), behind a deliberate scope
+boundary. Increments 1–5 have landed on `main` but are **not yet in a release**;
+the v4.0 headline announcement is deferred until the orchestrator is complete
+and runtime-wired (after increments 6–7).
+
+| Component | Description | Status |
+|---|---|---|
+| Pure DAG core | Fail-loud build, topological order + level assignment, guarded node-status lifecycle | Done — increment 1 |
+| DAG execution engine | Drives nodes through propose → validate → commit; checkpoint-per-node + `GRAPH_NODE_EXECUTED` WAL event | Done — increment 2 |
+| Deterministic-levels scheduling | `Schedule.LEVELS` names parallel-eligible batches; provably equivalent to `SEQUENTIAL`; single-writer enforced | Done — increment 3 |
+| Transactional rollback | Opt-in `rollback_on_failure` undoes the whole run to the pre-run baseline via the kernel RECOVERY path | Done — increment 4 |
+| Registration | `graph_orchestrator` wired into `_KERNEL_MODULES` / `discover()` / `cmd_health`; module count 13 → 14; health 15/15 | Done — increment 5 |
+| OS-process parallel work | A level's nodes run their work in separate OS processes; commit stays serialized in deterministic id order under the file-mutex | Planned — increment 6 |
+| Agent / session supervisor | Thin process manager over the off-process workers (spawn/monitor/collect); owns no authoritative state | Planned — increment 7 |
 
 ### Prerequisites
-- Formal verification Phase 2+ (transition guards must be provably correct before graph nodes enforce them)
+- Formal verification Phase 2+ (transition guards must be provably correct before graph nodes enforce them) — **met** (FV-PHASE3/4 enforced at runtime).
 
 ---
 
@@ -148,4 +155,5 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 | Priority | Items | Target |
 |---|---|---|
 | **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.3.0 (13 modules, 758 tests, zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), FV-PHASE3/4 (guard generation enforced at runtime), M-009 (context-truncation policy) | Done |
-| **LOW** | Graph orchestrator (v4.0) | v4.0+ |
+| **IN PROGRESS** | Graph orchestrator (v4.0) — increments 1–5 of 7 on `main` (pure DAG core, execution engine, deterministic-levels scheduling, transactional rollback, registration; health 15/15); **unreleased**, announcement deferred | v4.0 |
+| **LOW** | Graph orchestrator increments 6–7 (OS-process parallel work, agent/session supervisor) | v4.0+ |

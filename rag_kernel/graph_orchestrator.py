@@ -51,16 +51,19 @@ GRAPH-ORCH (v4.0), increments 1–4 of N:
       single-writer + WAL-recoverable guarantees are preserved; no TLA+/guardgen
       change is needed because the RECOVERY transitions already exist.
 
-SCOPE BOUNDARY (deliberate, mirrors FV-PHASE3 -> FV-PHASE4):
-    Increments 2-4 add execution, level scheduling, and rollback, but this
-    module is still
-    NOT registered in rag_kernel.__init__._KERNEL_MODULES / discover() /
-    cmd_health — that registration (plus the module-count reconciliation and
-    Rule 11 docs) is increment 5 (INS-025), the next increment now that
-    rollback/recovery (increment 4, INS-024) is in. The @rag-kernel-manifest block below is
-    present and discovery-ready. GraphExecutor depends on a KernelApp only
-    structurally (duck-typed; imported under TYPE_CHECKING) so this module never
-    imports api.py at runtime — no import cycle.
+  Increment 5 — registration (INS-025):
+    * this module is now REGISTERED in rag_kernel.__init__._KERNEL_MODULES,
+      discover(), and cmd_health — it is the 14th capability module (health
+      15/15 incl. __main__), and the package manifest `modules` dict lists it,
+    * the functional module count is reconciled 13 -> 14 with the documented
+      convention in __init__.py, and README/CHANGELOG/ROADMAP are aligned per
+      Rule 11. The scope boundary held FV-PHASE3 -> FV-PHASE4 style across
+      increments 1-4 and is now closed.
+
+DESIGN NOTE:
+    GraphExecutor depends on a KernelApp only structurally (duck-typed; imported
+    under TYPE_CHECKING) so this module never imports api.py at runtime — no
+    import cycle, even though it is now part of the discovered module set.
 
 DESIGN POSTURE (dual-POV):
     CS lens — a DAG is an adjacency list; ordering is a topological sort; cycle

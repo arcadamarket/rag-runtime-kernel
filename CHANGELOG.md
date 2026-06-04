@@ -19,6 +19,29 @@ is intentionally deferred until the orchestrator is complete and runtime-wired._
 - **Scope boundary (deliberate):** not yet registered in `_KERNEL_MODULES` / `discover()` / `cmd_health` — the `@rag-kernel-manifest` block is present and discovery-ready, and wiring lands with the execution engine (mirrors how FV-PHASE3 shipped before FV-PHASE4 enforced it). Functional module count therefore unchanged at 13 until then.
 - 41 new tests (`tests/test_graph_orchestrator.py`). **799 total tests**, all passing; zero regressions; `guardgen --check` drift gate green; health 14/14.
 
+### Added — Graph Orchestrator: Execution Engine (GRAPH-ORCH, increment 2)
+- **`GraphExecutor`** — drives DAG nodes through the kernel's serialized propose → validate → commit pipeline (a node's "work" IS its proposal; no arbitrary code is executed in the engine). KernelApp is duck-typed under `TYPE_CHECKING`, so the module never imports `api.py` at runtime — no import cycle.
+- **Checkpoint-per-node** through the guarded `CHECKPOINTING` transition (via the delta-checkpoint manager, so the per-node cost is a small delta), plus a per-node `GRAPH_NODE_EXECUTED` WAL event — each committed node is a durable, auditable crash-recovery boundary.
+- **Deterministic failure-closure** — a rejected proposal / failed commit marks the node `FAILED`, SKIPs its downstream closure, and never mutates HOT or takes a checkpoint; independent branches keep running unless `stop_on_failure`.
+- 18 new tests (`tests/test_graph_executor.py`). **817 total tests**, all passing; zero regressions; `guardgen --check` green; health 14/14.
+
+### Added — Graph Orchestrator: Deterministic-Levels Scheduling (GRAPH-ORCH, increment 3)
+- **`Schedule.LEVELS`** — schedules the DAG one topological *level* at a time; the nodes within a level are mutually independent and therefore parallel-eligible, and the schedule names that batch explicitly via `levels_executed`.
+- Every node **still** commits through the one serialized propose → validate → commit pipeline in deterministic id order, so `LEVELS` is **provably equivalent to `SEQUENTIAL`** — identical executed order, final HOT, and WAL event sequence (proven in tests over diamond / multi-level / multi-root graphs incl. failure closure).
+- **Single-writer made explicit** — `_assert_single_writer()` fails loud unless the executor holds the project file-mutex (`concurrency.ProjectLock`) for its own session before committing a level. Concurrency is a *scheduling* property, never a state-mutation race.
+- 21 new tests (`tests/test_graph_levels.py`). **838 total tests**, all passing; zero regressions; `guardgen --check` green; health 14/14.
+
+### Added — Graph Orchestrator: Transactional Rollback/Recovery (GRAPH-ORCH, increment 4)
+- **`rollback_on_failure`** — opt-in mode (default OFF, so the keep-committed-prefix behaviour of increments 2–3 is unchanged) that makes a DAG run **all-or-nothing**: on any node `FAILED`, the whole run is undone back to the pre-run HOT baseline.
+- The restore goes through the kernel's RECOVERY path (**`KernelApp.rollback_to_snapshot`**): `force_state(RECOVERY)` (the sanctioned escape — `READY → RECOVERY` is not a normal transition), atomic HOT restore (refreshing `.bak`), a `GRAPH_ROLLBACK` WAL event, delta-base reset, then a legal `RECOVERY → READY`. The kernel — never the executor — owns the mutation, so single-writer + WAL-recoverability are preserved; no TLA+/`guardgen` change is needed (the RECOVERY transitions already exist).
+- 14 new tests (`tests/test_graph_rollback.py`). **852 total tests**, all passing; zero regressions; `guardgen --check` green; health 14/14.
+
+### Changed — Graph Orchestrator: Registration (GRAPH-ORCH, increment 5)
+- **`graph_orchestrator` is now registered** in `_KERNEL_MODULES`, `discover()`, and `cmd_health` — it is a discovered capability module and appears in the package manifest `modules` dict. The deliberate FV-PHASE3→FV-PHASE4-style scope boundary held across increments 1–4 and is now closed.
+- **Functional module count reconciled 13 → 14** (documented convention in `__init__.py`); **health is now 15/15** (14 capability modules + `__main__`).
+- No new behaviour and no new tests in this increment — purely registration + documentation reconciliation (Rule 11). **852 total tests**, all passing; `guardgen --check` green.
+- Still **unreleased**: increments 6 (OS-process parallel work / serialized commit) and 7 (agent/session supervisor) remain before the v4.0 Graph Orchestrator is complete and runtime-wired; the headline announcement stays deferred until then.
+
 ## [v0.3.0] — 2026-06-01
 
 This release bundles the formal-verification enforcement work (FV-PHASE3 +

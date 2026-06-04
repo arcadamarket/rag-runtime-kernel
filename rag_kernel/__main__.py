@@ -409,6 +409,7 @@ def cmd_health(args: argparse.Namespace) -> int:
         "rag_kernel.generated_guards",
         "rag_kernel.guardgen",
         "rag_kernel.context_policy",
+        "rag_kernel.graph_orchestrator",
         "rag_kernel.__main__",
     ]
 

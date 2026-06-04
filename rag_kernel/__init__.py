@@ -23,7 +23,8 @@ Zero external dependencies. Python 3.10+ standard library only.
     "conflict_engine": "Rule-based conflict auto-categorization with suggested resolutions",
     "generated_guards": "TLA+-derived transition table + per-action enabling guards (FV-PHASE4 enforced structural source)",
     "guardgen": "Deterministic TLA+ → Python transition-guard generator (build-time, zero-LLM)",
-    "context_policy": "Deterministic kernel-enforced context-truncation policy: per-region token accounting, pinned/evictable ordering (HOT never evicted), checkpoint/evict/halt actions (M-009)"
+    "context_policy": "Deterministic kernel-enforced context-truncation policy: per-region token accounting, pinned/evictable ordering (HOT never evicted), checkpoint/evict/halt actions (M-009)",
+    "graph_orchestrator": "Deterministic DAG core + execution engine: fail-loud build, topological order + deterministic-levels scheduling, guarded node-status lifecycle, propose→validate→commit execution with checkpoint-per-node and opt-in transactional rollback under a single-writer file-mutex (GRAPH-ORCH v4.0)"
   },
   "cli_commands": {
     "init": "python -m rag_kernel init --spec <path.md> [--output RAG/] [--dry-run]",
@@ -61,9 +62,10 @@ import json
 from typing import Any
 
 # Module-count convention (closes INS-003 / INS-019):
-#   * "13 capability modules" == the manifest `modules` dict above — the
+#   * "14 capability modules" == the manifest `modules` dict above — the
 #     functional units, excluding the __init__ package marker and the
-#     __main__ CLI entry point. (M-009 added context_policy as the 13th.)
+#     __main__ CLI entry point. (M-009 added context_policy as the 13th;
+#     GRAPH-ORCH increment 5 registered graph_orchestrator as the 14th.)
 #   * _KERNEL_MODULES below additionally includes __main__ as a final import
 #     target so discover()/cmd_health verify the CLI imports cleanly too.
 #   The __init__ package marker is never counted (it IS the package).
@@ -81,6 +83,7 @@ _KERNEL_MODULES = [
     "rag_kernel.generated_guards",
     "rag_kernel.guardgen",
     "rag_kernel.context_policy",
+    "rag_kernel.graph_orchestrator",
     "rag_kernel.__main__",
 ]
 

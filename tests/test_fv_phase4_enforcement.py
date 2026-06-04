@@ -86,15 +86,25 @@ class TestModuleRegistration:
         registry = rag_kernel.discover()
         assert "generated_guards" in registry["critical_modules"]
 
-    def test_manifest_module_count_is_thirteen(self):
-        """The functional-capability count (manifest dict) is 13 post-M-009.
+    def test_manifest_module_count_is_fourteen(self):
+        """The functional-capability count (manifest dict) is 14.
 
         FV-PHASE4 reconciled the count to 12; M-009 added context_policy as
-        the 13th functional module.
+        the 13th functional module; GRAPH-ORCH increment 5 (INS-025)
+        registered graph_orchestrator as the 14th.
         """
         registry = rag_kernel.discover()
         manifest_modules = registry["package"]["modules"]
-        assert len(manifest_modules) == 13
+        assert len(manifest_modules) == 14
         assert "generated_guards" in manifest_modules
         assert "guardgen" in manifest_modules
         assert "context_policy" in manifest_modules
+        assert "graph_orchestrator" in manifest_modules
+
+    def test_graph_orchestrator_registered(self):
+        """GRAPH-ORCH increment 5 (INS-025): graph_orchestrator is wired into
+        _KERNEL_MODULES and surfaced by discover() as a capability module."""
+        assert "rag_kernel.graph_orchestrator" in rag_kernel._KERNEL_MODULES
+        registry = rag_kernel.discover()
+        assert "graph_orchestrator" in registry["modules"]
+        assert "graph_orchestration" in registry["capabilities"]
