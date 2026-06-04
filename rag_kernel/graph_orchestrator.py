@@ -60,6 +60,24 @@ GRAPH-ORCH (v4.0), increments 1–4 of N:
       Rule 11. The scope boundary held FV-PHASE3 -> FV-PHASE4 style across
       increments 1-4 and is now closed.
 
+  Increment 6 — OS-process parallel work / serialized commit (INS-027):
+    * a node may carry a PURE, picklable ``work`` callable (+ ``work_args``);
+      under Schedule.PROCESS_LEVELS the work of a level's parallel-eligible
+      nodes is run in OS subprocesses (concurrent.futures.ProcessPoolExecutor),
+    * a worker is handed NO kernel handle (no app/wal/lock) and returns a
+      picklable proposal payload — work is a pure function of its args, so it
+      cannot race on or mutate shared state,
+    * the parent process stays the SOLE writer: it buffers the workers' payloads
+      and commits them through the one serialized propose -> validate -> commit
+      pipeline in deterministic sorted-id order (NOT completion order), under the
+      project file-mutex, so HOT/WAL/checkpoints are byte-identical to LEVELS and
+      SEQUENTIAL. Speedup is bounded to the work phase of wide levels (Amdahl);
+      the serialized-commit floor is the permanent integrity tax,
+    * a worker that raises (or returns a non-Mapping) routes that node to the
+      same deterministic failure-closure (FAILED -> SKIP downstream) / opt-in
+      rollback path as a kernel-rejected proposal. No new WAL event, schema, or
+      TLA+/guardgen change is needed — the commit path is untouched.
+
 DESIGN NOTE:
     GraphExecutor depends on a KernelApp only structurally (duck-typed; imported
     under TYPE_CHECKING) so this module never imports api.py at runtime — no
@@ -104,10 +122,12 @@ Design doc reference: v3.2_ARCHITECTURE_DESIGN.md (orchestration section, TBD)
 
 from __future__ import annotations
 
+import collections.abc as _abc
 import copy
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Iterable, Mapping, Optional
+from typing import TYPE_CHECKING, Callable, Iterable, Mapping, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import cycle
     from rag_kernel.api import KernelApp
@@ -228,12 +248,25 @@ class OrchestratorNode:
                   Excluded from equality/hash so a node's identity is its id
                   (+ structure): nodes stay hashable despite a mutable-typed
                   payload, and ids are unique within a DAG anyway.
+        work:     optional PURE, picklable callable (a module-level function)
+                  run OFF-PROCESS under Schedule.PROCESS_LEVELS (increment 6).
+                  Called as ``work(*work_args)`` in an OS subprocess with NO
+                  kernel handle; must return a picklable Mapping used as the
+                  proposal payload the parent then commits. Absent => the static
+                  ``payload`` is used and the node behaves exactly as before.
+                  Excluded from equality/hash (identity stays the id).
+        work_args: positional args passed to ``work`` in the subprocess. Must be
+                  picklable. Excluded from equality/hash.
     """
 
     id: str
     deps: frozenset[str] = field(default_factory=frozenset)
     action: Optional[str] = None
     payload: Mapping[str, object] = field(default_factory=dict, compare=False)
+    work: Optional[Callable[..., Mapping[str, object]]] = field(
+        default=None, compare=False
+    )
+    work_args: tuple = field(default_factory=tuple, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id:
@@ -249,6 +282,12 @@ class OrchestratorNode:
             raise DAGBuildError(f"node {self.id!r} depends on itself")
         # frozen dataclass: assign through object.__setattr__
         object.__setattr__(self, "deps", deps)
+        # Increment 6: validate the optional off-process work contract.
+        if self.work is not None and not callable(self.work):
+            raise DAGBuildError(
+                f"node {self.id!r} work must be callable, got {self.work!r}"
+            )
+        object.__setattr__(self, "work_args", tuple(self.work_args))
 
 
 # ---------------------------------------------------------------------------
@@ -536,10 +575,17 @@ class Schedule(Enum):
         id order, under the project file-mutex. Provably equivalent to SEQUENTIAL
         in executed order, final state, and WAL sequence — the parallelism is a
         scheduling property, never a state-mutation race.
+    PROCESS_LEVELS — increment 6: like LEVELS, but a level's work-bearing nodes
+        run their PURE ``work`` callable in OS subprocesses (real parallelism for
+        wide, I/O-bound levels). The parent stays sole writer and still commits
+        every node's resulting payload through the one serialized pipeline in
+        deterministic sorted-id order under the file-mutex, so it remains
+        equivalent to SEQUENTIAL/LEVELS in committed order, final state, and WAL.
     """
 
     SEQUENTIAL = "sequential"
     LEVELS = "levels"
+    PROCESS_LEVELS = "process_levels"
 
 
 @dataclass(frozen=True)
@@ -630,6 +676,7 @@ class GraphExecutor:
         stop_on_failure: bool = False,
         schedule: Schedule = Schedule.SEQUENTIAL,
         rollback_on_failure: bool = False,
+        max_workers: Optional[int] = None,
     ) -> None:
         # Fail-loud: every node must carry an action to route through the
         # pipeline. Increment 1 allows action=None (purely descriptive); the
@@ -649,6 +696,7 @@ class GraphExecutor:
         self.stop_on_failure = stop_on_failure
         self.schedule = schedule
         self.rollback_on_failure = rollback_on_failure
+        self.max_workers = max_workers
 
         self._results: list[NodeExecutionResult] = []
         self._executed_order: list[str] = []
@@ -677,7 +725,9 @@ class GraphExecutor:
         if self.rollback_on_failure:
             self._baseline_hot = copy.deepcopy(self.app.get_hot())
 
-        if self.schedule is Schedule.LEVELS:
+        if self.schedule is Schedule.PROCESS_LEVELS:
+            self._run_process_levels()
+        elif self.schedule is Schedule.LEVELS:
             self._run_levels()
         else:
             self._run_sequential()
@@ -739,6 +789,116 @@ class GraphExecutor:
                     return
             self._levels_executed.append(executed_in_level)
 
+    def _run_process_levels(self) -> None:
+        """Increment-6 schedule: parallel off-process work, serialized commit.
+
+        Identical level walk to LEVELS, with one addition: before committing a
+        level, the level's work-bearing nodes run their pure ``work`` callable in
+        OS subprocesses (ProcessPoolExecutor). The parent then commits every node
+        in the level through the one serialized pipeline in deterministic
+        sorted-id order — using each worker's returned payload — so the committed
+        order, final HOT, WAL sequence, and checkpoints are identical to LEVELS
+        and SEQUENTIAL. A worker that raises (or returns a non-Mapping) routes
+        that node to the same deterministic failure-closure / rollback path as a
+        kernel-rejected proposal. The parent remains the sole writer; workers get
+        no kernel handle, so concurrency stays a property of the work phase only.
+        """
+        self._assert_single_writer()
+
+        for level in self.dag.levels():
+            batch = [
+                nid for nid in level
+                if self.dag.status_of(nid) is NodeStatus.READY
+            ]
+            if not batch:
+                continue
+            # Phase A — parallel WORK off-process (work-bearing nodes only).
+            work_payloads, work_errors = self._compute_level_work(batch)
+            # Phase B — serialized COMMIT in deterministic sorted-id order.
+            executed_in_level: list[str] = []
+            for node_id in batch:  # 'level' is already id-sorted
+                result = self._commit_node(
+                    node_id,
+                    work_payloads.get(node_id),
+                    work_errors.get(node_id),
+                )
+                self._results.append(result)
+                self._executed_order.append(node_id)
+                executed_in_level.append(node_id)
+                if self._maybe_rollback(result):
+                    self._levels_executed.append(executed_in_level)
+                    return
+                if self.stop_on_failure and result.status is NodeStatus.FAILED:
+                    self._levels_executed.append(executed_in_level)
+                    return
+            self._levels_executed.append(executed_in_level)
+
+    def _compute_level_work(
+        self, batch: list[str]
+    ) -> tuple[dict[str, dict], dict[str, str]]:
+        """Run the level's work-bearing nodes off-process; collect payloads.
+
+        Returns (payloads, errors): ``payloads[node_id]`` is the picklable
+        Mapping a worker returned (committed later in id order); ``errors`` holds
+        a message for any worker that raised or returned a non-Mapping. Nodes
+        without a ``work`` callable appear in neither map (they commit their
+        static payload). No pool is created when the level has no work-bearing
+        nodes, so the default/static path spawns no processes.
+        """
+        payloads: dict[str, dict] = {}
+        errors: dict[str, str] = {}
+        work_nodes = [
+            nid for nid in batch if self.dag.node(nid).work is not None
+        ]
+        if not work_nodes:
+            return payloads, errors
+
+        with ProcessPoolExecutor(max_workers=self.max_workers) as pool:
+            future_to_nid = {}
+            for nid in work_nodes:
+                node = self.dag.node(nid)
+                try:
+                    fut = pool.submit(node.work, *node.work_args)
+                except Exception as exc:  # non-picklable arg, etc.
+                    errors[nid] = (
+                        f"worker submit failed: {type(exc).__name__}: {exc}"
+                    )
+                    continue
+                future_to_nid[fut] = nid
+            for fut, nid in future_to_nid.items():
+                try:
+                    out = fut.result()
+                except Exception as exc:  # worker raised / process died
+                    errors[nid] = f"worker error: {type(exc).__name__}: {exc}"
+                    continue
+                if not isinstance(out, _abc.Mapping):
+                    errors[nid] = (
+                        "worker returned a non-Mapping payload "
+                        f"({type(out).__name__}); a dict is required"
+                    )
+                    continue
+                payloads[nid] = dict(out)
+        return payloads, errors
+
+    def _commit_node(
+        self,
+        node_id: str,
+        payload: Optional[dict],
+        work_error: Optional[str],
+    ) -> NodeExecutionResult:
+        """Commit one node in the serialized phase of PROCESS_LEVELS.
+
+        A worker error fails the node deterministically (RUNNING -> FAILED ->
+        SKIP closure), exactly like a kernel-rejected proposal; otherwise the
+        node commits through ``_run_one`` with the worker's payload (or its
+        static payload when it had no ``work``).
+        """
+        if work_error is not None:
+            node = self.dag.node(node_id)
+            self.dag.mark_running(node_id)
+            return self._fail(node_id, node.action, None, errors=(work_error,))
+        return self._run_one(node_id, payload=payload)
+
     def _assert_single_writer(self) -> None:
         """Enforce the single-writer precondition via the project file-mutex.
 
@@ -796,8 +956,16 @@ class GraphExecutor:
         self._rollback_info = {"trigger_node": result.node_id, **info}
         return True
 
-    def _run_one(self, node_id: str) -> NodeExecutionResult:
-        """Run a single READY node through propose -> commit -> checkpoint."""
+    def _run_one(
+        self, node_id: str, payload: Optional[Mapping[str, object]] = None
+    ) -> NodeExecutionResult:
+        """Run a single READY node through propose -> commit -> checkpoint.
+
+        ``payload`` overrides the node's static payload when supplied — used by
+        the PROCESS_LEVELS schedule to commit a payload computed off-process by
+        the node's ``work`` callable. The commit path is otherwise identical, so
+        a node with no ``work`` (payload=None) behaves exactly as before.
+        """
         node = self.dag.node(node_id)
         action = node.action
 
@@ -805,7 +973,8 @@ class GraphExecutor:
         self.dag.mark_running(node_id)
 
         # 2. Propose (kernel validates: state legality, gates, schema).
-        proposal = {"action": action, "payload": dict(node.payload)}
+        effective_payload = node.payload if payload is None else payload
+        proposal = {"action": action, "payload": dict(effective_payload)}
         prop = self.app.propose(proposal)
         proposal_id = prop.get("proposal_id")
 
