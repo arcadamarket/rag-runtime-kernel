@@ -24,7 +24,8 @@ Zero external dependencies. Python 3.10+ standard library only.
     "generated_guards": "TLA+-derived transition table + per-action enabling guards (FV-PHASE4 enforced structural source)",
     "guardgen": "Deterministic TLA+ → Python transition-guard generator (build-time, zero-LLM)",
     "context_policy": "Deterministic kernel-enforced context-truncation policy: per-region token accounting, pinned/evictable ordering (HOT never evicted), checkpoint/evict/halt actions (M-009)",
-    "graph_orchestrator": "Deterministic DAG core + execution engine: fail-loud build, topological order + deterministic-levels scheduling, guarded node-status lifecycle, propose→validate→commit execution with checkpoint-per-node and opt-in transactional rollback under a single-writer file-mutex (GRAPH-ORCH v4.0)"
+    "graph_orchestrator": "Deterministic DAG core + execution engine: fail-loud build, topological order + deterministic-levels scheduling, guarded node-status lifecycle, propose→validate→commit execution with checkpoint-per-node and opt-in transactional rollback under a single-writer file-mutex (GRAPH-ORCH v4.0)",
+    "agent_supervisor": "Observable spawn/monitor/collect layer over pure off-process node work: live per-worker PID + lifecycle state + exit code as an AgentView, owning no authoritative state (GRAPH-ORCH v4.0, increment 7)"
   },
   "cli_commands": {
     "init": "python -m rag_kernel init --spec <path.md> [--output RAG/] [--dry-run]",
@@ -62,10 +63,11 @@ import json
 from typing import Any
 
 # Module-count convention (closes INS-003 / INS-019):
-#   * "14 capability modules" == the manifest `modules` dict above — the
+#   * "15 capability modules" == the manifest `modules` dict above — the
 #     functional units, excluding the __init__ package marker and the
 #     __main__ CLI entry point. (M-009 added context_policy as the 13th;
-#     GRAPH-ORCH increment 5 registered graph_orchestrator as the 14th.)
+#     GRAPH-ORCH increment 5 registered graph_orchestrator as the 14th;
+#     GRAPH-ORCH increment 7 registered agent_supervisor as the 15th.)
 #   * _KERNEL_MODULES below additionally includes __main__ as a final import
 #     target so discover()/cmd_health verify the CLI imports cleanly too.
 #   The __init__ package marker is never counted (it IS the package).
@@ -84,6 +86,7 @@ _KERNEL_MODULES = [
     "rag_kernel.guardgen",
     "rag_kernel.context_policy",
     "rag_kernel.graph_orchestrator",
+    "rag_kernel.agent_supervisor",
     "rag_kernel.__main__",
 ]
 

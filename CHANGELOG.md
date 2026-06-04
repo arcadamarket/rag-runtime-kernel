@@ -40,7 +40,20 @@ is intentionally deferred until the orchestrator is complete and runtime-wired._
 - **`graph_orchestrator` is now registered** in `_KERNEL_MODULES`, `discover()`, and `cmd_health` — it is a discovered capability module and appears in the package manifest `modules` dict. The deliberate FV-PHASE3→FV-PHASE4-style scope boundary held across increments 1–4 and is now closed.
 - **Functional module count reconciled 13 → 14** (documented convention in `__init__.py`); **health is now 15/15** (14 capability modules + `__main__`).
 - No new behaviour and no new tests in this increment — purely registration + documentation reconciliation (Rule 11). **852 total tests**, all passing; `guardgen --check` green.
-- Still **unreleased**: increments 6 (OS-process parallel work / serialized commit) and 7 (agent/session supervisor) remain before the v4.0 Graph Orchestrator is complete and runtime-wired; the headline announcement stays deferred until then.
+- Still **unreleased** at this increment: increments 6–7 remained before the v4.0 Graph Orchestrator was complete and runtime-wired.
+
+### Added — Graph Orchestrator: OS-Process Parallel Work / Serialized Commit (GRAPH-ORCH, increment 6)
+- **`Schedule.PROCESS_LEVELS`** — a level's work-bearing nodes run their pure, picklable `work(*work_args)` callable in OS subprocesses (`concurrent.futures.ProcessPoolExecutor`) for real parallelism on wide, I/O-bound levels.
+- Workers are handed **no kernel handle** and return a picklable proposal payload; the **parent stays sole writer** and commits every node through the one serialized propose → validate → commit pipeline in deterministic **sorted-id order (not completion order)** under the project file-mutex, so HOT/WAL/checkpoints are **byte-identical** to `LEVELS`/`SEQUENTIAL`. Speedup is bounded to the work phase (Amdahl); the serialized-commit floor is the permanent integrity tax.
+- A worker that raises (or returns a non-Mapping) routes its node to the same deterministic failure-closure / opt-in rollback path as a kernel-rejected proposal. **No** schema/WAL/TLA+/`guardgen` change — the commit path is untouched.
+- 25 new tests (`tests/test_graph_process.py`). **878 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 15/15. Still **unreleased**.
+
+### Added — Graph Orchestrator: Agent/Session Supervisor (GRAPH-ORCH, increment 7 — last core increment)
+- **`agent_supervisor.py`** — a thin, observable spawn/monitor/collect layer over the same pure off-process work contract. An opt-in `GraphExecutor(..., supervisor=AgentSupervisor())` replaces the bare pool in the `PROCESS_LEVELS` work phase with one that exposes **live per-worker PID, lifecycle state** (`PENDING → RUNNING → DONE | FAILED`), **exit code, and timing** as a renderable **`AgentView`** (the "agent view" UX).
+- **Owns no authoritative state** — the supervisor is handed no kernel handle; it only spawns, observes, and collects payloads. The parent kernel stays sole writer and still commits in deterministic sorted-id order, so the supervised path is **byte-identical** to `PROCESS_LEVELS` without a supervisor (proven by equivalence tests). Default (`supervisor=None`) is exactly the increment-6 behaviour. **No** schema/WAL/TLA+/`guardgen` change — the commit path is untouched.
+- **`agent_supervisor` is now registered** in `_KERNEL_MODULES`, `discover()`, and `cmd_health`; **functional module count reconciled 14 → 15**, **health now 16/16**.
+- 30 new tests (`tests/test_agent_supervisor.py` + a registration test). **908 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 16/16.
+- The Graph Orchestrator's core increments (1–7) are now **all on `main`**. It remains **unreleased**: runtime-wiring and the v4.0 release / headline announcement are deferred until the orchestrator is wired into the runtime entry points.
 
 ## [v0.3.0] — 2026-06-01
 

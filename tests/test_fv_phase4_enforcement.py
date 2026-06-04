@@ -86,16 +86,17 @@ class TestModuleRegistration:
         registry = rag_kernel.discover()
         assert "generated_guards" in registry["critical_modules"]
 
-    def test_manifest_module_count_is_fourteen(self):
-        """The functional-capability count (manifest dict) is 14.
+    def test_manifest_module_count_is_fifteen(self):
+        """The functional-capability count (manifest dict) is 15.
 
         FV-PHASE4 reconciled the count to 12; M-009 added context_policy as
         the 13th functional module; GRAPH-ORCH increment 5 (INS-025)
-        registered graph_orchestrator as the 14th.
+        registered graph_orchestrator as the 14th; GRAPH-ORCH increment 7
+        (INS-030) registered agent_supervisor as the 15th.
         """
         registry = rag_kernel.discover()
         manifest_modules = registry["package"]["modules"]
-        assert len(manifest_modules) == 14
+        assert len(manifest_modules) == 15
         assert "generated_guards" in manifest_modules
         assert "guardgen" in manifest_modules
         assert "context_policy" in manifest_modules
@@ -108,3 +109,11 @@ class TestModuleRegistration:
         registry = rag_kernel.discover()
         assert "graph_orchestrator" in registry["modules"]
         assert "graph_orchestration" in registry["capabilities"]
+
+    def test_agent_supervisor_registered(self):
+        """GRAPH-ORCH increment 7 (INS-030): agent_supervisor is wired into
+        _KERNEL_MODULES and surfaced by discover() as a capability module."""
+        assert "rag_kernel.agent_supervisor" in rag_kernel._KERNEL_MODULES
+        registry = rag_kernel.discover()
+        assert "agent_supervisor" in registry["modules"]
+        assert "agent_supervision" in registry["capabilities"]

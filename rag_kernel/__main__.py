@@ -410,6 +410,7 @@ def cmd_health(args: argparse.Namespace) -> int:
         "rag_kernel.guardgen",
         "rag_kernel.context_policy",
         "rag_kernel.graph_orchestrator",
+        "rag_kernel.agent_supervisor",
         "rag_kernel.__main__",
     ]
 

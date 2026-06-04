@@ -123,9 +123,9 @@ kernel-enforced context-truncation policy. 13 modules, 758 tests.
 Target: Multi-step workflow orchestration with dependency tracking.
 
 Built incrementally (one milestone per session), behind a deliberate scope
-boundary. Increments 1–5 have landed on `main` but are **not yet in a release**;
-the v4.0 headline announcement is deferred until the orchestrator is complete
-and runtime-wired (after increments 6–7).
+boundary. All seven core increments (1–7) have landed on `main` but are **not yet
+in a release**; the v4.0 headline announcement is deferred until the orchestrator
+is runtime-wired into the kernel entry points.
 
 | Component | Description | Status |
 |---|---|---|
@@ -134,8 +134,9 @@ and runtime-wired (after increments 6–7).
 | Deterministic-levels scheduling | `Schedule.LEVELS` names parallel-eligible batches; provably equivalent to `SEQUENTIAL`; single-writer enforced | Done — increment 3 |
 | Transactional rollback | Opt-in `rollback_on_failure` undoes the whole run to the pre-run baseline via the kernel RECOVERY path | Done — increment 4 |
 | Registration | `graph_orchestrator` wired into `_KERNEL_MODULES` / `discover()` / `cmd_health`; module count 13 → 14; health 15/15 | Done — increment 5 |
-| OS-process parallel work | A level's nodes run their work in separate OS processes; commit stays serialized in deterministic id order under the file-mutex | Planned — increment 6 |
-| Agent / session supervisor | Thin process manager over the off-process workers (spawn/monitor/collect); owns no authoritative state | Planned — increment 7 |
+| OS-process parallel work | `Schedule.PROCESS_LEVELS` — a level's nodes run their pure work in separate OS processes; commit stays serialized in deterministic sorted-id order under the file-mutex | Done — increment 6 |
+| Agent / session supervisor | `agent_supervisor.py` — thin observable spawn/monitor/collect layer over the off-process workers (live PID/state/exit code as an `AgentView`); owns no authoritative state; module count 14 → 15; health 16/16 | Done — increment 7 |
+| Runtime-wiring + v4.0 release | Wire the orchestrator into the kernel entry points and cut the v4.0 release / headline announcement | Planned |
 
 ### Prerequisites
 - Formal verification Phase 2+ (transition guards must be provably correct before graph nodes enforce them) — **met** (FV-PHASE3/4 enforced at runtime).
@@ -155,5 +156,5 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 | Priority | Items | Target |
 |---|---|---|
 | **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.3.0 (13 modules, 758 tests, zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), FV-PHASE3/4 (guard generation enforced at runtime), M-009 (context-truncation policy) | Done |
-| **IN PROGRESS** | Graph orchestrator (v4.0) — increments 1–5 of 7 on `main` (pure DAG core, execution engine, deterministic-levels scheduling, transactional rollback, registration; health 15/15); **unreleased**, announcement deferred | v4.0 |
-| **LOW** | Graph orchestrator increments 6–7 (OS-process parallel work, agent/session supervisor) | v4.0+ |
+| **IN PROGRESS** | Graph orchestrator (v4.0) — all 7 core increments on `main` (pure DAG core, execution engine, deterministic-levels scheduling, transactional rollback, registration, OS-process parallel work, agent/session supervisor; health 16/16); **unreleased**, announcement deferred until runtime-wired | v4.0 |
+| **LOW** | Graph orchestrator runtime-wiring + v4.0 release / headline announcement | v4.0+ |

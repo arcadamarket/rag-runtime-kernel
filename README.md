@@ -273,8 +273,9 @@ rag-runtime-kernel/
 │   ├── guardgen.py                            # Deterministic TLA+ → Python guard generator (build-time)
 │   ├── generated_guards.py                    # Generated, runtime-enforced transition table + guards
 │   ├── context_policy.py                      # Kernel-enforced context-truncation policy (M-009)
-│   └── graph_orchestrator.py                  # Graph Orchestrator: DAG core + execution engine (v4.0, in progress on main — unreleased)
-├── tests/                                     # 758 tests (v0.3.0 release); 852 on main incl. orchestrator increments 1–5
+│   ├── graph_orchestrator.py                  # Graph Orchestrator: DAG core + execution engine (v4.0, in progress on main — unreleased)
+│   └── agent_supervisor.py                    # Graph Orchestrator: observable off-process worker supervisor / AgentView (v4.0, in progress on main — unreleased)
+├── tests/                                     # 758 tests (v0.3.0 release); 908 on main incl. orchestrator increments 1–7
 ├── .github/                                   # FUNDING.yml + issue templates
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
@@ -312,7 +313,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 | Runtime | **v0.3.0** | Released | 13 modules, 758 tests. TLA+ guards **enforced** at runtime (FV-PHASE3/4) — transition table generated from the model, `guardgen`/`generated_guards` registered; **M-009** kernel-enforced context-truncation policy (per-region token accounting, deterministic eviction, HOT never evicted, checkpoint/evict/halt). |
 | Runtime | **v0.2.7** | Released | 12 modules, 676 tests. Graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
 | Runtime | **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). |
-| Runtime | **v4.0** | In progress (`main`, unreleased) | Graph Orchestrator: DAG execution, dependency tracking, deterministic-levels scheduling, checkpoint-per-node, transactional rollback. Increments 1–5 of 7 landed on `main` (registered, health 15/15); **not yet in a release** — announcement deferred until complete + runtime-wired (increments 6–7: OS-process parallel work, agent supervisor). |
+| Runtime | **v4.0** | In progress (`main`, unreleased) | Graph Orchestrator: DAG execution, dependency tracking, deterministic-levels scheduling, checkpoint-per-node, transactional rollback, OS-process parallel work, and an observable agent/session supervisor. All 7 core increments landed on `main` (registered, health 16/16); **not yet in a release** — announcement deferred until runtime-wired into the kernel entry points. |
 
 ## Reporting Issues
 

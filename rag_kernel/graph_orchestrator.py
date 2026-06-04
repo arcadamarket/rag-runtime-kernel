@@ -78,6 +78,21 @@ GRAPH-ORCH (v4.0), increments 1–4 of N:
       rollback path as a kernel-rejected proposal. No new WAL event, schema, or
       TLA+/guardgen change is needed — the commit path is untouched.
 
+  Increment 7 — agent/session supervisor (INS-030, the last core increment):
+    * an OPT-IN ``supervisor=`` (an agent_supervisor.AgentSupervisor) replaces
+      the bare ProcessPoolExecutor in the PROCESS_LEVELS work phase with an
+      OBSERVABLE one: it spawns each level's pure ``work`` as an OS subprocess
+      and exposes live per-worker PID / lifecycle state / exit code as an
+      ``AgentView`` (the "agent view" UX),
+    * the supervisor owns NO authoritative state and gets no kernel handle —
+      it only spawns, observes, and collects payloads. The parent process stays
+      the SOLE writer and still commits every node through the one serialized
+      propose -> validate -> commit pipeline in deterministic sorted-id order,
+      so HOT/WAL/checkpoints are byte-identical to PROCESS_LEVELS without a
+      supervisor. Worker failure routes to the same failure-closure / rollback
+      path. Default (supervisor=None) is exactly the increment-6 behaviour — no
+      schema/WAL/TLA+/guardgen change.
+
 DESIGN NOTE:
     GraphExecutor depends on a KernelApp only structurally (duck-typed; imported
     under TYPE_CHECKING) so this module never imports api.py at runtime — no
@@ -131,6 +146,7 @@ from typing import TYPE_CHECKING, Callable, Iterable, Mapping, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import cycle
     from rag_kernel.api import KernelApp
+    from rag_kernel.agent_supervisor import AgentSupervisor
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +693,7 @@ class GraphExecutor:
         schedule: Schedule = Schedule.SEQUENTIAL,
         rollback_on_failure: bool = False,
         max_workers: Optional[int] = None,
+        supervisor: "Optional[AgentSupervisor]" = None,
     ) -> None:
         # Fail-loud: every node must carry an action to route through the
         # pipeline. Increment 1 allows action=None (purely descriptive); the
@@ -697,6 +714,10 @@ class GraphExecutor:
         self.schedule = schedule
         self.rollback_on_failure = rollback_on_failure
         self.max_workers = max_workers
+        # Increment 7 (INS-030): optional observable spawn/monitor substrate for
+        # the PROCESS_LEVELS work phase. None => the increment-6 bare
+        # ProcessPoolExecutor path, byte-for-byte unchanged.
+        self.supervisor = supervisor
 
         self._results: list[NodeExecutionResult] = []
         self._executed_order: list[str] = []
@@ -853,6 +874,12 @@ class GraphExecutor:
         if not work_nodes:
             return payloads, errors
 
+        # Increment 7: when a supervisor is supplied, run the work phase through
+        # the observable spawn/monitor substrate instead of the bare pool. The
+        # commit phase (caller) is unaffected — same payloads, same id order.
+        if self.supervisor is not None:
+            return self._supervised_level_work(work_nodes)
+
         with ProcessPoolExecutor(max_workers=self.max_workers) as pool:
             future_to_nid = {}
             for nid in work_nodes:
@@ -878,6 +905,40 @@ class GraphExecutor:
                     )
                     continue
                 payloads[nid] = dict(out)
+        return payloads, errors
+
+    def _supervised_level_work(
+        self, work_nodes: list[str]
+    ) -> tuple[dict[str, dict], dict[str, str]]:
+        """Run a level's work-bearing nodes through the AgentSupervisor.
+
+        Same contract as ``_compute_level_work``'s pool path: returns
+        (payloads, errors). Failure semantics are deterministic and identical —
+        a worker that errored, died, or returned a non-Mapping becomes an entry
+        in ``errors`` (and thus a FAILED node), exactly as with the bare pool.
+        The supervisor only spawns/observes/collects; this method never mutates
+        kernel state.
+        """
+        payloads: dict[str, dict] = {}
+        errors: dict[str, str] = {}
+        tasks = [
+            (nid, self.dag.node(nid).work, self.dag.node(nid).work_args)
+            for nid in work_nodes
+        ]
+        results = self.supervisor.run_batch(tasks)
+        for nid in work_nodes:
+            res = results.get(nid)
+            if res is None:
+                errors[nid] = "supervisor returned no result for node"
+            elif not res.ok:
+                errors[nid] = res.error or "worker failed"
+            elif not isinstance(res.payload, _abc.Mapping):
+                errors[nid] = (
+                    "worker returned a non-Mapping payload "
+                    f"({type(res.payload).__name__}); a dict is required"
+                )
+            else:
+                payloads[nid] = dict(res.payload)
         return payloads, errors
 
     def _commit_node(
@@ -1085,6 +1146,14 @@ class GraphExecutor:
         level's parallel-eligible batch, in deterministic id order.
         """
         return [list(b) for b in self._levels_executed]
+
+    @property
+    def agent_view(self):
+        """The supervisor's last AgentView (live worker PIDs/status/exit codes),
+        or None when no supervisor was supplied. Purely observational."""
+        if self.supervisor is None:
+            return None
+        return self.supervisor.snapshot()
 
     def report(self) -> dict:
         """Summarize the run: per-node results, status tally, completion."""
