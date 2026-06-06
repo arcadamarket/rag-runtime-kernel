@@ -53,7 +53,9 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "graph": "Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime",
     "resolve|defer|reopen|start|discard|supersede": "Guarded lifecycle transition of a tracked item via drift_store (DRIFT-ELIM)",
     "items": "Read-only render of the canonical tracked_items array",
-    "render": "Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items; --apply rewrites the legacy arrays atomically (DRIFT-ELIM increment 4)"
+    "render": "Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items; --apply rewrites the legacy arrays atomically (DRIFT-ELIM increment 4)",
+    "note": "Refresh a tracked item's one-line note through the guarded API (status untouched) — DRIFT-ELIM increment 5 (INS-038)",
+    "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5"
   },
   "use_when": "Any CLI invocation of rag_kernel"
 }
@@ -256,6 +258,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the rendered open_tasks + deferred_items back into the RAG atomically (else dry-run/print only).",
     )
     render_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
+
+    # -- note (DRIFT-ELIM increment 5: guarded note-update verb, INS-038) --
+    note_parser = subparsers.add_parser(
+        "note",
+        help="Refresh a tracked item's one-line note through the guarded API (status untouched).",
+    )
+    note_parser.add_argument("item_id", type=str, help="id of the tracked item")
+    note_parser.add_argument("note", type=str, help="new one-line note text")
+    note_parser.add_argument(
+        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    note_parser.add_argument(
+        "--session", type=str, required=True,
+        help="Session id stamped as last-touched (audit trail)",
+    )
+    note_parser.add_argument("--dry-run", action="store_true", help="Validate without writing")
+
+    # -- audit (DRIFT-ELIM increment 5: fail-loud session auditor) --
+    audit_parser2 = subparsers.add_parser(
+        "audit",
+        help="Audit the RAG: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores.",
+    )
+    audit_parser2.add_argument(
+        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    audit_parser2.add_argument(
+        "--strict", action="store_true",
+        help="Treat warnings as failures too (exit non-zero on any finding).",
+    )
+    audit_parser2.add_argument(
+        "--no-scan-root", dest="scan_root", action="store_false",
+        help="Skip the project-root side-store scan (Rule 13 check).",
+    )
+    audit_parser2.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
     return parser
 
@@ -778,6 +816,76 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_note(args: argparse.Namespace) -> int:
+    """Refresh a tracked item's note through the guarded API (DRIFT-ELIM inc 5, INS-038).
+
+    A note is metadata, not the canonical status authority, so this never changes
+    ``status`` and appends no history event. Routes through ``drift_store.set_note_in_file``
+    (atomic, .bak-refreshed); hand-editing the note in tracked_items is the drift
+    the auditor catches. Fails loud (writes nothing) on an unknown id.
+    """
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        TrackedItemStore,
+        load_hot,
+        set_note_in_file,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    try:
+        store = TrackedItemStore.from_hot(load_hot(rag_path))
+        if args.item_id not in store:
+            print(f"Error: no tracked item with id {args.item_id!r}", file=sys.stderr)
+            return 1
+        if args.dry_run:
+            current = store.get(args.item_id)
+            print(
+                f"[dry-run] would set note on {args.item_id} "
+                f"(status {current.status.value}, unchanged): {args.note!r}"
+            )
+            return 0
+        set_note_in_file(rag_path, args.item_id, args.note, session=args.session)
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print(f"Note updated on {args.item_id} (status untouched; .bak refreshed).")
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Run the fail-loud session auditor over the RAG (DRIFT-ELIM inc 5).
+
+    Asserts the rendered legacy arrays match the canonical tracked_items array
+    (E-040 regression), supersede refs resolve, no active item's note contradicts
+    its status (INS-038), and no Cowork-memory side stores exist in the project
+    root (Rule 13). Exit 0 if clean, 1 if any ERROR (or any finding under
+    ``--strict``).
+    """
+    from rag_kernel import drift_audit
+    from rag_kernel.drift_store import DriftStoreError
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    try:
+        report = drift_audit.audit_file(rag_path, scan_root=args.scan_root)
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json_output", False):
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(report.summary())
+
+    clean = report.is_clean(strict=args.strict)
+    return 0 if clean else 1
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     """Start or close a session logger via CLI.
 
@@ -1290,6 +1398,8 @@ def main(argv: list[str] | None = None) -> int:
         "discard": cmd_item_transition, "supersede": cmd_item_transition,
         "items": cmd_items,
         "render": cmd_render,
+        "note": cmd_note,
+        "audit": cmd_audit,
     }
     return commands[args.command](args)
 

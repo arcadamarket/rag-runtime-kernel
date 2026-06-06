@@ -330,6 +330,27 @@ class TrackedItem:
             history=self.history + (event,),
         )
 
+    def with_note(self, note: str, *, session: str) -> TrackedItem:
+        """Return a new TrackedItem with an updated one-line ``note`` (metadata).
+
+        The ``note`` is context, NOT the canonical status authority — refreshing
+        it never changes ``status`` and therefore appends no StatusEvent (the
+        history records lifecycle moves only). This is the *guarded* note path:
+        the only sanctioned way to refresh a note is through this method (and the
+        ``drift_store`` verb that wraps it), never a hand-edit of ``tracked_items``
+        — that hand-edit is exactly the drift DRIFT-ELIM removes (INS-038). A
+        stale note left behind by the absence of this path is what the inc-5
+        auditor's note/status-contradiction check now flags.
+
+        Fail-loud: ``note`` must be a string. ``session`` stamps who last touched
+        the item, matching ``with_status``.
+        """
+        if not isinstance(note, str):
+            raise ItemValidationError(
+                f"note must be a string, got {type(note).__name__}"
+            )
+        return replace(self, note=note, session=session)
+
     def to_dict(self) -> dict:
         """Serialise to a JSON-round-trippable dict (canonical field included)."""
         return {

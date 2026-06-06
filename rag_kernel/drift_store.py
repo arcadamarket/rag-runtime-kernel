@@ -52,7 +52,7 @@ project's own bookkeeping.
   "description": "Deterministic, atomic mutation API over the RAG tracked_items array (DRIFT-ELIM increment 2: store + persistence + migration, unregistered)",
   "exports": ["TrackedItemStore", "DriftStoreError", "DuplicateItemError",
               "UnknownItemError", "TRACKED_ITEMS_KEY", "DRIFT_STORE_VERSION",
-              "load_hot", "mutate_hot", "transition_in_file",
+              "load_hot", "mutate_hot", "transition_in_file", "set_note_in_file",
               "seed_items", "migrate_backlog", "migrate_backlog_file"],
   "use_when": "Reading, transitioning, or persisting the canonical status of tracked project items in RAG_MASTER.json",
   "never_bypass": true
@@ -220,6 +220,20 @@ class TrackedItemStore:
             item_id, ItemStatus.SUPERSEDED, session=session, reason=reason, superseded_by=by
         )
 
+    def set_note(self, item_id: str, note: str, *, session: str) -> TrackedItem:
+        """Refresh an item's one-line ``note`` through the guarded core (INS-038).
+
+        Routes through :meth:`TrackedItem.with_note` — the only sanctioned note
+        path — so a note is never refreshed by hand-editing ``tracked_items``
+        (that hand-edit IS the drift). Unknown id -> UnknownItemError. The status
+        is untouched (a note is metadata, not the canonical authority), so this
+        adds no StatusEvent. Returns the new immutable item.
+        """
+        current = self.get(item_id)
+        updated = current.with_note(note, session=session)
+        self._items[item_id] = updated
+        return updated
+
     # -- serialization ------------------------------------------------------
 
     def to_list(self) -> list[dict]:
@@ -293,6 +307,28 @@ def transition_in_file(
         lambda store: store.transition(
             item_id, new_status, session=session, reason=reason, superseded_by=superseded_by
         ),
+        now=now,
+    )
+
+
+def set_note_in_file(
+    path: Path | str,
+    item_id: str,
+    note: str,
+    *,
+    session: str,
+    now: Optional[str] = None,
+) -> dict:
+    """Atomically refresh one item's ``note`` in a RAG file (INS-038).
+
+    The guarded note-update counterpart to :func:`transition_in_file`: load ->
+    ``store.set_note`` -> atomic write (tmp -> verify -> .bak -> rename). The
+    canonical ``status`` is never touched. Fails loud (and writes nothing) on an
+    unknown id or a non-string note.
+    """
+    return mutate_hot(
+        path,
+        lambda store: store.set_note(item_id, note, session=session),
         now=now,
     )
 
