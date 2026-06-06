@@ -464,30 +464,19 @@ def cmd_configure(args: argparse.Namespace) -> int:
 
 def cmd_health(args: argparse.Namespace) -> int:
     import importlib
+
+    import rag_kernel
+
     project_path = str(args.path.resolve())
     if project_path not in sys.path:
         sys.path.insert(0, project_path)
 
-    modules = [
-        "rag_kernel.state_machine",
-        "rag_kernel.persistence",
-        "rag_kernel.schemas",
-        "rag_kernel.concurrency",
-        "rag_kernel.cold_manager",
-        "rag_kernel.api",
-        "rag_kernel.mcp_transport",
-        "rag_kernel.spec_parser",
-        "rag_kernel.session_logger",
-        "rag_kernel.conflict_engine",
-        "rag_kernel.generated_guards",
-        "rag_kernel.guardgen",
-        "rag_kernel.context_policy",
-        "rag_kernel.graph_orchestrator",
-        "rag_kernel.agent_supervisor",
-        "rag_kernel.drift_control",
-        "rag_kernel.drift_store",
-        "rag_kernel.__main__",
-    ]
+    # Single source of truth: the kernel's module set lives in _KERNEL_MODULES
+    # (rag_kernel/__init__.py), which discover() also walks. Deriving the health
+    # check from it — instead of a second hand-typed copy — means health can
+    # never silently disagree with discovery (INS-037; the same duplicate-
+    # authority drift DRIFT-ELIM removes for project state, applied to source).
+    modules = list(rag_kernel._KERNEL_MODULES)
 
     print("RAG Runtime Kernel - Health Check")
     print(f"Path: {project_path}")

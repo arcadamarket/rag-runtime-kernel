@@ -12,7 +12,26 @@ import sys
 
 import pytest
 
+import rag_kernel
 from rag_kernel.__main__ import build_parser, main
+
+
+class TestHealthSingleSource:
+    """cmd_health derives its module list from _KERNEL_MODULES (INS-037).
+
+    Regression guard: health must check *exactly* the kernel's module set, so
+    it can never silently disagree with discover(). If a future change adds a
+    module to _KERNEL_MODULES this test stays green automatically; if someone
+    re-introduces a divergent hardcoded list, the total stops matching and it
+    fails.
+    """
+
+    def test_health_total_equals_kernel_modules(self, capsys):
+        rc = main(["health", "--path", "."])
+        out = capsys.readouterr().out
+        n = len(rag_kernel._KERNEL_MODULES)
+        assert f"Result: {n}/{n} modules OK." in out
+        assert rc == 0
 
 
 # ===== Fixtures =====
