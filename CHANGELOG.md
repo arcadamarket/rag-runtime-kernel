@@ -4,8 +4,10 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased] — `main` (post-v0.3.0)
 
-_Work in progress toward the v4.0 Graph Orchestrator. The headline announcement
-is intentionally deferred until the orchestrator is complete and runtime-wired._
+_Work in progress toward the single-shot **v0.4.0**, which ships the v4.0 Graph
+Orchestrator (now feature-complete and runtime-wired) together with the
+**DRIFT-ELIM** deterministic project-state layer. The headline announcement is
+intentionally deferred until both are complete and released._
 
 ### Added — Graph Orchestrator: Pure DAG Core (GRAPH-ORCH, increment 1)
 - **`graph_orchestrator.py`** — deterministic, stdlib-only directed-acyclic-graph core. Zero dependencies, execution-free, fully self-contained.
@@ -61,6 +63,19 @@ is intentionally deferred until the orchestrator is complete and runtime-wired._
 - **MCP tool `rag_graph_run`** — the same entry over JSON-RPC (tool count 11 → 12).
 - Only `sequential` and `levels` schedules cross the serialized (JSON/CLI/MCP) boundary; `process_levels` needs picklable `work` callables and stays an in-process `GraphExecutor` option.
 - 17 new tests (`tests/test_runtime_wiring.py`) across all three surfaces + updated MCP tool-inventory assertions. **925 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 16/16. Still **unreleased** — the v4.0 release / headline announcement (INS-026) is the next, separate milestone.
+
+### Added — DRIFT-ELIM: Item-Lifecycle Pure Core (DRIFT-ELIM, increment 1)
+- **`drift_control.py`** — generalizes the `guardgen` "rules-as-data, fail-loud" discipline from state-machine *transitions* to the operating protocol's own *project state*. Pure, deterministic, stdlib-only, zero-LLM.
+- **`ItemStatus`** — the one constrained status vocabulary (`OPEN`, `IN_PROGRESS`, `RESOLVED`, `DEFERRED`, `SUPERSEDED`, `DISCARDED`); **`LIFECYCLE`** — the frozen transition table (`OPEN → IN_PROGRESS → {RESOLVED | DEFERRED | SUPERSEDED | DISCARDED}`, `DEFERRED ↔ OPEN`, three terminal), validated at import; **`legal_status_transition` / `assert_status_transition`** — fail-loud guards (`ItemStateError`) so an illegal move stops the caller, never a silent field-set.
+- **`TrackedItem`** — immutable item with **one** canonical status, append-only `history`, the `superseded_by` invariant, and JSON round-trip. A status change returns a *new* item; the audit trail is intrinsic.
+- **Scope boundary (deliberate):** not registered in `_KERNEL_MODULES` / `discover()` / `cmd_health` — the persistence/mutation layer, CLI, renders, and auditor land in later increments. 45 new tests (`tests/test_drift_control.py`). **970 total tests**, all passing; `guardgen --check` green (sha `268149294421`, no model drift); health 16/16. **Unreleased**.
+
+### Added — DRIFT-ELIM: Deterministic Mutation API + Backlog Migration (DRIFT-ELIM, increment 2)
+- **`drift_store.py`** — the persistence + mutation layer over increment 1. Normalizes project state into ONE array — **`tracked_items`** in `RAG_MASTER.json` — read into / written from a **`TrackedItemStore`** keyed by id (unique-id invariant, deterministic id-sorted serialization).
+- **Guarded mutations only** — every status change routes through `TrackedItem.with_status`; an illegal transition, unknown id, or duplicate id **fails loud and writes nothing**. There is deliberately no "set the field" path — that path is exactly how status drift entered the project (E-034 / E-037 / E-039 / E-040).
+- **Atomic persistence** — `mutate_hot` / `transition_in_file` load → apply a guarded transition → write via `persistence.atomic_write_json` (tmp → verify → `.bak` → rename), as one transaction. A tripped guard leaves the prior `RAG_MASTER.json` and its `.bak` intact. **No hand-edited JSON** — the bytes on disk are produced by the deterministic serializer over validated items.
+- **Backlog migration** — `seed_items` / `migrate_backlog[_file]` perform the one-time seeding of `tracked_items` from the legacy `open_tasks` + `deferred_items` backlog (each item's status is an explicit human-authored proposal, not a parse of the legacy prose). Refuses to clobber a non-empty array unless `allow_overwrite`.
+- **Scope boundary (deliberate):** not yet registered — the `rag_kernel resolve|defer` CLI + registration is increment 3; rendering the legacy stores / ERROR_LOG / status-report *from* this canonical array is increment 4; the fail-loud session auditor is increment 5. 32 new tests (`tests/test_drift_store.py`). **1002 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 16/16. **Unreleased**.
 
 ## [v0.3.0] — 2026-06-01
 
