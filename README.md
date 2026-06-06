@@ -19,14 +19,14 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **Who it's for** | Anyone. No Python, no Node, no install. | Builders of large, multi-session, token-critical projects who want hard guarantees. |
 | **What you run** | One markdown specification, dropped into a chat session. | The `rag_kernel` Python runtime (MCP or HTTP server) alongside the spec. |
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
-| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 758 passing tests. |
+| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,082 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.0** | Runtime kernel **v0.3.0** |
+| **Version** | Specification **v3.2.0** | Runtime kernel **v0.4.0** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
 
-> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.0`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.3.0`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.0`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.0`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
@@ -40,7 +40,7 @@ RAG Runtime Kernel moves that bookkeeping out of the model. State lives in plain
 
 - **State management leaves the LLM entirely.** The model proposes a JSON action; the kernel validates it against policy and either commits or rejects it. The model never directly mutates state.
 - **Bootstrap costs zero LLM tokens.** `rag_kernel init` parses the ~100 KB specification and produces `RAG_MASTER.json` deterministically — no model call. The work that used to mean "feed the model a 20K-token spec and ask it to build the RAG" is now a function call.
-- **Determinism is proven, not asserted.** The state machine is verified with TLA+ (the same class of formal method Amazon uses for AWS) and exercised by 758 unit tests — all passing.
+- **Determinism is proven, not asserted.** The state machine is verified with TLA+ (the same class of formal method Amazon uses for AWS) and exercised by 1,082 unit tests — all passing.
 
 **What you get in both tiers:**
 
@@ -121,10 +121,10 @@ This section states only what is measured or formally verified — no marketing 
 
 **Determinism (Tier 2):**
 
-- **758 / 758 unit tests passing** (runtime v0.3.0) across 13 runtime modules (state machine with TLA+-enforced transition guards, persistence/WAL, COLD manager, concurrency, conflict engine, schemas, HTTP API, MCP transport, spec parser, session logger, generated guards, guard generator, context-truncation policy).
+- **1,082 / 1,082 unit tests passing** (runtime v0.4.0) across 19 runtime modules (state machine with TLA+-enforced transition guards, persistence/WAL, COLD manager, concurrency, conflict engine, schemas, HTTP API, MCP transport, spec parser, session logger, generated guards, guard generator, context-truncation policy, graph orchestrator, agent/session supervisor, and the DRIFT-ELIM project-state layer — item-lifecycle core, atomic mutation store, deterministic renders, and the fail-loud session auditor).
 - **TLA+ formal verification:** the TLC model checker exhaustively explored **389,522 states (168,520 distinct)** to depth 19 and confirmed **8 safety invariants + 3 liveness properties with zero violations**. The TLA+ spec is a 1:1 transcription of the Python state machine. Two genuine liveness bugs were found and fixed during verification.
 - **The verified model is now mechanically enforced at runtime (FV-PHASE4):** the state machine's transition table is *generated* from the TLA+ model and legality is checked through the generated predicate — the runtime can no longer drift from what TLC proved. A `guardgen --check` gate detects any model/code divergence.
-- Unit tests prove "these 758 scenarios work." TLA+ proves "no reachable state can violate the invariants, and the system always makes progress." The second is a strictly stronger guarantee.
+- Unit tests prove "these 1,082 scenarios work." TLA+ proves "no reachable state can violate the invariants, and the system always makes progress." The second is a strictly stronger guarantee.
 
 **Token economy (Tier 2):**
 
@@ -143,7 +143,7 @@ A positioning comparison, not a controlled benchmark. Full notes: [`docs/benchma
 | Capability | RAG Runtime Kernel | Claude Code | lean-ctx | LLM Wiki |
 |---|---|---|---|---|
 | **Cross-session memory** | Full: HOT/COLD + WAL + crash recovery | Partial: CLAUDE.md + auto-memory, no crash recovery | None (compresses I/O, doesn't persist state) | Pattern only |
-| **Deterministic state machine** | Yes — formally verified (TLA+), 758 tests | No | No | No |
+| **Deterministic state machine** | Yes — formally verified (TLA+), 1,082 tests | No | No | No |
 | **Where state work runs** | Off the LLM, in Python (Tier 2) | In-session, model-mediated | N/A — I/O compression layer | In the LLM / external tooling |
 | **Token approach** | State ops cost **0 LLM tokens**; lean HOT boot | Grows without curation | **60–99% raw I/O compression (best in class)** | Depends on wiki quality |
 | **Cross-platform** | Claude + GPT + any LLM, one spec | Claude Code CLI only | Editor-focused | Platform-agnostic pattern |
@@ -257,9 +257,9 @@ rag-runtime-kernel/
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
 │   ├── v3.2_ARCHITECTURE_DESIGN.md            # Runtime architecture design doc
 │   └── ROADMAP.md                             # Development roadmap
-├── rag_kernel/                                # Tier 2 runtime kernel (v0.3.0)
+├── rag_kernel/                                # Tier 2 runtime kernel (v0.4.0)
 │   ├── __init__.py                            # Package entry, discover() capability registry
-│   ├── __main__.py                            # CLI (init / configure / health / serve / mcp / session / checkpoint / gc)
+│   ├── __main__.py                            # CLI (init / configure / health / serve / mcp / session / checkpoint / gc / graph / resolve / defer / render / note)
 │   ├── api.py                                 # HTTP API (FastAPI)
 │   ├── state_machine.py                       # Deterministic state engine
 │   ├── persistence.py                         # Atomic writes, WAL, hash verification
@@ -273,12 +273,13 @@ rag-runtime-kernel/
 │   ├── guardgen.py                            # Deterministic TLA+ → Python guard generator (build-time)
 │   ├── generated_guards.py                    # Generated, runtime-enforced transition table + guards
 │   ├── context_policy.py                      # Kernel-enforced context-truncation policy (M-009)
-│   ├── graph_orchestrator.py                  # Graph Orchestrator: DAG core + execution engine (v4.0, on main — runtime-wired, unreleased)
-│   ├── agent_supervisor.py                    # Graph Orchestrator: observable off-process worker supervisor / AgentView (v4.0, on main — runtime-wired, unreleased)
-│   ├── drift_control.py                       # DRIFT-ELIM: item-lifecycle core — ItemStatus enum + LIFECYCLE guards + immutable TrackedItem (on main, unreleased)
-│   ├── drift_store.py                         # DRIFT-ELIM: atomic mutation API over tracked_items + backlog migration; lifecycle CLI (on main, unreleased)
-│   └── drift_render.py                        # DRIFT-ELIM: deterministic renders of open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items (sole authority); render CLI (on main, unreleased)
-├── tests/                                     # 758 tests (v0.3.0 release); 1051 on main incl. orchestrator 1–7 + runtime-wiring + DRIFT-ELIM 1–4
+│   ├── graph_orchestrator.py                  # Graph Orchestrator: DAG core + execution engine (v0.4.0)
+│   ├── agent_supervisor.py                    # Graph Orchestrator: observable off-process worker supervisor / AgentView (v0.4.0)
+│   ├── drift_control.py                       # DRIFT-ELIM: item-lifecycle core — ItemStatus enum + LIFECYCLE guards + immutable TrackedItem (v0.4.0)
+│   ├── drift_store.py                         # DRIFT-ELIM: atomic mutation API over tracked_items + backlog migration; lifecycle CLI (v0.4.0)
+│   ├── drift_render.py                        # DRIFT-ELIM: deterministic renders of open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items (sole authority); render CLI (v0.4.0)
+│   └── drift_audit.py                         # DRIFT-ELIM: fail-loud session-boundary auditor — render parity, supersede refs, note/status, side-store scan (v0.4.0)
+├── tests/                                     # 1,082 tests (v0.4.0 release)
 ├── .github/                                   # FUNDING.yml + issue templates
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
@@ -316,7 +317,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 | Runtime | **v0.3.0** | Released | 13 modules, 758 tests. TLA+ guards **enforced** at runtime (FV-PHASE3/4) — transition table generated from the model, `guardgen`/`generated_guards` registered; **M-009** kernel-enforced context-truncation policy (per-region token accounting, deterministic eviction, HOT never evicted, checkpoint/evict/halt). |
 | Runtime | **v0.2.7** | Released | 12 modules, 676 tests. Graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
 | Runtime | **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). |
-| Runtime | **v4.0** | In progress (`main`, unreleased) | Graph Orchestrator: DAG execution, dependency tracking, deterministic-levels scheduling, checkpoint-per-node, transactional rollback, OS-process parallel work, and an observable agent/session supervisor. All 7 core increments **plus runtime-wiring** landed on `main` — invokable via `KernelApp.run_graph`, CLI `rag_kernel graph run`, and MCP `rag_graph_run`. Plus **DRIFT-ELIM** (deterministic project-state layer) increments 1–4 on `main`: item-lifecycle core, atomic mutation API over `tracked_items` + backlog migration, the `rag_kernel resolve\|defer\|…` lifecycle CLI, and deterministic **renders** that make `tracked_items` the sole authority (legacy `open_tasks`/`deferred_items`/backlog become projections via `rag_kernel render`). Registered, 18 modules, health 19/19, 1051 tests. Both layers **not yet in a release** — they ship together as the single-shot **v0.4.0**, the next milestone. |
+| Runtime | **v0.4.0** | Released | **Graph Orchestrator** — DAG execution, dependency tracking, deterministic-levels + OS-process parallel scheduling, checkpoint-per-node, transactional rollback, and an observable agent/session supervisor; runtime-wired via `KernelApp.run_graph`, CLI `rag_kernel graph run`, and MCP `rag_graph_run`. **DRIFT-ELIM** (deterministic project-state layer) — item-lifecycle core, atomic mutation API over `tracked_items` + backlog migration, the `rag_kernel resolve\|defer\|…` lifecycle CLI, deterministic **renders** making `tracked_items` the sole authority (legacy `open_tasks`/`deferred_items`/backlog become projections via `rag_kernel render`), and a fail-loud session auditor that asserts render == canonical. 19 modules, health 20/20, 1,082 tests. |
 
 ## Reporting Issues
 

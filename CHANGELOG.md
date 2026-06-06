@@ -2,12 +2,20 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
-## [Unreleased] — `main` (post-v0.3.0)
+## [v0.4.0] — 2026-06-06
 
-_Work in progress toward the single-shot **v0.4.0**, which ships the v4.0 Graph
-Orchestrator (now feature-complete and runtime-wired) together with the
-**DRIFT-ELIM** deterministic project-state layer. The headline announcement is
-intentionally deferred until both are complete and released._
+The single-shot **v0.4.0** ships two layers that were developed across many
+increments on `main` and are released together: the **v4.0 Graph Orchestrator**
+(deterministic DAG execution, deterministic-levels + OS-process parallel
+scheduling, checkpoint-per-node, transactional rollback, an observable
+agent/session supervisor, and runtime entry points `KernelApp.run_graph` / CLI
+`graph run` / MCP `rag_graph_run`) and **DRIFT-ELIM**, the deterministic
+project-state layer that makes a single canonical `tracked_items` array the sole
+status authority — guarded item-lifecycle, atomic mutation API, lifecycle CLI,
+deterministic renders of the legacy stores, and a fail-loud session auditor that
+asserts render == canonical. 19 capability modules, health 20/20, **1,082
+tests**, all passing; `guardgen --check` drift gate green (sha `268149294421`,
+no model drift). The per-increment development history follows.
 
 ### Added — Graph Orchestrator: Pure DAG Core (GRAPH-ORCH, increment 1)
 - **`graph_orchestrator.py`** — deterministic, stdlib-only directed-acyclic-graph core. Zero dependencies, execution-free, fully self-contained.
@@ -96,7 +104,7 @@ intentionally deferred until both are complete and released._
 - **Fail-loud contract** — `audit_hot` / `audit_file` return an `AuditReport` (never raise for a finding); **`assert_clean`** raises `DriftAuditError` on any ERROR (and, under `strict=True`, on warnings too). `rag_kernel audit [--rag PATH] [--strict] [--no-scan-root] [--json]` exits non-zero on a dirty audit so a divergence stops the session.
 - **Guarded note-update verb (INS-038)** — `TrackedItem.with_note` (core) → `TrackedItemStore.set_note` / `set_note_in_file` (store, atomic, `.bak`-refreshed) → **`rag_kernel note <id> "<text>" --session <S>`** (CLI). Refreshing a note never changes `status` and appends no history event (a note is metadata, not the canonical authority); previously a note could only be set at creation/migration, so it went stale while status stayed correct — the exact gap the auditor's note check now also flags.
 - **`drift_audit` is now registered** in `_KERNEL_MODULES`, `discover()`, and `cmd_health` (declares `never_bypass` → critical). **Functional module count reconciled 18 → 19**; **health is now 20/20** (19 capability modules + `__main__`).
-- **Dogfooded** on the project's own RAG: the auditor reported render parity intact + flagged two stale notes (`DRIFT-ELIM`, `RECONCILE-PASS-RECURRING`); both were refreshed through the new guarded `note` verb, the legacy arrays re-rendered, and the auditor re-run **clean (0 findings)** — the full detect → guarded-fix → re-render → verify loop. 31 new tests (`tests/test_drift_audit.py`; the manifest-count test updated 18 → 19). **1082 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 20/20. Still **unreleased** — DRIFT-ELIM is now feature-complete and ships with the Graph Orchestrator as the single-shot **v0.4.0**.
+- **Dogfooded** on the project's own RAG: the auditor reported render parity intact + flagged two stale notes (`DRIFT-ELIM`, `RECONCILE-PASS-RECURRING`); both were refreshed through the new guarded `note` verb, the legacy arrays re-rendered, and the auditor re-run **clean (0 findings)** — the full detect → guarded-fix → re-render → verify loop. 31 new tests (`tests/test_drift_audit.py`; the manifest-count test updated 18 → 19). **1082 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 20/20. DRIFT-ELIM is feature-complete and ships with the Graph Orchestrator as the single-shot **v0.4.0** (this release).
 
 ## [v0.3.0] — 2026-06-01
 
@@ -326,9 +334,9 @@ kernel-enforced context-truncation policy (M-009).
 
 ## Development Status
 
-**Current:** Spec v3.2.0 (51 sections) and rag_kernel v0.3.0 (13 modules, 758 tests). Zero-touch bootstrap, capability self-discovery, graduated POV, delta checkpoints, session logger, conflict auto-categorization (ENH-005), the formally-verified guard generator now enforced at runtime (FV-PHASE3 + FV-PHASE4), and the kernel-enforced context-truncation policy (M-009) shipped. Formal verification complete through Phase 2: 389,522 states (168,520 distinct), 8 safety + 3 liveness invariants, 0 violations.
+**Current:** Spec v3.2.0 (51 sections) and rag_kernel v0.4.0 (19 modules, 1,082 tests). Zero-touch bootstrap, capability self-discovery, graduated POV, delta checkpoints, session logger, conflict auto-categorization (ENH-005), the formally-verified guard generator enforced at runtime (FV-PHASE3 + FV-PHASE4), the kernel-enforced context-truncation policy (M-009), the v4.0 Graph Orchestrator (DAG execution, deterministic-levels + OS-process scheduling, checkpoint-per-node, transactional rollback, agent/session supervisor, runtime-wired), and the DRIFT-ELIM deterministic project-state layer (canonical `tracked_items`, guarded lifecycle, deterministic renders, fail-loud session auditor) all shipped. Formal verification complete through Phase 2: 389,522 states (168,520 distinct), 8 safety + 3 liveness invariants, 0 violations.
 
-**Next:** the v4.0 Graph Orchestrator (DAG execution, dependency tracking, checkpoint-per-node, rollback).
+**Next:** post-v0.4.0 — community engagement, donation links, and the v0.5 self-hosted SDK agent harness.
 
 **Repository:** [github.com/arcadamarket/rag-runtime-kernel](https://github.com/arcadamarket/rag-runtime-kernel)
 **Developer:** Artem Pakhol

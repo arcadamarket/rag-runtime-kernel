@@ -5,7 +5,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OS-level runtime bridge for LLM memory persistence",
   "spec_version": "3.2.0",
   "python_requires": ">=3.10",
@@ -57,7 +57,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 # ── Capability Discovery ──────────────────────────────────────

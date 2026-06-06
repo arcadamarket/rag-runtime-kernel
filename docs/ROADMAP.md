@@ -118,14 +118,13 @@ kernel-enforced context-truncation policy. 13 modules, 758 tests.
 
 ---
 
-## v4.0 — Graph Orchestrator (In progress — unreleased on `main`)
+## v4.0 — Graph Orchestrator (Released in v0.4.0 — 2026-06-06)
 
 Target: Multi-step workflow orchestration with dependency tracking.
 
 Built incrementally (one milestone per session), behind a deliberate scope
-boundary. All seven core increments (1–7) have landed on `main` but are **not yet
-in a release**; the v4.0 headline announcement is deferred until the orchestrator
-is runtime-wired into the kernel entry points.
+boundary. All seven core increments (1–7) plus runtime-wiring landed on `main`
+and **shipped in the single-shot v0.4.0** (2026-06-06), together with DRIFT-ELIM.
 
 | Component | Description | Status |
 |---|---|---|
@@ -137,14 +136,14 @@ is runtime-wired into the kernel entry points.
 | OS-process parallel work | `Schedule.PROCESS_LEVELS` — a level's nodes run their pure work in separate OS processes; commit stays serialized in deterministic sorted-id order under the file-mutex | Done — increment 6 |
 | Agent / session supervisor | `agent_supervisor.py` — thin observable spawn/monitor/collect layer over the off-process workers (live PID/state/exit code as an `AgentView`); owns no authoritative state; module count 14 → 15; health 16/16 | Done — increment 7 |
 | Runtime-wiring | `KernelApp.run_graph` + CLI `graph run` + MCP `rag_graph_run` — invokable through the kernel runtime from a JSON-serializable DAG spec; no new schema/WAL/TLA+; 925 tests, health 16/16 | Done — final gate |
-| v4.0 release | Cut the v4.0 release / tag + publish the headline announcement; reconcile headline counts to a released v4.0 | Planned — next milestone |
+| v4.0 release | Cut the `runtime-v0.4.0` release / tag + publish the headline announcement; headline counts reconciled to a released v0.4.0 | **Shipped — v0.4.0 (2026-06-06)** |
 
 ### Prerequisites
 - Formal verification Phase 2+ (transition guards must be provably correct before graph nodes enforce them) — **met** (FV-PHASE3/4 enforced at runtime).
 
 ---
 
-## DRIFT-ELIM — Deterministic Project-State Layer (In progress — unreleased on `main`)
+## DRIFT-ELIM — Deterministic Project-State Layer (Released in v0.4.0 — 2026-06-06)
 
 Target: eliminate the cross-store status-drift class (E-034 / E-037 / E-039 /
 E-040) by giving every tracked project item **one** canonical status, mutated only
@@ -175,6 +174,5 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 
 | Priority | Items | Target |
 |---|---|---|
-| **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.3.0 (13 modules, 758 tests, zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), FV-PHASE3/4 (guard generation enforced at runtime), M-009 (context-truncation policy) | Done |
-| **IN PROGRESS** | Graph orchestrator (v4.0) — all 7 core increments **plus runtime-wiring** on `main` (pure DAG core, execution engine, deterministic-levels scheduling, transactional rollback, registration, OS-process parallel work, agent/session supervisor, runtime entry points `run_graph`/CLI `graph run`/MCP `rag_graph_run`). **DRIFT-ELIM** deterministic project-state layer — increments 1–5 on `main` (item-lifecycle core, mutation API + backlog migration, lifecycle CLI + registration, renders making `tracked_items` the sole authority, fail-loud session auditor + guarded note verb); **feature-complete**, 19 capability modules, health 20/20, 1082 tests. Both layers **unreleased**; ship together as the single-shot v0.4.0 (announcement deferred until release) | v4.0 |
-| **LOW** | v0.4.0 release / tag + headline announcement (reconcile headline counts to a released v0.4.0) | v4.0+ |
+| **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.3.0 (zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), FV-PHASE3/4 (guard generation enforced at runtime), M-009 (context-truncation policy), **rag_kernel v0.4.0 (2026-06-06) — Graph Orchestrator + DRIFT-ELIM; 19 modules, health 20/20, 1,082 tests** | Done |
+| **NEXT** | Post-v0.4.0: community engagement monitoring, donation links, v0.5 self-hosted SDK agent harness, third-party ecosystem integration research | TBD |
