@@ -86,25 +86,26 @@ class TestModuleRegistration:
         registry = rag_kernel.discover()
         assert "generated_guards" in registry["critical_modules"]
 
-    def test_manifest_module_count_is_seventeen(self):
-        """The functional-capability count (manifest dict) is 17.
+    def test_manifest_module_count_is_eighteen(self):
+        """The functional-capability count (manifest dict) is 18.
 
         FV-PHASE4 reconciled the count to 12; M-009 added context_policy as
         the 13th functional module; GRAPH-ORCH increment 5 (INS-025)
         registered graph_orchestrator as the 14th; GRAPH-ORCH increment 7
         (INS-030) registered agent_supervisor as the 15th; DRIFT-ELIM
         increment 3 registered drift_control as the 16th and drift_store as
-        the 17th.
+        the 17th; DRIFT-ELIM increment 4 registered drift_render as the 18th.
         """
         registry = rag_kernel.discover()
         manifest_modules = registry["package"]["modules"]
-        assert len(manifest_modules) == 17
+        assert len(manifest_modules) == 18
         assert "generated_guards" in manifest_modules
         assert "guardgen" in manifest_modules
         assert "context_policy" in manifest_modules
         assert "graph_orchestrator" in manifest_modules
         assert "drift_control" in manifest_modules
         assert "drift_store" in manifest_modules
+        assert "drift_render" in manifest_modules
 
     def test_graph_orchestrator_registered(self):
         """GRAPH-ORCH increment 5 (INS-025): graph_orchestrator is wired into
@@ -141,3 +142,13 @@ class TestModuleRegistration:
         assert "drift_store" in registry["modules"]
         assert "item_store" in registry["capabilities"]
         assert "drift_store" in registry["critical_modules"]
+
+    def test_drift_render_registered(self):
+        """DRIFT-ELIM increment 4: drift_render is wired into _KERNEL_MODULES
+        and surfaced by discover() as a capability module, and is critical
+        (never_bypass — renders must not be hand-authored)."""
+        assert "rag_kernel.drift_render" in rag_kernel._KERNEL_MODULES
+        registry = rag_kernel.discover()
+        assert "drift_render" in registry["modules"]
+        assert "state_render" in registry["capabilities"]
+        assert "drift_render" in registry["critical_modules"]

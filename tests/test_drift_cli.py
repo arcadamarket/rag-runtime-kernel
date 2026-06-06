@@ -188,3 +188,58 @@ class TestItemsRender:
         before = rag_path.read_text(encoding="utf-8")
         main(["items", "--rag", str(rag_path)])
         assert rag_path.read_text(encoding="utf-8") == before
+
+
+# ===== render (DRIFT-ELIM increment 4) =====
+
+class TestRenderCommand:
+    def test_render_dry_run_prints_and_does_not_write(self, rag_path, capsys):
+        before = rag_path.read_text(encoding="utf-8")
+        rc = main(["render", "--rag", str(rag_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "open_tasks (render)" in out
+        assert rag_path.read_text(encoding="utf-8") == before  # dry-run never writes
+
+    def test_render_json_emits_all_sections(self, rag_path, capsys):
+        rc = main(["render", "--rag", str(rag_path), "--json"])
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert set(data) == {"open_tasks", "deferred_items", "backlog"}
+
+    def test_render_apply_rewrites_legacy_arrays(self, rag_path):
+        # seed a stale hand-authored open_tasks to prove it gets overwritten
+        hot = _load(rag_path)
+        hot["open_tasks"] = ["STALE hand-authored entry"]
+        rag_path.write_text(json.dumps(hot, indent=2), encoding="utf-8")
+
+        rc = main(["render", "--rag", str(rag_path), "--apply"])
+        assert rc == 0
+        after = _load(rag_path)
+        # only OPEN / IN_PROGRESS items render into open_tasks (DEF-1 excluded)
+        joined = json.dumps(after["open_tasks"])
+        assert "STALE" not in joined
+        assert "OPEN-1" in joined and "PROG-1" in joined and "OPEN-2" in joined
+        assert "DEF-1" not in joined
+        # deferred_items holds exactly the DEFERRED item
+        assert [o["id"] for o in after["deferred_items"]] == ["DEF-1"]
+        # canonical array preserved
+        assert len(after["tracked_items"]) == 4
+
+    def test_render_apply_is_idempotent(self, rag_path):
+        main(["render", "--rag", str(rag_path), "--apply"])
+        first = _load(rag_path)
+        main(["render", "--rag", str(rag_path), "--apply"])
+        second = _load(rag_path)
+        assert first["open_tasks"] == second["open_tasks"]
+        assert first["deferred_items"] == second["deferred_items"]
+
+    def test_render_missing_rag_exits_1(self, tmp_path):
+        rc = main(["render", "--rag", str(tmp_path / "absent.json")])
+        assert rc == 1
+
+    def test_render_error_log_what(self, rag_path, capsys):
+        rc = main(["render", "--rag", str(rag_path), "--what", "error_log"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Backlog status" in out and "### Deferred" in out

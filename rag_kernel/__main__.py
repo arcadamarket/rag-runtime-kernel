@@ -30,9 +30,10 @@ Commands:
     resolve    Guarded lifecycle transition of a tracked item to RESOLVED
                (siblings: defer, reopen, start, discard, supersede) via drift_store.
     items      List the canonical tracked_items array (read-only render).
+    render     Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items (--apply to write).
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md section 9
-Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (session/checkpoint/gc), GRAPH-ORCH runtime-wiring (graph command), DRIFT-ELIM increment 3 (resolve|defer|… + items)
+Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (session/checkpoint/gc), GRAPH-ORCH runtime-wiring (graph command), DRIFT-ELIM increment 3 (resolve|defer|… + items), DRIFT-ELIM increment 4 (render)
 
 @rag-kernel-manifest
 {
@@ -51,7 +52,8 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "audit-env": "Audit environment — enumerate Python versions, pip, package managers, project deps",
     "graph": "Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime",
     "resolve|defer|reopen|start|discard|supersede": "Guarded lifecycle transition of a tracked item via drift_store (DRIFT-ELIM)",
-    "items": "Read-only render of the canonical tracked_items array"
+    "items": "Read-only render of the canonical tracked_items array",
+    "render": "Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items; --apply rewrites the legacy arrays atomically (DRIFT-ELIM increment 4)"
   },
   "use_when": "Any CLI invocation of rag_kernel"
 }
@@ -235,6 +237,25 @@ def build_parser() -> argparse.ArgumentParser:
     items_parser.add_argument("--status", type=str, default=None, help="Filter by status (e.g. OPEN, DEFERRED)")
     items_parser.add_argument("--kind", type=str, default=None, help="Filter by kind (e.g. TASK, MILESTONE)")
     items_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of a table")
+
+    # -- render (DRIFT-ELIM increment 4: project tracked_items into legacy surfaces) --
+    render_parser = subparsers.add_parser(
+        "render",
+        help="Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from the canonical tracked_items array.",
+    )
+    render_parser.add_argument(
+        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    render_parser.add_argument(
+        "--what", choices=["open_tasks", "deferred_items", "backlog", "error_log", "all"],
+        default="all", help="Which render to emit (default: all)",
+    )
+    render_parser.add_argument(
+        "--apply", action="store_true",
+        help="Write the rendered open_tasks + deferred_items back into the RAG atomically (else dry-run/print only).",
+    )
+    render_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
     return parser
 
@@ -692,6 +713,68 @@ def cmd_items(args: argparse.Namespace) -> int:
     for it in items:
         sup = f"  -> {it.superseded_by}" if it.superseded_by else ""
         print(f"  {it.id:<{width}}  {it.status.value:<12} {it.kind.value:<10} {it.title}{sup}")
+    return 0
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    """Render legacy surfaces from the canonical tracked_items array (DRIFT-ELIM inc 4).
+
+    Default is a dry-run that PRINTS the requested render. ``--apply`` regenerates
+    the legacy ``open_tasks`` + ``deferred_items`` arrays in the RAG file itself,
+    atomically (tmp -> verify -> .bak -> rename), making them projections of the
+    canonical array. Hand-editing those arrays afterwards is the drift the inc-5
+    session auditor will catch.
+    """
+    from rag_kernel.drift_store import DriftStoreError, TrackedItemStore, load_hot
+    from rag_kernel import drift_render
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    try:
+        hot = load_hot(rag_path)
+        store = TrackedItemStore.from_hot(hot)
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if args.apply:
+        drift_render.apply_renders_file(rag_path)
+        rendered = drift_render.render_all(store)
+        print(
+            f"Applied renders to {rag_path}: "
+            f"{len(rendered['open_tasks'])} open_tasks, "
+            f"{len(rendered['deferred_items'])} deferred_items "
+            "(tracked_items untouched; .bak refreshed)."
+        )
+        return 0
+
+    what = args.what
+    if getattr(args, "json_output", False):
+        payload = drift_render.render_all(store)
+        if what != "all":
+            key = "backlog" if what in ("backlog", "error_log") else what
+            payload = {key: payload[key]} if key in payload else payload
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    if what in ("open_tasks", "all"):
+        print("# open_tasks (render)")
+        for line in drift_render.render_open_tasks(store):
+            print(f"  {line}")
+        print()
+    if what in ("deferred_items", "all"):
+        print("# deferred_items (render)")
+        for obj in drift_render.render_deferred_items(store):
+            print(f"  {obj['id']}: {obj['title']} [{obj['status']}]")
+        print()
+    if what in ("backlog", "all"):
+        print("# Rule 12 backlog (render)")
+        print(drift_render.render_backlog_markdown(store))
+        print()
+    if what == "error_log":
+        print(drift_render.render_error_log_backlog(store))
     return 0
 
 
@@ -1206,6 +1289,7 @@ def main(argv: list[str] | None = None) -> int:
         "reopen": cmd_item_transition, "start": cmd_item_transition,
         "discard": cmd_item_transition, "supersede": cmd_item_transition,
         "items": cmd_items,
+        "render": cmd_render,
     }
     return commands[args.command](args)
 
