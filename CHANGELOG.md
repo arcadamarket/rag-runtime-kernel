@@ -77,6 +77,13 @@ intentionally deferred until both are complete and released._
 - **Backlog migration** — `seed_items` / `migrate_backlog[_file]` perform the one-time seeding of `tracked_items` from the legacy `open_tasks` + `deferred_items` backlog (each item's status is an explicit human-authored proposal, not a parse of the legacy prose). Refuses to clobber a non-empty array unless `allow_overwrite`.
 - **Scope boundary (deliberate):** not yet registered — the `rag_kernel resolve|defer` CLI + registration is increment 3; rendering the legacy stores / ERROR_LOG / status-report *from* this canonical array is increment 4; the fail-loud session auditor is increment 5. 32 new tests (`tests/test_drift_store.py`). **1002 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 16/16. **Unreleased**.
 
+### Added / Changed — DRIFT-ELIM: Lifecycle CLI + Registration (DRIFT-ELIM, increment 3)
+- **Item-lifecycle CLI** — six top-level verbs over `drift_store`: `rag_kernel resolve | defer | reopen | start | discard | supersede <item-id> --session <S> [--rag PATH] [--reason …]` (and `supersede … --by <other-id>`). The verb selects the target `ItemStatus`; `drift_control`'s lifecycle guard decides legality and `drift_store` persists atomically. An illegal move, unknown id, or missing file **fails loud and writes nothing** (exit 1); `--dry-run` reports legality without writing. There is deliberately no "set the field" path on the CLI either.
+- **`rag_kernel items [--status S] [--kind K] [--json]`** — a read-only render of the canonical `tracked_items` array (never mutates), the direct renderer the later status-report / ERROR_LOG renders (increment 4) build on.
+- **`drift_control` + `drift_store` are now registered** in `_KERNEL_MODULES`, `discover()`, and `cmd_health`, and appear in the package manifest `modules` dict (both declare `never_bypass` → they surface as critical modules). The deliberate scope boundary that held across increments 1–2 is now closed.
+- **Functional module count reconciled 15 → 17** (documented convention in `__init__.py`); **health is now 18/18** (17 capability modules + `__main__`).
+- 21 new tests (19 in `tests/test_drift_cli.py` + 2 registration tests in `tests/test_fv_phase4_enforcement.py`; the manifest-count test updated 15 → 17). **1023 total tests**, all passing; zero regressions; `guardgen --check` green (sha `268149294421`, no model drift); health 18/18. Still **unreleased** — renders (increment 4) and the fail-loud session auditor (increment 5) remain before the single-shot v0.4.0.
+
 ## [v0.3.0] — 2026-06-01
 
 This release bundles the formal-verification enforcement work (FV-PHASE3 +

@@ -274,8 +274,10 @@ rag-runtime-kernel/
 │   ├── generated_guards.py                    # Generated, runtime-enforced transition table + guards
 │   ├── context_policy.py                      # Kernel-enforced context-truncation policy (M-009)
 │   ├── graph_orchestrator.py                  # Graph Orchestrator: DAG core + execution engine (v4.0, on main — runtime-wired, unreleased)
-│   └── agent_supervisor.py                    # Graph Orchestrator: observable off-process worker supervisor / AgentView (v4.0, on main — runtime-wired, unreleased)
-├── tests/                                     # 758 tests (v0.3.0 release); 925 on main incl. orchestrator increments 1–7 + runtime-wiring
+│   ├── agent_supervisor.py                    # Graph Orchestrator: observable off-process worker supervisor / AgentView (v4.0, on main — runtime-wired, unreleased)
+│   ├── drift_control.py                       # DRIFT-ELIM: item-lifecycle core — ItemStatus enum + LIFECYCLE guards + immutable TrackedItem (on main, unreleased)
+│   └── drift_store.py                         # DRIFT-ELIM: atomic mutation API over tracked_items + backlog migration; lifecycle CLI (on main, unreleased)
+├── tests/                                     # 758 tests (v0.3.0 release); 1023 on main incl. orchestrator 1–7 + runtime-wiring + DRIFT-ELIM 1–3
 ├── .github/                                   # FUNDING.yml + issue templates
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
@@ -313,7 +315,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 | Runtime | **v0.3.0** | Released | 13 modules, 758 tests. TLA+ guards **enforced** at runtime (FV-PHASE3/4) — transition table generated from the model, `guardgen`/`generated_guards` registered; **M-009** kernel-enforced context-truncation policy (per-region token accounting, deterministic eviction, HOT never evicted, checkpoint/evict/halt). |
 | Runtime | **v0.2.7** | Released | 12 modules, 676 tests. Graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
 | Runtime | **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). |
-| Runtime | **v4.0** | In progress (`main`, unreleased) | Graph Orchestrator: DAG execution, dependency tracking, deterministic-levels scheduling, checkpoint-per-node, transactional rollback, OS-process parallel work, and an observable agent/session supervisor. All 7 core increments **plus runtime-wiring** landed on `main` — invokable through the kernel runtime via `KernelApp.run_graph`, CLI `rag_kernel graph run`, and MCP `rag_graph_run` (registered, health 16/16, 925 tests). **Not yet in a release** — the v4.0 release / headline announcement is the next, separate milestone. |
+| Runtime | **v4.0** | In progress (`main`, unreleased) | Graph Orchestrator: DAG execution, dependency tracking, deterministic-levels scheduling, checkpoint-per-node, transactional rollback, OS-process parallel work, and an observable agent/session supervisor. All 7 core increments **plus runtime-wiring** landed on `main` — invokable via `KernelApp.run_graph`, CLI `rag_kernel graph run`, and MCP `rag_graph_run`. Plus **DRIFT-ELIM** (deterministic project-state layer) increments 1–3 on `main`: item-lifecycle core, atomic mutation API over `tracked_items` + backlog migration, and the `rag_kernel resolve\|defer\|…` lifecycle CLI (registered, 17 modules, health 18/18, 1023 tests). Both layers **not yet in a release** — they ship together as the single-shot **v0.4.0**, the next milestone. |
 
 ## Reporting Issues
 

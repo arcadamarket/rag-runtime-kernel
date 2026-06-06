@@ -144,6 +144,25 @@ is runtime-wired into the kernel entry points.
 
 ---
 
+## DRIFT-ELIM — Deterministic Project-State Layer (In progress — unreleased on `main`)
+
+Target: eliminate the cross-store status-drift class (E-034 / E-037 / E-039 /
+E-040) by giving every tracked project item **one** canonical status, mutated only
+through a deterministic, guarded, atomic API — generalizing the `guardgen`
+"rules-as-data, fail-loud" discipline to the operating protocol's own state.
+Built incrementally behind a deliberate scope boundary; ships together with the
+Graph Orchestrator as the single-shot **v0.4.0** (no interim release).
+
+| Component | Description | Status |
+|---|---|---|
+| Item-lifecycle pure core | `drift_control.py` — `ItemStatus` enum + `LIFECYCLE` table + fail-loud guards + immutable `TrackedItem` (append-only history) | Done — increment 1 |
+| Mutation API + migration | `drift_store.py` — `TrackedItemStore` over the canonical `tracked_items` array; guarded transitions, atomic persistence (`.bak` refresh), one-time backlog migration | Done — increment 2 |
+| Lifecycle CLI + registration | `rag_kernel resolve\|defer\|reopen\|start\|discard\|supersede` + read-only `items`; `drift_control` + `drift_store` registered (`_KERNEL_MODULES` / `discover()` / `cmd_health`); module count 15 → 17; health 18/18 | Done — increment 3 |
+| Renders | Regenerate legacy `open_tasks` / `deferred_items` + ERROR_LOG + the Rule 12 status-report backlog section *from* the canonical `tracked_items` array (never re-authored) | Planned — increment 4 |
+| Fail-loud session auditor | Deterministic session-boundary auditor: Cowork-memory store empty + every rendered status mention == the canonical field (E-040 regression) + Rule 11 repo-claim ↔ reality ↔ record reconciliation | Planned — increment 5 |
+
+---
+
 ## MCP Layer for GPT Web (Research)
 
 Target: Give GPT Web real filesystem access without requiring platform changes.
@@ -157,5 +176,5 @@ Recommended path: **Local HTTP API + GPT Actions** — user runs `python -m rag_
 | Priority | Items | Target |
 |---|---|---|
 | **SHIPPED** | Spec v3.1.4–v3.2.0, rag_kernel v0.1.0–v0.3.0 (13 modules, 758 tests, zero-touch bootstrap, graduated POV, delta checkpoints, session logger, conflict engine, session/checkpoint/gc CLI, spec enforcement), FV Phase 1+2 (389K states), FV-PHASE3/4 (guard generation enforced at runtime), M-009 (context-truncation policy) | Done |
-| **IN PROGRESS** | Graph orchestrator (v4.0) — all 7 core increments **plus runtime-wiring** on `main` (pure DAG core, execution engine, deterministic-levels scheduling, transactional rollback, registration, OS-process parallel work, agent/session supervisor, runtime entry points `run_graph`/CLI `graph run`/MCP `rag_graph_run`; health 16/16, 925 tests); **unreleased**, announcement deferred until the v4.0 release is cut | v4.0 |
-| **LOW** | v4.0 release / tag + headline announcement (reconcile headline counts to released v4.0) | v4.0+ |
+| **IN PROGRESS** | Graph orchestrator (v4.0) — all 7 core increments **plus runtime-wiring** on `main` (pure DAG core, execution engine, deterministic-levels scheduling, transactional rollback, registration, OS-process parallel work, agent/session supervisor, runtime entry points `run_graph`/CLI `graph run`/MCP `rag_graph_run`). **DRIFT-ELIM** deterministic project-state layer — increments 1–3 on `main` (item-lifecycle core, mutation API + backlog migration, lifecycle CLI + registration); 17 capability modules, health 18/18, 1023 tests. Both layers **unreleased**; ship together as the single-shot v0.4.0 (announcement deferred until release) | v4.0 |
+| **LOW** | v0.4.0 release / tag + headline announcement (reconcile headline counts to a released v0.4.0); DRIFT-ELIM renders (inc 4) + fail-loud session auditor (inc 5) | v4.0+ |

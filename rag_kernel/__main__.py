@@ -12,6 +12,9 @@ Usage:
     python -m rag_kernel gc [--path .] [--dry-run]
     python -m rag_kernel audit-env [--path .] [--json]
     python -m rag_kernel graph run spec.json [--project .] [--schedule levels]
+    python -m rag_kernel resolve <item-id> --session S50 [--rag RAG/RAG_MASTER.json] [--reason "..."]
+    python -m rag_kernel defer <item-id> --session S50 [--reason "..."]
+    python -m rag_kernel items [--status OPEN] [--kind TASK] [--json]
 
 Commands:
     init       Parse init prompt MD and create RAG_MASTER.json deterministically (zero tokens).
@@ -24,9 +27,12 @@ Commands:
     gc         Garbage collector — clean __pycache__, .pyc, .tmp, orphaned files.
     audit-env  Audit environment — enumerate Python versions, pip, package managers, project deps.
     graph      Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime.
+    resolve    Guarded lifecycle transition of a tracked item to RESOLVED
+               (siblings: defer, reopen, start, discard, supersede) via drift_store.
+    items      List the canonical tracked_items array (read-only render).
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md section 9
-Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (session/checkpoint/gc), GRAPH-ORCH runtime-wiring (graph command)
+Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (session/checkpoint/gc), GRAPH-ORCH runtime-wiring (graph command), DRIFT-ELIM increment 3 (resolve|defer|… + items)
 
 @rag-kernel-manifest
 {
@@ -43,7 +49,9 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "checkpoint": "Merge session summary into RAG_MASTER.json atomically",
     "gc": "Garbage collector — clean temp files, pycache, orphans",
     "audit-env": "Audit environment — enumerate Python versions, pip, package managers, project deps",
-    "graph": "Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime"
+    "graph": "Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime",
+    "resolve|defer|reopen|start|discard|supersede": "Guarded lifecycle transition of a tracked item via drift_store (DRIFT-ELIM)",
+    "items": "Read-only render of the canonical tracked_items array"
   },
   "use_when": "Any CLI invocation of rag_kernel"
 }
@@ -60,6 +68,26 @@ from pathlib import Path
 
 from rag_kernel.api import DEFAULT_PORT, KernelApp, create_server
 from rag_kernel.mcp_transport import MCPServer
+
+# DRIFT-ELIM increment 3 — item-lifecycle CLI verbs.
+# Each top-level verb maps to the ItemStatus it transitions a tracked item into;
+# legality is decided by the drift_control lifecycle guard, not by the CLI.
+_ITEM_VERB_STATUS = {
+    "resolve": "RESOLVED",
+    "defer": "DEFERRED",
+    "reopen": "OPEN",
+    "start": "IN_PROGRESS",
+    "discard": "DISCARDED",
+    "supersede": "SUPERSEDED",
+}
+_ITEM_VERB_HELP = {
+    "resolve": "Transition a tracked item to RESOLVED (from IN_PROGRESS).",
+    "defer": "Park a tracked item: -> DEFERRED.",
+    "reopen": "Re-enter a DEFERRED item: DEFERRED -> OPEN.",
+    "start": "Begin a tracked item: OPEN -> IN_PROGRESS.",
+    "discard": "Drop a tracked item: -> DISCARDED.",
+    "supersede": "Replace a tracked item: -> SUPERSEDED (requires --by).",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -180,6 +208,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_parser.add_argument("--path", type=Path, default=Path("."), help="Project root to check for venvs/requirements (default: .)")
     audit_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of human-readable")
+
+    # -- item lifecycle verbs (DRIFT-ELIM increment 3) --
+    # resolve / defer / reopen / start / discard / supersede route through the
+    # drift_store mutation API; the verb selects the target ItemStatus and the
+    # lifecycle guard decides legality. Each writes atomically (or fails loud).
+    for _verb, _vhelp in _ITEM_VERB_HELP.items():
+        vp = subparsers.add_parser(_verb, help=_vhelp)
+        vp.add_argument("item_id", type=str, help="id of the tracked item")
+        vp.add_argument(
+            "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+            help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+        )
+        vp.add_argument(
+            "--session", type=str, required=True,
+            help="Session id recorded in the item history (audit trail)",
+        )
+        vp.add_argument("--reason", type=str, default="", help="One-line reason recorded in history")
+        vp.add_argument("--dry-run", action="store_true", help="Check legality without writing")
+        if _verb == "supersede":
+            vp.add_argument("--by", type=str, required=True, help="id of the item that supersedes this one")
+
+    # -- items (read-only render of tracked_items) --
+    items_parser = subparsers.add_parser("items", help="List the canonical tracked_items array (read-only).")
+    items_parser.add_argument("--rag", type=Path, default=Path("RAG/RAG_MASTER.json"), help="Path to RAG_MASTER.json")
+    items_parser.add_argument("--status", type=str, default=None, help="Filter by status (e.g. OPEN, DEFERRED)")
+    items_parser.add_argument("--kind", type=str, default=None, help="Filter by kind (e.g. TASK, MILESTONE)")
+    items_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of a table")
 
     return parser
 
@@ -429,6 +484,8 @@ def cmd_health(args: argparse.Namespace) -> int:
         "rag_kernel.context_policy",
         "rag_kernel.graph_orchestrator",
         "rag_kernel.agent_supervisor",
+        "rag_kernel.drift_control",
+        "rag_kernel.drift_store",
         "rag_kernel.__main__",
     ]
 
@@ -541,6 +598,112 @@ def cmd_graph(args: argparse.Namespace) -> int:
     finally:
         app.close()
     return 1 if isinstance(result, dict) and "error" in result else 0
+
+
+def cmd_item_transition(args: argparse.Namespace) -> int:
+    """Apply one guarded lifecycle transition to a tracked item (DRIFT-ELIM inc 3).
+
+    The verb (resolve/defer/reopen/start/discard/supersede) selects the target
+    ItemStatus; drift_control's lifecycle guard decides legality and drift_store
+    persists atomically (tmp -> verify -> .bak -> rename). An illegal move, an
+    unknown id, or a bad RAG file fails LOUD and writes nothing (exit 1) — there
+    is deliberately no "just set the field" path.
+    """
+    from rag_kernel.drift_control import (
+        ItemStateError,
+        ItemValidationError,
+        legal_status_transition,
+    )
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        TrackedItemStore,
+        load_hot,
+        transition_in_file,
+    )
+
+    target = _ITEM_VERB_STATUS[args.command]
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    superseded_by = getattr(args, "by", None)
+
+    # Read current state first: gives a clear before->after message and lets
+    # --dry-run report legality without touching the file.
+    try:
+        store = TrackedItemStore.from_hot(load_hot(rag_path))
+        current = store.get(args.item_id)
+    except DriftStoreError as e:  # bad JSON / not a list / unknown id
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        if not legal_status_transition(current.status, target):
+            print(
+                f"[DRY RUN] ILLEGAL: {args.item_id} {current.status.value} -> {target}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"[DRY RUN] {args.item_id}: {current.status.value} -> {target} (no write)")
+        return 0
+
+    try:
+        transition_in_file(
+            rag_path,
+            args.item_id,
+            target,
+            session=args.session,
+            reason=args.reason,
+            superseded_by=superseded_by,
+        )
+    except (ItemStateError, ItemValidationError, DriftStoreError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"{args.item_id}: {current.status.value} -> {target}  [session {args.session}]")
+    return 0
+
+
+def cmd_items(args: argparse.Namespace) -> int:
+    """Render the canonical tracked_items array (read-only, no mutation).
+
+    A status report or any doc mention of item status is a *render* of this
+    array (DRIFT-ELIM); this command is the direct renderer.
+    """
+    from rag_kernel.drift_store import DriftStoreError, TrackedItemStore, load_hot
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    try:
+        store = TrackedItemStore.from_hot(load_hot(rag_path))
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    items = list(store)
+    if args.status:
+        want = args.status.upper()
+        items = [it for it in items if it.status.value == want]
+    if args.kind:
+        want_k = args.kind.upper()
+        items = [it for it in items if it.kind.value == want_k]
+
+    if getattr(args, "json_output", False):
+        print(json.dumps([it.to_dict() for it in items], indent=2, ensure_ascii=False))
+        return 0
+
+    if not items:
+        print("(no tracked items match)")
+        return 0
+    width = max(len(it.id) for it in items)
+    print(f"{len(items)} tracked item(s):")
+    for it in items:
+        sup = f"  -> {it.superseded_by}" if it.superseded_by else ""
+        print(f"  {it.id:<{width}}  {it.status.value:<12} {it.kind.value:<10} {it.title}{sup}")
+    return 0
 
 
 def cmd_session(args: argparse.Namespace) -> int:
@@ -1050,6 +1213,10 @@ def main(argv: list[str] | None = None) -> int:
         "serve": cmd_serve, "mcp": cmd_mcp, "session": cmd_session,
         "checkpoint": cmd_checkpoint, "gc": cmd_gc, "audit-env": cmd_audit_env,
         "graph": cmd_graph,
+        "resolve": cmd_item_transition, "defer": cmd_item_transition,
+        "reopen": cmd_item_transition, "start": cmd_item_transition,
+        "discard": cmd_item_transition, "supersede": cmd_item_transition,
+        "items": cmd_items,
     }
     return commands[args.command](args)
 
