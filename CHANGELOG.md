@@ -2,6 +2,49 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [Unreleased]
+
+### Added — DRIFT-ELIM: record migration + Rule 11 doc reconciliation (increment 6, INS-039)
+
+Post-v0.4.0 hardening that closes the last un-audited region of the
+single-source-of-truth model. The two remaining legacy state stores — the
+`inference_ledger` dispositions and the ERROR_LOG `E-###` records — are folded
+into the **same canonical `tracked_items` array** (new `kind=INFERENCE` /
+`kind=ERROR`), so the session auditor governs their status too. The forensic
+prose stays in `inference_ledger` / `ERROR_LOG.md`; only the *status* becomes
+canonical.
+
+- **`drift_store`** — a guarded, atomic additive migration path (`add_items` /
+  `add_items_file`), the explicit fail-loud `inference_ledger` disposition→status
+  bridge (`ledger_disposition_to_status`; `SCHEDULED`/`DONE`→`RESOLVED`,
+  `DEFERRED`→`DEFERRED`, …), and `inference_specs_from_hot` deriving INFERENCE
+  records from the ledger.
+- **`drift_render`** — the task-backlog renders (`open_tasks` / `deferred_items`
+  / Rule 12 backlog) are now scoped to `BACKLOG_KINDS` (TASK/MILESTONE/RELEASE)
+  so the ~80 migrated forensic records do not leak into the task arrays (the
+  E-040 parity guarantee holds byte-for-byte); record kinds get their own
+  `render_records_by_kind` projection.
+- **`drift_audit`** — three new fail-loud checks: **ledger consistency** (each
+  `inference_ledger` disposition must match its canonical INFERENCE item),
+  **record coverage** (every ledger entry + every `E-###` ERROR_LOG heading has a
+  canonical item), and the **Rule 11 published-doc reconciliation** — headline
+  facts (current-version module count + drift-gate sha vs the live kernel) plus
+  id-anchored status-claim reconciliation (a doc claiming a RESOLVED record is
+  still pending is the E-033/E-040 drift), with documented historical-line /
+  CHANGELOG exemptions to stay deterministic. New `audit --docs-root` flag.
+- **Pre-cutover gate:** the new ledger-consistency / record-coverage checks stay
+  dormant until that record kind has been migrated (any item of the kind exists),
+  so the capability ships without forcing the cutover — migration is a deliberate
+  step the operator triggers.
+- Migration **prepared and verified on a copy** of the project RAG (22 → 102
+  `tracked_items`; `audit --strict` clean incl. doc reconciliation). The live
+  project-RAG migration is **deferred** (operator validates v0.4.0 on a fresh
+  project + reviews the migration guide first); until then the live RAG stays at
+  22 items and audits clean via the pre-cutover gate. **+34 tests
+  (`tests/test_drift_inc6.py`); 1,116 total**, all passing; zero regressions;
+  `guardgen --check` green (sha `268149294421`, no model drift); health 20/20.
+  Extends existing `drift_*` modules — no new module. **Unreleased** on `main`.
+
 ## [v0.4.0] — 2026-06-06
 
 The single-shot **v0.4.0** ships two layers that were developed across many

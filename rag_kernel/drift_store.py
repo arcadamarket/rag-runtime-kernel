@@ -53,7 +53,10 @@ project's own bookkeeping.
   "exports": ["TrackedItemStore", "DriftStoreError", "DuplicateItemError",
               "UnknownItemError", "TRACKED_ITEMS_KEY", "DRIFT_STORE_VERSION",
               "load_hot", "mutate_hot", "transition_in_file", "set_note_in_file",
-              "seed_items", "migrate_backlog", "migrate_backlog_file"],
+              "seed_items", "migrate_backlog", "migrate_backlog_file",
+              "LEDGER_DISPOSITION_TO_STATUS", "INFERENCE_LEDGER_KEY",
+              "ledger_disposition_to_status", "inference_specs_from_hot",
+              "add_items", "add_items_file"],
   "use_when": "Reading, transitioning, or persisting the canonical status of tracked project items in RAG_MASTER.json",
   "never_bypass": true
 }
@@ -399,6 +402,143 @@ def migrate_backlog_file(
     p = Path(path)
     hot = load_hot(p)
     migrate_backlog(hot, specs, allow_overwrite=allow_overwrite)
+    if touch_meta:
+        _touch_meta(hot, now)
+    atomic_write_json(p, hot)
+    return hot
+
+
+# ---------------------------------------------------------------------------
+# Record migration (inference_ledger / ERROR_LOG -> canonical tracked_items)
+# ---------------------------------------------------------------------------
+# DRIFT-ELIM increment 6 (INS-039). Increments 1-5 made tracked_items the sole
+# authority for the TASK/MILESTONE backlog (open_tasks / deferred_items became
+# renders). The two remaining legacy state stores — the ``inference_ledger``
+# dispositions and the ERROR_LOG ``E-###`` records — are folded into the SAME
+# canonical array here (kind=INFERENCE / kind=ERROR) so the session auditor
+# governs their status too. The forensic prose stays in inference_ledger /
+# ERROR_LOG.md; only the *status* becomes canonical in tracked_items.
+
+# The single canonical array also absorbs the ledger; this key names the legacy
+# ledger array the INFERENCE records are projected from.
+INFERENCE_LEDGER_KEY = "inference_ledger"
+
+# Map an inference_ledger ``disposition`` onto the canonical ItemStatus. The
+# ledger's disposition vocabulary predates the lifecycle enum; this is the one
+# explicit, fail-loud bridge between them (an unknown disposition RAISES — it is
+# never silently rounded, which is exactly the lossy drift E-040 documented).
+#   OPEN       -> OPEN        (still an open intake item)
+#   SCHEDULED  -> RESOLVED    (converted into a concrete tracked task / shipped)
+#   DONE       -> RESOLVED    (legacy synonym for a completed intake)
+#   DEFERRED   -> DEFERRED    (parked, not lost)
+#   SUPERSEDED -> SUPERSEDED  (replaced; carries a superseded_by ref)
+#   DISCARDED  -> DISCARDED   (dropped with a reason)
+LEDGER_DISPOSITION_TO_STATUS: dict[str, ItemStatus] = {
+    "OPEN": ItemStatus.OPEN,
+    "SCHEDULED": ItemStatus.RESOLVED,
+    "DONE": ItemStatus.RESOLVED,
+    "DEFERRED": ItemStatus.DEFERRED,
+    "SUPERSEDED": ItemStatus.SUPERSEDED,
+    "DISCARDED": ItemStatus.DISCARDED,
+}
+
+
+def ledger_disposition_to_status(disposition: str) -> ItemStatus:
+    """Map an inference_ledger disposition to the canonical ItemStatus (fail-loud).
+
+    Unknown dispositions raise :class:`DriftStoreError` rather than defaulting —
+    a silent default is precisely the lossy-rounding that let two stores disagree.
+    """
+    try:
+        return LEDGER_DISPOSITION_TO_STATUS[str(disposition).strip().upper()]
+    except KeyError as exc:
+        raise DriftStoreError(
+            f"unknown inference_ledger disposition: {disposition!r}; "
+            f"known: {sorted(LEDGER_DISPOSITION_TO_STATUS)}"
+        ) from exc
+
+
+def _condense(text: str, *, limit: int) -> str:
+    """Collapse whitespace and clip ``text`` to ``limit`` chars (ellipsis if cut)."""
+    s = " ".join(str(text or "").split())
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1].rstrip() + "…"
+
+
+def inference_specs_from_hot(hot: Mapping) -> list[dict]:
+    """Derive canonical INFERENCE item specs from the RAG's own inference_ledger.
+
+    A deterministic, pure projection (no I/O): id verbatim, title from the entry
+    summary, status from :func:`ledger_disposition_to_status`, kind=INFERENCE,
+    note carrying the scheduled_as pointer so the canonical record stays
+    self-describing. The caller persists the specs via :func:`add_items_file`
+    (the guarded, atomic path) — this function never writes.
+    """
+    led = hot.get(INFERENCE_LEDGER_KEY, []) if hot else []
+    if not isinstance(led, list):
+        raise DriftStoreError(
+            f"{INFERENCE_LEDGER_KEY!r} must be a list, got {type(led).__name__}"
+        )
+    specs: list[dict] = []
+    for e in led:
+        status = ledger_disposition_to_status(e.get("disposition"))
+        note = e.get("scheduled_as") or ""
+        spec: dict = {
+            "id": e["id"],
+            "title": _condense(e.get("summary", e["id"]), limit=100) or e["id"],
+            "status": status,
+            "kind": ItemKind.INFERENCE,
+            "session": e.get("session", ""),
+            "note": _condense(note, limit=120),
+        }
+        if status == ItemStatus.SUPERSEDED:
+            spec["superseded_by"] = e.get("superseded_by")
+        specs.append(spec)
+    return specs
+
+
+def add_items(
+    hot: dict,
+    specs: Sequence[Mapping],
+    *,
+    allow_existing: bool = False,
+) -> dict:
+    """Additively merge new TrackedItems into an EXISTING tracked_items array.
+
+    Where :func:`migrate_backlog` is a one-time full seed that refuses a non-empty
+    array, this ADDS records alongside whatever the array already holds — the
+    increment-6 path for folding the inference_ledger / ERROR_LOG records in next
+    to the already-migrated task backlog. Every add goes through the store's
+    unique-id invariant: a duplicate id fails loud (:class:`DuplicateItemError`)
+    unless ``allow_existing`` skips ids already present (so a re-run is idempotent).
+    Pure on the dict (mutates and returns ``hot``).
+    """
+    store = TrackedItemStore.from_hot(hot)
+    for item in seed_items(specs):  # validates + dedups within the new specs
+        if allow_existing and item.id in store:
+            continue
+        store.add(item)             # fail-loud on collision with an existing id
+    return store.write_into(hot)
+
+
+def add_items_file(
+    path: Path | str,
+    specs: Sequence[Mapping],
+    *,
+    allow_existing: bool = False,
+    now: Optional[str] = None,
+    touch_meta: bool = True,
+) -> dict:
+    """Atomically add records to a RAG file's tracked_items array (refreshes .bak).
+
+    The guarded, atomic counterpart to :func:`add_items`: load -> add (unique-id
+    invariant) -> ``atomic_write_json`` (tmp -> verify -> .bak -> rename). On any
+    duplicate-id failure nothing is written and the prior file + .bak are intact.
+    """
+    p = Path(path)
+    hot = load_hot(p)
+    add_items(hot, specs, allow_existing=allow_existing)
     if touch_meta:
         _touch_meta(hot, now)
     atomic_write_json(p, hot)

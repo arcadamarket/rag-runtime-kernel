@@ -68,9 +68,10 @@ state, never re-authors it.
   "module": "rag_kernel.drift_render",
   "capability": "state_render",
   "description": "Deterministic, idempotent renderers projecting the canonical tracked_items array into the legacy open_tasks / deferred_items arrays, the Rule 12 status-report backlog, and the ERROR_LOG backlog summary (DRIFT-ELIM increment 4: renders make tracked_items the sole authority)",
-  "exports": ["ACTIVE_STATUSES", "render_open_tasks", "render_deferred_items",
-              "render_backlog_section", "render_backlog_markdown",
-              "render_error_log_backlog", "render_all", "apply_renders",
+  "exports": ["ACTIVE_STATUSES", "BACKLOG_KINDS", "render_open_tasks",
+              "render_deferred_items", "render_backlog_section",
+              "render_backlog_markdown", "render_error_log_backlog",
+              "render_records_by_kind", "render_all", "apply_renders",
               "apply_renders_file", "default_gated", "DRIFT_RENDER_VERSION"],
   "use_when": "Projecting canonical tracked_items status into any legacy array, status report, or doc surface (never hand-author these)",
   "never_bypass": true
@@ -82,7 +83,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from rag_kernel.drift_control import ItemStatus, TERMINAL_STATUSES, TrackedItem
+from rag_kernel.drift_control import ItemKind, ItemStatus, TERMINAL_STATUSES, TrackedItem
 from rag_kernel.drift_store import (
     TRACKED_ITEMS_KEY,
     TrackedItemStore,
@@ -96,6 +97,18 @@ DRIFT_RENDER_VERSION = "1.0.0"
 # The non-terminal, actionable statuses — the "open backlog".
 ACTIVE_STATUSES: frozenset[ItemStatus] = frozenset(
     {ItemStatus.OPEN, ItemStatus.IN_PROGRESS}
+)
+
+# The kinds that constitute the *task backlog* — what open_tasks / deferred_items
+# / the Rule 12 backlog have always meant. Increment 6 folds the inference_ledger
+# (kind=INFERENCE) and ERROR_LOG (kind=ERROR) records into the SAME canonical
+# array; those are forensic records, not task backlog, so the backlog renders
+# scope to these kinds and the record kinds get their own projection
+# (``render_records_by_kind``). Scoping is what keeps the legacy task arrays
+# byte-identical after the migration (the auditor's E-040 parity check still
+# holds) instead of suddenly absorbing ~80 error/inference rows.
+BACKLOG_KINDS: frozenset[ItemKind] = frozenset(
+    {ItemKind.TASK, ItemKind.MILESTONE, ItemKind.RELEASE}
 )
 
 # Substrings that mark an OPEN/IN_PROGRESS item as blocked or awaiting the user.
@@ -161,6 +174,8 @@ def render_open_tasks(
     store = _as_store(source)
     out: list[str] = []
     for it in store:  # id-sorted
+        if it.kind not in BACKLOG_KINDS:
+            continue  # INFERENCE / ERROR records are not task backlog
         if it.status not in ACTIVE_STATUSES:
             continue
         session = it.session or "—"
@@ -191,7 +206,7 @@ def render_deferred_items(
             "note": it.note,
         }
         for it in store
-        if it.status == ItemStatus.DEFERRED
+        if it.status == ItemStatus.DEFERRED and it.kind in BACKLOG_KINDS
     ]
 
 
@@ -217,6 +232,8 @@ def render_backlog_section(
     gated_lines: list[str] = []
     deferred_lines: list[str] = []
     for it in store:  # id-sorted
+        if it.kind not in BACKLOG_KINDS:
+            continue  # INFERENCE / ERROR records are not task backlog
         if it.status == ItemStatus.DEFERRED:
             deferred_lines.append(_line(it))
         elif it.status in ACTIVE_STATUSES:
@@ -285,6 +302,40 @@ def render_error_log_backlog(
 
 
 # ---------------------------------------------------------------------------
+# Record renders (INFERENCE / ERROR kinds — increment 6)
+# ---------------------------------------------------------------------------
+
+def render_records_by_kind(
+    source: TrackedItemStore | dict | Iterable[TrackedItem],
+    kind: ItemKind | str,
+) -> list[dict]:
+    """Render the canonical records of one ``kind`` (e.g. INFERENCE / ERROR).
+
+    A deterministic, id-sorted status projection of the migrated forensic records
+    (increment 6). Each row is the canonical status view of one ``E-###`` /
+    ``INS-###`` record; the full root-cause/fix prose stays in ERROR_LOG.md /
+    inference_ledger (this is the *status* render, not a re-authoring of the
+    forensics). Used by the status report and as the surface the auditor's
+    record-coverage / ledger-consistency checks reconcile against.
+    """
+    want = ItemKind(kind) if not isinstance(kind, ItemKind) else kind
+    store = _as_store(source)
+    return [
+        {
+            "id": it.id,
+            "title": it.title,
+            "status": it.status.value,
+            "kind": it.kind.value,
+            "session": it.session,
+            "note": it.note,
+            "superseded_by": it.superseded_by,
+        }
+        for it in store
+        if it.kind == want
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Aggregate + apply
 # ---------------------------------------------------------------------------
 
@@ -299,6 +350,8 @@ def render_all(
         "open_tasks": render_open_tasks(store),
         "deferred_items": render_deferred_items(store),
         "backlog": render_backlog_section(store, gated=gated),
+        "inference_records": render_records_by_kind(store, ItemKind.INFERENCE),
+        "error_records": render_records_by_kind(store, ItemKind.ERROR),
     }
 
 

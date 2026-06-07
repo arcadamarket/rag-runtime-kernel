@@ -205,7 +205,10 @@ class TestRenderCommand:
         rc = main(["render", "--rag", str(rag_path), "--json"])
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
-        assert set(data) == {"open_tasks", "deferred_items", "backlog"}
+        assert set(data) == {
+            "open_tasks", "deferred_items", "backlog",
+            "inference_records", "error_records",
+        }
 
     def test_render_apply_rewrites_legacy_arrays(self, rag_path):
         # seed a stale hand-authored open_tasks to prove it gets overwritten

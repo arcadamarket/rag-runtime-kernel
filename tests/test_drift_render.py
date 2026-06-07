@@ -166,7 +166,11 @@ def test_error_log_backlog_lists_open_and_deferred():
 
 def test_render_all_shape():
     out = render_all(_mixed_store())
-    assert set(out) == {"open_tasks", "deferred_items", "backlog"}
+    # inc6 expanded render_all to also surface the INFERENCE/ERROR record renders.
+    assert set(out) == {
+        "open_tasks", "deferred_items", "backlog",
+        "inference_records", "error_records",
+    }
 
 
 def test_apply_renders_overwrites_legacy_arrays_not_canonical():

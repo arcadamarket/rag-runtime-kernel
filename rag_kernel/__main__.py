@@ -293,6 +293,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-scan-root", dest="scan_root", action="store_false",
         help="Skip the project-root side-store scan (Rule 13 check).",
     )
+    audit_parser2.add_argument(
+        "--docs-root", type=Path, default=None,
+        help="Enable the Rule 11 published-doc reconciliation against this docs root "
+             "(reconciles README.md / CHANGELOG.md / docs/ROADMAP.md vs the canonical facts).",
+    )
+    audit_parser2.add_argument(
+        "--error-log", type=Path, default=None,
+        help="Path to ERROR_LOG.md for E-### record coverage (default: beside the RAG file).",
+    )
     audit_parser2.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
     return parser
@@ -872,7 +881,12 @@ def cmd_audit(args: argparse.Namespace) -> int:
         print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
         return 1
     try:
-        report = drift_audit.audit_file(rag_path, scan_root=args.scan_root)
+        report = drift_audit.audit_file(
+            rag_path,
+            scan_root=args.scan_root,
+            error_log_path=getattr(args, "error_log", None),
+            docs_root=getattr(args, "docs_root", None),
+        )
     except DriftStoreError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
