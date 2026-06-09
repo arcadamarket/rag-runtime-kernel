@@ -5,7 +5,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "OS-level runtime bridge for LLM memory persistence",
   "spec_version": "3.2.0",
   "python_requires": ">=3.10",
@@ -32,7 +32,7 @@ Zero external dependencies. Python 3.10+ standard library only.
     "drift_audit": "Fail-loud session-boundary auditor: asserts the rendered legacy open_tasks/deferred_items match the canonical tracked_items array (E-040 regression), supersede refs resolve, notes don't contradict status (INS-038), and no Cowork-memory side stores exist in the project root (Rule 13) — DRIFT-ELIM increment 5"
   },
   "cli_commands": {
-    "init": "python -m rag_kernel init --spec <path.md> [--output RAG/] [--dry-run]",
+    "init": "python -m rag_kernel init (--spec <path.md> | --allow-void) [--output RAG/] [--dry-run]",
     "health": "python -m rag_kernel health [--path .]",
     "serve": "python -m rag_kernel serve --project <path> [--port 7437]",
     "mcp": "python -m rag_kernel mcp --project <path>",
@@ -57,7 +57,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 
 # ── Capability Discovery ──────────────────────────────────────

@@ -4,6 +4,40 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+## [v0.4.1] — 2026-06-09
+
+Kernel hardening derived from the eBay Session-0 deployment audit (Track A1).
+The RAG Runtime Kernel is a **universal** system deployed onto other projects, so
+field findings on a deployment become test-result input that hardens the kernel
+for every deployment (operating_protocol Rule 15). This release closes two
+bootstrap failure modes and bundles the previously-unreleased DRIFT-ELIM
+increment 6.
+
+### Added — `audit-env` fetch/VCS/shell tooling enumeration (INS-045)
+
+- `audit-env` now enumerates the canonical fetch/VCS/shell tool set — **curl,
+  wget, git, gh, jq, pwsh, powershell.exe** — alongside the existing Python /
+  pip / package-manager discovery. Each tool is reported with a `present` flag,
+  `version`, and resolved `path` (in both `--json` and human output), so a fresh
+  project deterministically knows its full tooling ground truth at Step 0 instead
+  of rediscovering curl/wget/git live (the eBay S0 thrash, F-19). New `tooling`
+  key in the `audit-env --json` payload.
+
+### Changed — `init` is now fail-loud on a missing `--spec` (INS-046)
+
+- `init` no longer silently builds a **void RAG** (no governance) when `--spec`
+  is omitted. It now requires an explicit `--allow-void` to create an empty
+  structural RAG; otherwise it prints a clear error naming both `--spec` and
+  `--allow-void` and exits **non-zero** (the fix for F-09/R-5, silent governance
+  loss). The guard fires before any work, including under `--dry-run`.
+- **Migration note:** scripts that relied on `init` with no `--spec` creating a
+  void RAG must now pass `--allow-void` explicitly.
+
+Tests: **+7** (`tests/test_main.py` — 3 tooling-enumeration, 4 init fail-loud),
+**1,123 total**, all passing; zero regressions; `guardgen --check` drift gate
+green (sha `268149294421`, no model drift — no schema/WAL/TLA+ change); health
+20/20; **no new module** (CLI-only changes in `__main__.py`).
+
 ### Added — DRIFT-ELIM: record migration + Rule 11 doc reconciliation (increment 6, INS-039)
 
 Post-v0.4.0 hardening that closes the last un-audited region of the

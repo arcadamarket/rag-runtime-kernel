@@ -135,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create requirements.txt with listed packages (e.g., --requirements curl_cffi beautifulsoup4). "
              "Use --requirements alone (no args) to create an empty template.",
     )
+    init_parser.add_argument(
+        "--allow-void", action="store_true",
+        help="Explicitly permit creating a void RAG when --spec is omitted (governance off). "
+             "Without this, init fails loud (non-zero exit) on missing --spec — INS-046.",
+    )
 
     # -- configure --
     config_parser = subparsers.add_parser(
@@ -325,7 +330,17 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"Error: Spec file not found: {args.spec}", file=sys.stderr)
         return 1
     else:
-        print("No --spec provided. Creating void RAG with structural defaults.")
+        if not getattr(args, "allow_void", False):
+            print(
+                "Error: init requires --spec to bootstrap a governed RAG.\n"
+                "  No --spec was provided, which would create a VOID RAG with no governance "
+                "(the silent governance-loss failure mode, INS-046).\n"
+                "  Fix: pass --spec <init_prompt.md> to bootstrap from a spec,\n"
+                "  or pass --allow-void to explicitly create an empty structural RAG.",
+                file=sys.stderr,
+            )
+            return 2
+        print("No --spec provided. --allow-void set: creating void RAG with structural defaults.")
         rag = deepcopy(VOID_RAG)
         cold = None
 
@@ -1185,6 +1200,7 @@ def cmd_audit_env(args: argparse.Namespace) -> int:
         "python_versions": [],
         "pip_variants": [],
         "package_managers": [],
+        "tooling": [],
         "project_env": {},
         "platform": {},
     }
@@ -1318,6 +1334,39 @@ def cmd_audit_env(args: argparse.Namespace) -> int:
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
 
+    # --- Fetch / VCS / shell tooling (INS-045) ---
+    # Bootstrap must deterministically know fetch (curl/wget), VCS (git/gh),
+    # and shell (jq/PowerShell) tooling — not just Python/Node — so a new
+    # project never rediscovers these live (the eBay S0 thrash, F-19).
+    # Each canonical tool is recorded with a present flag so the audit reports
+    # both what exists AND what is missing.
+    tooling_probes = [
+        ("curl", ["curl", "--version"]),
+        ("wget", ["wget", "--version"]),
+        ("git", ["git", "--version"]),
+        ("gh", ["gh", "--version"]),
+        ("jq", ["jq", "--version"]),
+        ("pwsh", ["pwsh", "--version"]),
+        ("powershell.exe", ["powershell.exe", "-NoProfile", "-Command",
+                            "$PSVersionTable.PSVersion.ToString()"]),
+    ]
+
+    for name, cmd_args in tooling_probes:
+        entry = {"name": name, "present": False, "version": "", "path": shutil.which(name)}
+        try:
+            result = subprocess.run(
+                cmd_args, capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                version = (result.stdout.strip() or result.stderr.strip()).split("\n")[0]
+                entry["present"] = True
+                entry["version"] = version
+                if entry["path"] is None:
+                    entry["path"] = name
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        audit["tooling"].append(entry)
+
     # --- Project environment ---
     req_path = project_root / "requirements.txt"
     venv_path = project_root / ".venv"
@@ -1363,6 +1412,14 @@ def cmd_audit_env(args: argparse.Namespace) -> int:
             print(f"\nPackage managers ({len(audit['package_managers'])}):")
             for p in audit["package_managers"]:
                 print(f"  {p['name']:12s}  {p['version']:20s}  {p['path']}")
+
+        present_tools = [t for t in audit["tooling"] if t["present"]]
+        print(f"\nFetch/VCS/shell tooling ({len(present_tools)}/{len(audit['tooling'])} present):")
+        for t in audit["tooling"]:
+            if t["present"]:
+                print(f"  {t['name']:14s}  {t['version']:24s}  {t['path'] or ''}")
+            else:
+                print(f"  {t['name']:14s}  NOT FOUND")
 
         print(f"\nProject environment ({project_root}):")
         if audit["project_env"]["requirements_txt"]:

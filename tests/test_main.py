@@ -314,7 +314,7 @@ class TestInitAutoReady:
         spec.write_text("# Minimal spec\nNo rag-config blocks.", encoding="utf-8")
 
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--project-name", "TestProject",
             "--auto-ready",
         ])
@@ -327,7 +327,7 @@ class TestInitAutoReady:
     def test_init_without_auto_ready_stays_booting(self, tmp_path):
         """Init without --auto-ready should leave state as BOOTING."""
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--project-name", "TestProject",
         ])
         rag_path = tmp_path / "RAG_MASTER.json"
@@ -341,7 +341,7 @@ class TestInitAutoReady:
 class TestInitPathStyle:
     def test_path_style_windows(self, tmp_path):
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--root-project", "C:/Users/test/project",
             "--path-style", "windows",
             "--project-name", "Test",
@@ -354,7 +354,7 @@ class TestInitPathStyle:
 
     def test_path_style_posix(self, tmp_path):
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--root-project", "C:\\Users\\test\\project",
             "--path-style", "posix",
             "--project-name", "Test",
@@ -367,7 +367,7 @@ class TestInitPathStyle:
 
     def test_path_style_auto_windows(self, tmp_path):
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--root-project", "C:/Users/test/project",
             "--path-style", "auto",
             "--project-name", "Test",
@@ -398,6 +398,7 @@ class TestAuditEnv:
         assert "python_versions" in data
         assert "pip_variants" in data
         assert "package_managers" in data
+        assert "tooling" in data
         assert "project_env" in data
         assert "platform" in data
 
@@ -439,6 +440,85 @@ class TestAuditEnv:
         assert data["platform"]["system"] != ""
         assert data["platform"]["python_default"] != ""
 
+    # ----- INS-045: widened fetch/VCS/shell tooling enumeration -----
+
+    def test_audit_env_enumerates_tooling(self, tmp_path, capsys):
+        """audit-env enumerates the canonical fetch/VCS/shell tool set (INS-045)."""
+        main(["audit-env", "--path", str(tmp_path), "--json"])
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        names = {t["name"] for t in data["tooling"]}
+        # Every canonical tool is reported (present or not) so bootstrap knows
+        # the full ground truth, not just Python/Node.
+        for expected in ["curl", "wget", "git", "gh", "jq", "pwsh", "powershell.exe"]:
+            assert expected in names, f"{expected} missing from tooling audit"
+
+    def test_audit_env_tooling_entry_shape(self, tmp_path, capsys):
+        """Each tooling entry carries name/present/version/path fields (INS-045)."""
+        main(["audit-env", "--path", str(tmp_path), "--json"])
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert len(data["tooling"]) == 7
+        for entry in data["tooling"]:
+            assert "name" in entry
+            assert "present" in entry
+            assert isinstance(entry["present"], bool)
+            assert "version" in entry
+            assert "path" in entry
+
+    def test_audit_env_tooling_present_has_version(self, tmp_path, capsys):
+        """A tool reported present must carry a non-empty version string (INS-045)."""
+        main(["audit-env", "--path", str(tmp_path), "--json"])
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        for entry in data["tooling"]:
+            if entry["present"]:
+                assert entry["version"] != ""
+
+
+# ===== INS-046: init fail-loud on missing --spec =====
+
+class TestInitFailLoud:
+    """init must refuse to silently build a void RAG when --spec is omitted."""
+
+    def test_init_no_spec_no_allow_void_fails(self, tmp_path):
+        """No --spec and no --allow-void -> non-zero exit, no RAG written (INS-046)."""
+        result = main([
+            "init", "--output", str(tmp_path),
+            "--project-name", "TestProject",
+        ])
+        assert result != 0
+        assert not (tmp_path / "RAG_MASTER.json").exists()
+
+    def test_init_no_spec_error_message(self, tmp_path, capsys):
+        """The fail-loud error names --spec and --allow-void (INS-046)."""
+        main([
+            "init", "--output", str(tmp_path),
+            "--project-name", "TestProject",
+        ])
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "--spec" in combined
+        assert "--allow-void" in combined
+
+    def test_init_allow_void_creates_rag(self, tmp_path):
+        """--allow-void explicitly permits the void RAG and writes it (INS-046)."""
+        result = main([
+            "init", "--allow-void", "--output", str(tmp_path),
+            "--project-name", "TestProject",
+        ])
+        assert result == 0
+        assert (tmp_path / "RAG_MASTER.json").exists()
+
+    def test_init_dry_run_no_spec_still_fails(self, tmp_path):
+        """Fail-loud fires before work even in --dry-run mode (INS-046)."""
+        result = main([
+            "init", "--output", str(tmp_path),
+            "--project-name", "TestProject",
+            "--dry-run",
+        ])
+        assert result != 0
+
 
 # ===== ENH-009b: init --requirements tests =====
 
@@ -448,7 +528,7 @@ class TestInitRequirements:
     def test_init_requirements_with_packages(self, tmp_path):
         """init --requirements pkg1 pkg2 creates requirements.txt with those packages."""
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--root-project", str(tmp_path),
             "--project-name", "Test",
             "--requirements", "curl_cffi", "beautifulsoup4",
@@ -462,7 +542,7 @@ class TestInitRequirements:
     def test_init_requirements_empty_template(self, tmp_path):
         """init --requirements (no args) creates template requirements.txt."""
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--root-project", str(tmp_path),
             "--project-name", "Test",
             "--requirements",
@@ -475,7 +555,7 @@ class TestInitRequirements:
     def test_init_no_requirements_flag(self, tmp_path):
         """init without --requirements does not create requirements.txt."""
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--root-project", str(tmp_path),
             "--project-name", "Test",
         ])
@@ -485,7 +565,7 @@ class TestInitRequirements:
     def test_init_requirements_dry_run(self, tmp_path):
         """init --requirements --dry-run does not create the file."""
         result = main([
-            "init", "--output", str(tmp_path),
+            "init", "--allow-void", "--output", str(tmp_path),
             "--root-project", str(tmp_path),
             "--project-name", "Test",
             "--requirements", "flask",
