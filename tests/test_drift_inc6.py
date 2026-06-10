@@ -330,7 +330,7 @@ def test_repo_claim_todo_near_resolved_is_flagged(tmp_path):
 
 def test_canonical_facts_live():
     version, module_count, drift_sha = drift_audit.canonical_facts()
-    assert version == "0.4.0"
+    assert version == "0.4.1"
     assert module_count == 19
     assert drift_sha and len(drift_sha) == 12
 

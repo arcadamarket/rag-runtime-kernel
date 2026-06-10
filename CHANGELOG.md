@@ -4,6 +4,19 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+### Fixed — stale version assertion in the test suite (E-041)
+
+- `tests/test_drift_inc6.py::test_canonical_facts_live` pinned the kernel version
+  as the frozen literal `"0.4.0"` and was not updated when v0.4.1 bumped
+  `rag_kernel.__version__` to `0.4.1`. The assertion therefore failed **at the
+  `runtime-v0.4.1` tag** — the "1,123 total, all passing" note in the v0.4.1
+  section below did not reflect this one stale, **test-only** assertion. Corrected
+  to `"0.4.1"`; the full suite is green again (1,123 passing), health 20/20, drift
+  gate `268149294421` unchanged. **No runtime code is affected.** A follow-up to
+  replace the frozen-literal version tripwire with a single-source assertion
+  against `rag_kernel.__version__` (so a future bump can never re-redden it) is
+  tracked for a later session.
+
 ## [v0.4.1] — 2026-06-09
 
 Kernel hardening derived from the eBay Session-0 deployment audit (Track A1).
