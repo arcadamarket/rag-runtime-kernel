@@ -4,6 +4,26 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+### Changed — INIT spec v3.2.1: known-issues reconciliation + environment-audit hardening (INS-043/044/045)
+
+- `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md` supersedes v3.2.0 (v3.2.0 retained as
+  history). The §41 known-issues registry's two representations — the
+  human-readable table and the machine-readable `rag-config` block that
+  session-zero inherits — were **out of sync** (12 table rows vs 10 machine keys);
+  they are now reconciled to the **same 12 universal keys**. Added
+  `sandbox_mount_truncation` to the table, `dc_start_process_quotes` to the machine
+  block, and a new `fetch_to_disk` entry to **both** (platform `web_fetch` lands
+  off-mount; use `curl`/`wget` into the project tree — **INS-044**). The two
+  project-specific entries (`git_worktree_location`, `pat_outside_workspace`) were
+  scoped out of the universal template into per-project RAG registries, with a new
+  Maintenance note codifying the universal-vs-project boundary.
+- §37 environment audit now enumerates the fetch/VCS/shell `tooling` set
+  (curl/wget/git/gh/jq/pwsh/powershell.exe, present/version/path) and references
+  the `rag_kernel audit-env --json` command (**INS-045**, mirroring the v0.4.1
+  runtime capability into the prompt spec). §31 session-zero gains **Step 0:
+  environment audit** (**INS-043**). No schema change; regression `init --spec`
+  inherits exactly 12 known-issues, validation PASSED.
+
 ### Fixed — stale version assertion in the test suite (E-041)
 
 - `tests/test_drift_inc6.py::test_canonical_facts_live` pinned the kernel version

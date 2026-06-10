@@ -21,12 +21,12 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
 | **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,123 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.0** | Runtime kernel **v0.4.1** |
+| **Version** | Specification **v3.2.1** | Runtime kernel **v0.4.1** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
 
-> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.0`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.1`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.1`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.1`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
@@ -58,7 +58,7 @@ RAG Runtime Kernel moves that bookkeeping out of the model. State lives in plain
 Best for Claude Projects, ChatGPT, or any chat interface.
 
 1. Open a new project or conversation.
-2. Add [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md) to the session as a file (it's a full specification, ~100 KB — it goes into a **project/session**, not the short system-prompt field).
+2. Add [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md) to the session as a file (it's a full specification, ~100 KB — it goes into a **project/session**, not the short system-prompt field).
 3. Send: **"Initialize the project."** The LLM self-bootstraps, scans your folder if it has file access, and builds the `RAG/` state.
 4. On ChatGPT / GPT Web without file tools: download the generated RAG files at session end and re-upload them at the start of each session to restore state.
 
@@ -97,7 +97,7 @@ rmdir /s /q temp-clone
 **2. Bootstrap the RAG deterministically (zero LLM tokens):**
 
 ```bash
-python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md --output RAG/
+python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md --output RAG/
 # optional: merge project-specific context
 python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context your_context.json
 ```
@@ -244,8 +244,8 @@ Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING↔RECO
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md   # The specification (Tier 1 + Tier 2)
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md   # Previous spec version (archived)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md   # The specification (Tier 1 + Tier 2)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md   # Previous spec version (archived)
 ├── CONTRIBUTING.md                            # How to report issues
 ├── CHANGELOG.md                               # Version history
 ├── docs/
@@ -313,7 +313,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 
 | Line | Version | Status | Focus |
 |---|---|---|---|
-| Spec | **v3.2.0** | Released | Operational hardening, 51 sections: Web Access Protocol, Environment Audit, strengthened tier/env-switch gates, session-zero requirements + known-issues inheritance. |
+| Spec | **v3.2.1** | Released | Known-issues registry reconciled to 12 universal keys (INS-044 fetch-to-disk; project-specific entries scoped to per-project RAG), §37 fetch/VCS/shell tooling enumeration + `audit-env` (INS-045), §31 Step 0 environment audit (INS-043). |
 | Runtime | **v0.3.0** | Released | 13 modules, 758 tests. TLA+ guards **enforced** at runtime (FV-PHASE3/4) — transition table generated from the model, `guardgen`/`generated_guards` registered; **M-009** kernel-enforced context-truncation policy (per-region token accounting, deterministic eviction, HOT never evicted, checkpoint/evict/halt). |
 | Runtime | **v0.2.7** | Released | 12 modules, 676 tests. Graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
 | Runtime | **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). |
