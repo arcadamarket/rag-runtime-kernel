@@ -307,6 +307,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--error-log", type=Path, default=None,
         help="Path to ERROR_LOG.md for E-### record coverage (default: beside the RAG file).",
     )
+    audit_parser2.add_argument(
+        "--git-head", default=None,
+        help="Override the git HEAD used for the current_status freshness guard (E-043). "
+             "Default: auto-resolved from the RAG's git worktree; skipped if unresolvable.",
+    )
     audit_parser2.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
     # -- doctor (ENV-NORM increment 1: env + repo preflight) --
@@ -906,12 +911,61 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_git_head(rag_path: Path) -> "str | None":
+    """Best-effort short git HEAD for the current_status freshness guard (E-043).
+
+    Resolves the git worktree from the RAG's own pointers
+    (``current_status.git_worktree_path`` joined to the project root, derived both
+    from the RAG file location and from ``meta.root_project``) and runs
+    ``git -C <dir> rev-parse --short HEAD``. Returns ``None`` on ANY failure — no
+    git, not a repo, bad/foreign path — so the freshness guard simply skips the
+    HEAD sub-check instead of breaking the audit. A deployed project that is not a
+    git repo (or whose recorded path belongs to another OS) is audited cleanly.
+    """
+    import json
+    import subprocess
+
+    try:
+        hot = json.loads(rag_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        hot = {}
+    meta = hot.get("meta", {}) if isinstance(hot, dict) else {}
+    cs = hot.get("current_status", {}) if isinstance(hot, dict) else {}
+    root = meta.get("root_project") if isinstance(meta, dict) else None
+    wt = cs.get("git_worktree_path") if isinstance(cs, dict) else None
+    wt_norm = str(wt).replace("\\", "/").rstrip("/") if wt else None
+
+    project_root = rag_path.parent.parent  # RAG/RAG_MASTER.json -> project root
+    candidates: list[Path] = []
+    if wt_norm:
+        candidates.append(project_root / wt_norm)            # WSL/native via RAG location
+        if root:
+            candidates.append(Path(str(root).replace("\\", "/")) / wt_norm)  # recorded host path
+    candidates.append(project_root)                          # RAG lives inside the repo
+    candidates.append(rag_path.parent)
+
+    for d in candidates:
+        try:
+            if not d.exists():
+                continue
+            r = subprocess.run(
+                ["git", "-C", str(d), "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None  # git absent -> no point trying further candidates
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return None
+
+
 def cmd_audit(args: argparse.Namespace) -> int:
-    """Run the fail-loud session auditor over the RAG (DRIFT-ELIM inc 5).
+    """Run the fail-loud session auditor over the RAG (DRIFT-ELIM inc 5 + E-043).
 
     Asserts the rendered legacy arrays match the canonical tracked_items array
     (E-040 regression), supersede refs resolve, no active item's note contradicts
-    its status (INS-038), and no Cowork-memory side stores exist in the project
+    its status (INS-038), the current_status narrative's version/HEAD match the
+    live authorities (E-043), and no Cowork-memory side stores exist in the project
     root (Rule 13). Exit 0 if clean, 1 if any ERROR (or any finding under
     ``--strict``).
     """
@@ -922,12 +976,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
     if not rag_path.exists():
         print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
         return 1
+    git_head = getattr(args, "git_head", None) or _resolve_git_head(rag_path)
     try:
         report = drift_audit.audit_file(
             rag_path,
             scan_root=args.scan_root,
             error_log_path=getattr(args, "error_log", None),
             docs_root=getattr(args, "docs_root", None),
+            git_head=git_head,
         )
     except DriftStoreError as e:
         print(f"Error: {e}", file=sys.stderr)

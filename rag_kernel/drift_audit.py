@@ -62,8 +62,8 @@ also *verifies* that every render still equals the state it persisted.
               "check_render_parity", "check_supersede_refs",
               "check_note_status_contradiction", "check_side_rule_stores",
               "check_ledger_consistency", "check_record_coverage",
-              "check_repo_claim_reconciliation", "canonical_facts",
-              "audit_hot", "audit_file", "assert_clean"],
+              "check_repo_claim_reconciliation", "check_current_status_freshness",
+              "canonical_facts", "audit_hot", "audit_file", "assert_clean"],
   "use_when": "Verifying at a session boundary that every status render still matches the canonical tracked_items array and no parallel state store exists",
   "never_bypass": true
 }
@@ -88,7 +88,9 @@ from rag_kernel.drift_store import (
 from rag_kernel import drift_render
 
 # Bump when a check's contract or the report shape changes in a way a test pins.
-DRIFT_AUDIT_VERSION = "1.0.0"
+# 1.1.0 — added check_current_status_freshness (E-043): guards the current_status
+#         narrative against the live runtime version / git HEAD authorities.
+DRIFT_AUDIT_VERSION = "1.1.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -158,6 +160,22 @@ _MODULES_RE = re.compile(r"(\d+)\s+(?:capability\s+|runtime\s+)?modules?", re.IG
 _SHA_RE = re.compile(r"sha[`'\s:=]{0,6}([0-9a-f]{12,64})", re.IGNORECASE)
 # Forensic ``E-###`` record ids as they head an ERROR_LOG entry (markdown heading).
 _ERROR_HEADING_RE = re.compile(r"^#+\s*(E-\d+)\b", re.MULTILINE)
+
+# --- current_status freshness (E-043) --------------------------------------
+# current_status is a human-readable narrative block that DENORMALIZES facts
+# whose authorities live OUTSIDE the RAG: the kernel version
+# (``rag_kernel.__version__``) and the published git HEAD. Those are not RAG
+# state, so they cannot be *rendered* from the RAG — the discipline is to GUARD
+# them: extract the stated fact from the narrative and assert it still equals the
+# live authority. The fields below are the conventional carriers of each fact.
+_CS_VERSION_FIELD = "rag_kernel_version"   # leads with the current vX.Y.Z token
+_CS_HEAD_FIELDS: tuple[str, ...] = ("github_repo",)  # carries "LATEST COMMIT <sha>"
+# Leading semver token, tolerant of an optional 'v' prefix (v0.4.2 or 0.4.2).
+_CS_VERSION_TOKEN_RE = re.compile(r"\bv?(\d+\.\d+\.\d+)\b")
+# A 7–40 hex git sha introduced by COMMIT / HEAD (e.g. "LATEST COMMIT e109794").
+_CS_HEAD_RE = re.compile(
+    r"\b(?:latest\s+commit|head|commit)[`'\s:=]{1,6}([0-9a-f]{7,40})\b", re.IGNORECASE
+)
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +612,80 @@ def canonical_facts() -> tuple[Optional[str], Optional[int], Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# current_status freshness (E-043)
+# ---------------------------------------------------------------------------
+
+def check_current_status_freshness(
+    hot: dict,
+    *,
+    version: Optional[str] = None,
+    git_head: Optional[str] = None,
+) -> list[AuditFinding]:
+    """ERROR if the ``current_status`` narrative's stated runtime version / git
+    HEAD disagree with the live canonical authorities (E-043).
+
+    Why this is a GUARD, not a render: ``current_status`` denormalizes two facts
+    whose source of truth lives OUTSIDE the RAG — the kernel version
+    (``rag_kernel.__version__``) and the published git HEAD. Those are not RAG
+    state, so they cannot be rendered *from* the RAG the way ``open_tasks`` is
+    rendered from ``tracked_items``. The stale-snapshot drift E-043 caught — a
+    ``current_status`` frozen at an old session (S62) while the version and HEAD
+    had moved on — is therefore detectable only by extracting the stated fact and
+    asserting it still equals the live authority, failing loud on mismatch.
+
+    Self-skipping (mirrors the other conditional checks): each sub-check runs only
+    when BOTH the ``current_status`` field is present and parseable AND the
+    canonical fact is supplied (``None`` = not reconciled). A deployed project
+    with no ``current_status`` block, or one audited with no git context, is
+    therefore clean rather than falsely flagged.
+    """
+    findings: list[AuditFinding] = []
+    cs = hot.get("current_status") if isinstance(hot, dict) else None
+    if not isinstance(cs, dict):
+        return findings
+
+    # 1. runtime version: the leading vX.Y.Z token of current_status.rag_kernel_version
+    #    must equal the live rag_kernel.__version__.
+    if version:
+        raw = cs.get(_CS_VERSION_FIELD)
+        if isinstance(raw, str):
+            m = _CS_VERSION_TOKEN_RE.search(raw)
+            want = version.lstrip("v")
+            if m and m.group(1) != want:
+                findings.append(AuditFinding(
+                    check="current_status_freshness", severity=ERROR,
+                    detail=(
+                        f"current_status.{_CS_VERSION_FIELD} states version "
+                        f"{m.group(1)} but live rag_kernel.__version__ is {want} "
+                        "— stale snapshot (E-043); refresh current_status"
+                    ),
+                ))
+
+    # 2. git HEAD: the "LATEST COMMIT <sha>" in current_status.github_repo must
+    #    equal the live HEAD (prefix-compared, since one side is a short sha).
+    if git_head:
+        want_head = git_head.lower()
+        for fld in _CS_HEAD_FIELDS:
+            raw = cs.get(fld)
+            if not isinstance(raw, str):
+                continue
+            m = _CS_HEAD_RE.search(raw)
+            if m:
+                got = m.group(1).lower()
+                if not (got.startswith(want_head) or want_head.startswith(got)):
+                    findings.append(AuditFinding(
+                        check="current_status_freshness", severity=ERROR,
+                        detail=(
+                            f"current_status.{fld} states HEAD {got[:12]} but live "
+                            f"git HEAD is {git_head} — stale snapshot (E-043); "
+                            "refresh current_status"
+                        ),
+                    ))
+            break  # only the first head-bearing field is the canonical pointer
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Aggregate runners
 # ---------------------------------------------------------------------------
 
@@ -614,15 +706,17 @@ def audit_hot(
     version: Optional[str] = None,
     module_count: Optional[int] = None,
     drift_sha: Optional[str] = None,
+    git_head: Optional[str] = None,
 ) -> AuditReport:
     """Run every check over a loaded HOT dict.
 
     Always-on (pure over the in-memory state): render parity, supersede refs,
     note/status contradiction, ledger consistency, and record coverage of the
-    inference_ledger. Conditional: the ERROR_LOG coverage scan runs when
-    ``error_log_path`` is given; the Rule 11 published-doc reconciliation runs
-    when ``doc_paths`` is given; the Rule 13 side-store scan runs when ``root``
-    is given (no path = no scan).
+    inference_ledger. Conditional: the current_status freshness guard (E-043)
+    asserts whichever of ``version`` / ``git_head`` is supplied; the ERROR_LOG
+    coverage scan runs when ``error_log_path`` is given; the Rule 11 published-doc
+    reconciliation runs when ``doc_paths`` is given; the Rule 13 side-store scan
+    runs when ``root`` is given (no path = no scan).
     """
     findings: list[AuditFinding] = []
     findings += check_render_parity(hot)
@@ -631,6 +725,7 @@ def audit_hot(
     findings += check_note_status_contradiction(store)
     findings += check_ledger_consistency(hot)
     findings += check_record_coverage(hot, error_log_path=error_log_path)
+    findings += check_current_status_freshness(hot, version=version, git_head=git_head)
     if doc_paths:
         findings += check_repo_claim_reconciliation(
             doc_paths, store,
@@ -647,6 +742,7 @@ def audit_file(
     scan_root: bool = True,
     error_log_path: Optional[Path | str] = None,
     docs_root: Optional[Path | str] = None,
+    git_head: Optional[str] = None,
 ) -> AuditReport:
     """Load a RAG file and audit it. Fail loud on bad JSON (DriftStoreError).
 
@@ -675,15 +771,19 @@ def audit_file(
         elp = p.parent / "ERROR_LOG.md"  # RAG/ERROR_LOG.md beside the RAG file
 
     doc_paths = None
-    version = module_count = drift_sha = None
+    # canonical_facts() is cheap (pure introspection) and the current_status
+    # freshness guard (E-043) needs the live version regardless of docs_root, so
+    # compute it unconditionally; module_count / drift_sha are consumed only by
+    # the Rule 11 doc reconciliation (and ignored by audit_hot without doc_paths).
+    version, module_count, drift_sha = canonical_facts()
     if docs_root is not None:
         dr = Path(docs_root)
         doc_paths = [dr / "README.md", dr / "CHANGELOG.md", dr / "docs" / "ROADMAP.md"]
-        version, module_count, drift_sha = canonical_facts()
 
     return audit_hot(
         hot, root=use_root, error_log_path=elp, doc_paths=doc_paths,
-        version=version, module_count=module_count, drift_sha=drift_sha)
+        version=version, module_count=module_count, drift_sha=drift_sha,
+        git_head=git_head)
 
 
 def assert_clean(report: AuditReport, *, strict: bool = False) -> None:
@@ -715,6 +815,7 @@ __all__ = [
     "check_ledger_consistency",
     "check_record_coverage",
     "check_repo_claim_reconciliation",
+    "check_current_status_freshness",
     "canonical_facts",
     "audit_hot",
     "audit_file",

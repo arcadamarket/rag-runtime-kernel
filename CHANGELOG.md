@@ -6,6 +6,15 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.3] — 2026-06-11
+
+**AUDIT-CS-FRESHNESS (E-043).** The `audit` command now guards the human-readable `current_status` narrative against the live authorities its facts denormalize — `rag_kernel.__version__` and the git HEAD — failing loud on a stale snapshot (the S62→S67 drift where `current_status` froze at an old version while the runtime moved on). New `check_current_status_freshness` auditor check (`DRIFT_AUDIT_VERSION` → 1.1.0), a new `audit --git-head` flag with best-effort auto-resolution from the RAG's worktree pointer, and 17 tests. No new module (health 20/20), no schema/WAL/TLA+ change (drift gate `268149294421`). **1,159 tests.**
+
+### Added — current_status freshness guard (AUDIT-CS-FRESHNESS / E-043)
+
+- **`check_current_status_freshness`** — extracts the leading version token from `current_status.rag_kernel_version` and the `LATEST COMMIT <sha>` from `current_status.github_repo`, then asserts each still equals the live authority (version vs `__version__`; HEAD vs git, prefix-compared). It is a **guard, not a render**: these facts' source of truth lives outside the RAG, so they cannot be rendered from it the way `open_tasks` renders from `tracked_items`. Self-skipping — a sub-check runs only when both the `current_status` field and the canonical fact are present, so a deployed project with no `current_status` block or no git context is audited cleanly.
+- **`audit --git-head`** — overrides the HEAD used by the freshness guard; the default auto-resolves via `git -C <worktree> rev-parse --short HEAD` from the RAG's `current_status.git_worktree_path`, returning `None` (skip) on any failure (no git, not a repo, foreign-OS path).
+
 ## [v0.4.2] — 2026-06-11
 
 **ENV-NORM — shell-execution normalization.** Makes `tmux-mcp` the primary shell/git/test transport (composed commands run verbatim; the `wsl-exec` wrapper-tax — `&&`/`;`/`|`/`$()` stripping, the `2>&1`→`1` orphan, `../..`→`//` collapse — is demoted to an atomic-only fallback), ships a `doctor` boot preflight and the guarded `add` verb, and rewrites the spec to v3.2.2 (incl. a `configure` sweep of the project RAG's GitHub deploy/metadata methods to tmux-primary). No new module (health 20/20), no schema/WAL/TLA+ change (drift gate `268149294421`). **1,142 tests.**
