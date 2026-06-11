@@ -4,7 +4,13 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
-### Added — `doctor` preflight + guarded `add` verb (ENV-NORM increment 1, UNRELEASED)
+_Nothing yet._
+
+## [v0.4.2] — 2026-06-11
+
+**ENV-NORM — shell-execution normalization.** Makes `tmux-mcp` the primary shell/git/test transport (composed commands run verbatim; the `wsl-exec` wrapper-tax — `&&`/`;`/`|`/`$()` stripping, the `2>&1`→`1` orphan, `../..`→`//` collapse — is demoted to an atomic-only fallback), ships a `doctor` boot preflight and the guarded `add` verb, and rewrites the spec to v3.2.2 (incl. a `configure` sweep of the project RAG's GitHub deploy/metadata methods to tmux-primary). No new module (health 20/20), no schema/WAL/TLA+ change (drift gate `268149294421`). **1,142 tests.**
+
+### Added — `doctor` preflight + guarded `add` verb (ENV-NORM)
 
 - **`rag_kernel doctor`** — a deterministic, fail-closed preflight: (1) ENV — best
   working Python, broken-pip flags, and the fetch/VCS/shell tooling set, rendered
@@ -24,10 +30,22 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
   status/kind, or a `SUPERSEDED` add without `--by` fails loud and writes nothing.
   Closes the long-flagged no-ADD-verb gap (E-037/E-040 context).
 - CLI-only — **no new module** (health stays 20/20), **no schema/WAL/TLA+ change**
-  (drift gate `268149294421` unchanged). +20 tests (`tests/test_doctor.py`,
-  `tests/test_add_verb.py`). This is **increment 1 of the ENV-NORM milestone and is
-  NOT a release**: spec v3.2.2 (§Shell-Execution rewrite), the `wsl-exec` reference
-  sweep, the eBay-guide fixes, and the `v0.4.2` cut land in increment 2.
+  (drift gate `268149294421` unchanged). +19 tests (`tests/test_doctor.py`,
+  `tests/test_add_verb.py`).
+
+### Changed — INIT spec v3.2.1 → v3.2.2: tmux-primary tool hierarchy (ENV-NORM)
+
+- `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md` supersedes v3.2.1 (retained as history).
+  §3a tool hierarchy makes **tmux-mcp the PRIMARY** shell/git/test transport (runs
+  `&&`/`;`/`|`/`$()`/`2>&1` verbatim, no orphan `1` file); `wsl-exec` is demoted to
+  an **atomic-single-command** fallback with its wrapper-tax documented; PowerShell
+  is last resort; Desktop Commander excluded for parenthesized paths; the Cowork
+  sandbox bash is banned. New `session_start_shell_rule` (first shell action of
+  every session via tmux-mcp). §3 gains a `doctor`/preflight boot step
+  (REPORT→PREPARE on the v3.2.1 Step-0 `audit-env`). The project RAG's
+  `github_deploy_method`/`github_metadata_ops` were swept to tmux-primary via the
+  sanctioned `configure` deep-merge. Regression `init --spec v3.2.2` inherits
+  exactly 12 known-issues, validation PASSED.
 
 ### Changed — INIT spec v3.2.1: known-issues reconciliation + environment-audit hardening (INS-043/044/045)
 

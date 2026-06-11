@@ -19,14 +19,14 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **Who it's for** | Anyone. No Python, no Node, no install. | Builders of large, multi-session, token-critical projects who want hard guarantees. |
 | **What you run** | One markdown specification, dropped into a chat session. | The `rag_kernel` Python runtime (MCP or HTTP server) alongside the spec. |
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
-| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,123 passing tests. |
+| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,142 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.1** | Runtime kernel **v0.4.1** |
+| **Version** | Specification **v3.2.2** | Runtime kernel **v0.4.2** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
 
-> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.1`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.1`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.2`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.2`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
@@ -40,7 +40,7 @@ RAG Runtime Kernel moves that bookkeeping out of the model. State lives in plain
 
 - **State management leaves the LLM entirely.** The model proposes a JSON action; the kernel validates it against policy and either commits or rejects it. The model never directly mutates state.
 - **Bootstrap costs zero LLM tokens.** `rag_kernel init` parses the ~100 KB specification and produces `RAG_MASTER.json` deterministically — no model call. The work that used to mean "feed the model a 20K-token spec and ask it to build the RAG" is now a function call.
-- **Determinism is proven, not asserted.** The state machine is verified with TLA+ (the same class of formal method Amazon uses for AWS) and exercised by 1,123 unit tests — all passing.
+- **Determinism is proven, not asserted.** The state machine is verified with TLA+ (the same class of formal method Amazon uses for AWS) and exercised by 1,142 unit tests — all passing.
 
 **What you get in both tiers:**
 
@@ -58,7 +58,7 @@ RAG Runtime Kernel moves that bookkeeping out of the model. State lives in plain
 Best for Claude Projects, ChatGPT, or any chat interface.
 
 1. Open a new project or conversation.
-2. Add [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md) to the session as a file (it's a full specification, ~100 KB — it goes into a **project/session**, not the short system-prompt field).
+2. Add [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md) to the session as a file (it's a full specification, ~100 KB — it goes into a **project/session**, not the short system-prompt field).
 3. Send: **"Initialize the project."** The LLM self-bootstraps, scans your folder if it has file access, and builds the `RAG/` state.
 4. On ChatGPT / GPT Web without file tools: download the generated RAG files at session end and re-upload them at the start of each session to restore state.
 
@@ -97,7 +97,7 @@ rmdir /s /q temp-clone
 **2. Bootstrap the RAG deterministically (zero LLM tokens):**
 
 ```bash
-python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md --output RAG/
+python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md --output RAG/
 # optional: merge project-specific context
 python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context your_context.json
 ```
@@ -121,10 +121,10 @@ This section states only what is measured or formally verified — no marketing 
 
 **Determinism (Tier 2):**
 
-- **1,123 / 1,123 unit tests passing** (runtime v0.4.1) across 19 runtime modules (state machine with TLA+-enforced transition guards, persistence/WAL, COLD manager, concurrency, conflict engine, schemas, HTTP API, MCP transport, spec parser, session logger, generated guards, guard generator, context-truncation policy, graph orchestrator, agent/session supervisor, and the DRIFT-ELIM project-state layer — item-lifecycle core, atomic mutation store, deterministic renders, and the fail-loud session auditor).
+- **1,142 / 1,142 unit tests passing** (runtime v0.4.2) across 19 runtime modules (state machine with TLA+-enforced transition guards, persistence/WAL, COLD manager, concurrency, conflict engine, schemas, HTTP API, MCP transport, spec parser, session logger, generated guards, guard generator, context-truncation policy, graph orchestrator, agent/session supervisor, and the DRIFT-ELIM project-state layer — item-lifecycle core, atomic mutation store, deterministic renders, and the fail-loud session auditor).
 - **TLA+ formal verification:** the TLC model checker exhaustively explored **389,522 states (168,520 distinct)** to depth 19 and confirmed **8 safety invariants + 3 liveness properties with zero violations**. The TLA+ spec is a 1:1 transcription of the Python state machine. Two genuine liveness bugs were found and fixed during verification.
 - **The verified model is now mechanically enforced at runtime (FV-PHASE4):** the state machine's transition table is *generated* from the TLA+ model and legality is checked through the generated predicate — the runtime can no longer drift from what TLC proved. A `guardgen --check` gate detects any model/code divergence.
-- Unit tests prove "these 1,123 scenarios work." TLA+ proves "no reachable state can violate the invariants, and the system always makes progress." The second is a strictly stronger guarantee.
+- Unit tests prove "these 1,142 scenarios work." TLA+ proves "no reachable state can violate the invariants, and the system always makes progress." The second is a strictly stronger guarantee.
 
 **Token economy (Tier 2):**
 
@@ -143,7 +143,7 @@ A positioning comparison, not a controlled benchmark. Full notes: [`docs/benchma
 | Capability | RAG Runtime Kernel | Claude Code | lean-ctx | LLM Wiki |
 |---|---|---|---|---|
 | **Cross-session memory** | Full: HOT/COLD + WAL + crash recovery | Partial: CLAUDE.md + auto-memory, no crash recovery | None (compresses I/O, doesn't persist state) | Pattern only |
-| **Deterministic state machine** | Yes — formally verified (TLA+), 1,123 tests | No | No | No |
+| **Deterministic state machine** | Yes — formally verified (TLA+), 1,142 tests | No | No | No |
 | **Where state work runs** | Off the LLM, in Python (Tier 2) | In-session, model-mediated | N/A — I/O compression layer | In the LLM / external tooling |
 | **Token approach** | State ops cost **0 LLM tokens**; lean HOT boot | Grows without curation | **60–99% raw I/O compression (best in class)** | Depends on wiki quality |
 | **Cross-platform** | Claude + GPT + any LLM, one spec | Claude Code CLI only | Editor-focused | Platform-agnostic pattern |
@@ -244,7 +244,7 @@ Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING↔RECO
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md   # The specification (Tier 1 + Tier 2)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md   # The specification (Tier 1 + Tier 2)
 ├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md   # Previous spec version (archived)
 ├── CONTRIBUTING.md                            # How to report issues
 ├── CHANGELOG.md                               # Version history
@@ -257,7 +257,7 @@ rag-runtime-kernel/
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
 │   ├── v3.2_ARCHITECTURE_DESIGN.md            # Runtime architecture design doc
 │   └── ROADMAP.md                             # Development roadmap
-├── rag_kernel/                                # Tier 2 runtime kernel (v0.4.1)
+├── rag_kernel/                                # Tier 2 runtime kernel (v0.4.2)
 │   ├── __init__.py                            # Package entry, discover() capability registry
 │   ├── __main__.py                            # CLI (init / configure / health / serve / mcp / session / checkpoint / gc / graph / resolve / defer / render / note)
 │   ├── api.py                                 # HTTP API (FastAPI)
@@ -279,7 +279,7 @@ rag-runtime-kernel/
 │   ├── drift_store.py                         # DRIFT-ELIM: atomic mutation API over tracked_items + backlog migration; lifecycle CLI (v0.4.0)
 │   ├── drift_render.py                        # DRIFT-ELIM: deterministic renders of open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items (sole authority); render CLI (v0.4.0)
 │   └── drift_audit.py                         # DRIFT-ELIM: fail-loud session-boundary auditor — render parity, supersede refs, note/status, side-store scan (v0.4.0)
-├── tests/                                     # 1,123 tests (v0.4.1 release)
+├── tests/                                     # 1,142 tests (v0.4.2 release)
 ├── .github/                                   # FUNDING.yml + issue templates
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
@@ -313,7 +313,9 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 
 | Line | Version | Status | Focus |
 |---|---|---|---|
-| Spec | **v3.2.1** | Released | Known-issues registry reconciled to 12 universal keys (INS-044 fetch-to-disk; project-specific entries scoped to per-project RAG), §37 fetch/VCS/shell tooling enumeration + `audit-env` (INS-045), §31 Step 0 environment audit (INS-043). |
+| Spec | **v3.2.2** | Released | **ENV-NORM** — §3a tool hierarchy rewritten to **tmux-mcp primary** for shell/git/test (composed commands verbatim, no orphan `1`); `wsl-exec` demoted to atomic fallback; new `session_start_shell_rule`; §3 `doctor` boot preflight. Prior v3.2.1: known-issues registry reconciled to 12 universal keys (INS-044 fetch-to-disk), §37 fetch/VCS/shell tooling enumeration + `audit-env` (INS-045), §31 Step 0 environment audit (INS-043). |
+| Runtime | **v0.4.2** | Released | **ENV-NORM** — `doctor` preflight (env summary, fail-closed stale-`.git/index.lock` `--fix`, shell-policy first-move, `--emit-runner`) + guarded `add` verb (closes the no-ADD-verb gap), paired with spec v3.2.2 tmux-primary tool hierarchy. No new module (19), health 20/20, 1,142 tests. |
+| Runtime | **v0.4.1** | Released | Kernel hardening from the eBay S0 deployment audit: `audit-env` fetch/VCS/shell tooling enumeration (INS-045) + `init` fail-loud on missing `--spec` (INS-046), bundling DRIFT-ELIM inc 6. No new module (19), health 20/20, 1,123 tests. |
 | Runtime | **v0.3.0** | Released | 13 modules, 758 tests. TLA+ guards **enforced** at runtime (FV-PHASE3/4) — transition table generated from the model, `guardgen`/`generated_guards` registered; **M-009** kernel-enforced context-truncation policy (per-region token accounting, deterministic eviction, HOT never evicted, checkpoint/evict/halt). |
 | Runtime | **v0.2.7** | Released | 12 modules, 676 tests. Graduated POV, delta checkpoints, conflict auto-categorization engine, session logger, session/checkpoint/gc CLI, spec enforcement. |
 | Runtime | **v0.2.0** | Released | Zero-touch bootstrap (`rag_kernel init`), capability self-discovery (`discover()`), project configuration (`rag_kernel configure`). |

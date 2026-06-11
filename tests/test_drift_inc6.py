@@ -329,8 +329,12 @@ def test_repo_claim_todo_near_resolved_is_flagged(tmp_path):
 
 
 def test_canonical_facts_live():
+    import rag_kernel
     version, module_count, drift_sha = drift_audit.canonical_facts()
-    assert version == "0.4.1"
+    # De-drift (E-041 follow-up): assert against the single source of truth
+    # (rag_kernel.__version__), never a frozen literal that silently rots on the
+    # next version bump and re-reddens the suite (the original S60→S61 E-041).
+    assert version == rag_kernel.__version__
     assert module_count == 19
     assert drift_sha and len(drift_sha) == 12
 
