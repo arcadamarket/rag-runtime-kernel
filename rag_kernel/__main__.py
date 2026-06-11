@@ -309,6 +309,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_parser2.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
+    # -- doctor (ENV-NORM increment 1: env + repo preflight) --
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Preflight env + repo: best python, stale .git/index.lock (fail-closed --fix), shell-policy first move.",
+    )
+    doctor_parser.add_argument("--path", type=Path, default=Path("."), help="Project root (default: .)")
+    doctor_parser.add_argument("--rag", type=Path, default=None, help="RAG_MASTER.json to render the shell-policy first move from")
+    doctor_parser.add_argument("--fix", action="store_true", help="Clear a stale index.lock when provably safe (no git running + aged)")
+    doctor_parser.add_argument("--stale-after", dest="stale_after", type=float, default=60.0, help="Seconds before an unheld index.lock counts as stale (default: 60)")
+    doctor_parser.add_argument("--emit-runner", dest="emit_runner", type=Path, default=None, help="Write the script-file runner template to this path and exit")
+    doctor_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
+
+    # -- add (ENV-NORM increment 1: guarded ADD verb — closes the no-ADD-verb gap) --
+    add_item_parser = subparsers.add_parser(
+        "add",
+        help="Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id).",
+    )
+    add_item_parser.add_argument("item_id", type=str, help="id of the new tracked item")
+    add_item_parser.add_argument("title", type=str, help="one-line title")
+    add_item_parser.add_argument("--rag", type=Path, default=Path("RAG/RAG_MASTER.json"), help="Path to RAG_MASTER.json")
+    add_item_parser.add_argument("--status", type=str, default="OPEN", help="initial status (default: OPEN)")
+    add_item_parser.add_argument("--kind", type=str, default="TASK", help="item kind (default: TASK)")
+    add_item_parser.add_argument("--session", type=str, required=True, help="session id recorded on the item (audit trail)")
+    add_item_parser.add_argument("--note", type=str, default="", help="one-line note")
+    add_item_parser.add_argument("--by", type=str, default=None, help="superseding item id (required if --status SUPERSEDED)")
+    add_item_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
+
     return parser
 
 
@@ -1180,21 +1207,16 @@ def cmd_gc(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_audit_env(args: argparse.Namespace) -> int:
-    """Audit environment: enumerate all available Python versions, pip variants,
-    package managers, and project-level dependencies.
+def build_env_audit(project_root: Path) -> dict:
+    """Probe the environment and return the audit dict (no printing).
 
-    This is a deterministic, kernel-enforced check that MUST be run before any
-    package installation attempt or execution environment switch. It establishes
-    ground truth so the LLM doesn't panic-switch environments on first failure.
+    Extracted from :func:`cmd_audit_env` so the ``doctor`` preflight can reuse the
+    EXACT same enumeration — one env-probe authority, no second copy to drift
+    (the DRIFT-ELIM principle applied to the CLI itself).
 
     Satisfies: INS-017 (environment audit protocol, kernel-enforced).
     """
-    import json as json_mod
     import subprocess
-
-    project_root = args.path.resolve()
-    json_output = getattr(args, "json_output", False)
 
     audit: dict = {
         "python_versions": [],
@@ -1385,6 +1407,21 @@ def cmd_audit_env(args: argparse.Namespace) -> int:
         except OSError:
             pass
 
+    return audit
+
+
+def cmd_audit_env(args: argparse.Namespace) -> int:
+    """Audit environment: enumerate Python versions, pip variants, package
+    managers, fetch/VCS/shell tooling, and project deps. Renders build_env_audit.
+
+    Satisfies: INS-017 (environment audit protocol, kernel-enforced).
+    """
+    import json as json_mod
+
+    project_root = args.path.resolve()
+    json_output = getattr(args, "json_output", False)
+    audit = build_env_audit(project_root)
+
     # --- Output ---
     if json_output:
         print(json_mod.dumps(audit, indent=2))
@@ -1453,6 +1490,277 @@ def cmd_audit_env(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# doctor / preflight + guarded ADD verb (ENV-NORM increment 1)
+# ---------------------------------------------------------------------------
+
+# The proven anti-mangling shell pattern (E-036 / E-042): never inline-chain a
+# composed command through a sanitizing transport — write it to a script file in
+# the project tree and run THAT verbatim under a real shell (tmux-mcp). This is
+# what `doctor --emit-runner` drops next to the project so the recommended runner
+# is always one file away instead of a remembered convention.
+_RUNNER_TEMPLATE = """#!/usr/bin/env bash
+# rag_kernel run-in-project helper (emitted by `rag_kernel doctor --emit-runner`).
+# WHY: composed shell (&&, ;, |, $(), 2>&1) is mangled by sanitizing transports
+# (wsl-exec strips operators and leaves an orphan `1` file). The structural fix is
+# to put the commands in THIS file and execute it verbatim under a real shell.
+#   usage:  bash run_in_project.sh
+set -euo pipefail
+cd "$(dirname "$0")"
+# --- put your composed commands below this line ---
+"""
+
+
+def diagnose_index_lock(
+    lock_exists: bool,
+    git_running: bool,
+    lock_age_seconds,
+    *,
+    stale_after: float = 60.0,
+) -> dict:
+    """Pure, fail-closed decision: is a ``.git/index.lock`` safe to clear?
+
+    A lock is STALE (clearable) only when nothing currently holds it: no git
+    process is running AND the lock has aged past ``stale_after``. A running git
+    process means the lock is LIVE — never touch it. If the age cannot be read,
+    refuse (fail-closed). Deterministic and side-effect-free so it is unit-tested
+    without real processes or files.
+
+    Returns ``{present, verdict, clearable, reason}`` with verdict in
+    {absent, live, stale, fresh, unknown}.
+    """
+    if not lock_exists:
+        return {"present": False, "verdict": "absent", "clearable": False,
+                "reason": "no .git/index.lock present"}
+    if git_running:
+        return {"present": True, "verdict": "live", "clearable": False,
+                "reason": "a git process is running — lock is LIVE, do not clear"}
+    if lock_age_seconds is None:
+        return {"present": True, "verdict": "unknown", "clearable": False,
+                "reason": "cannot determine lock age — refusing to clear (fail-closed)"}
+    if lock_age_seconds >= stale_after:
+        return {"present": True, "verdict": "stale", "clearable": True,
+                "reason": (f"no git running and lock aged {lock_age_seconds:.0f}s "
+                           f">= {stale_after:.0f}s — safe to clear")}
+    return {"present": True, "verdict": "fresh", "clearable": False,
+            "reason": (f"no git running but lock only {lock_age_seconds:.0f}s old "
+                       f"(< {stale_after:.0f}s) — refusing (could be a live op)")}
+
+
+def _git_process_running() -> bool:
+    """Best-effort, stdlib-only check for a running ``git`` process (POSIX + Win)."""
+    import subprocess
+    try:
+        r = subprocess.run(["pgrep", "-x", "git"], capture_output=True, text=True, timeout=5)
+        return r.returncode == 0
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq git.exe"],
+                           capture_output=True, text=True, timeout=5)
+        return "git.exe" in r.stdout.lower()
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Preflight the environment + repo before real work (ENV-NORM increment 1).
+
+    Three deterministic, fail-closed checks:
+      1. ENV   — best working Python, broken-pip flags, fetch/VCS/shell tooling
+                 (renders :func:`build_env_audit` — same authority as audit-env).
+      2. LOCK  — detects a stale ``.git/index.lock`` and, only with ``--fix`` and
+                 only when :func:`diagnose_index_lock` proves it clearable (no git
+                 running AND aged), clears it. A LIVE lock is never touched. This
+                 turns the recurring stale-lock waste (E-042 / S61 / S62) into an
+                 enforced check instead of a remembered manual cleanup.
+      3. SHELL — prints the prescribed first move (tmux-mcp primary). With
+                 ``--rag`` the pointer is rendered from the RAG's
+                 ``session_start_shell_rule`` (no second copy of the rule, Rule 13).
+
+    Exit 0 when nothing blocks; non-zero when a blocking issue is found and not
+    fixed. ``--emit-runner PATH`` writes the script-file runner template and exits.
+    """
+    import json as json_mod
+    import time
+
+    project_root = args.path.resolve()
+
+    if getattr(args, "emit_runner", None):
+        dest = Path(args.emit_runner).resolve()
+        dest.write_text(_RUNNER_TEMPLATE, encoding="utf-8")
+        try:
+            dest.chmod(0o755)
+        except OSError:
+            pass
+        print(f"runner written: {dest}")
+        return 0
+
+    report: dict = {"env": {}, "lock": {}, "shell": {}, "blocking": []}
+
+    # 1. ENV (same authority as audit-env)
+    audit = build_env_audit(project_root)
+    working = [p for p in audit["python_versions"] if p["pip_works"]]
+    broken = [p for p in audit["python_versions"] if not p["pip_works"]]
+    tools_present = {t["name"]: t["present"] for t in audit["tooling"]}
+    report["env"] = {
+        "best_python": (working[0]["command"] + " " + working[0]["version"]) if working else None,
+        "broken_pip": [p["command"] + " " + p["version"] for p in broken],
+        "tooling_present": [n for n, p in tools_present.items() if p],
+        "tooling_missing": [n for n, p in tools_present.items() if not p],
+    }
+    if not working:
+        report["blocking"].append("no Python with a working pip")
+    if not tools_present.get("git", False):
+        report["blocking"].append("git not found")
+
+    # 2. LOCK
+    lock_path = project_root / ".git" / "index.lock"
+    lock_exists = lock_path.exists()
+    age = None
+    if lock_exists:
+        try:
+            age = max(0.0, time.time() - lock_path.stat().st_mtime)
+        except OSError:
+            age = None
+    git_running = _git_process_running() if lock_exists else False
+    diag = diagnose_index_lock(lock_exists, git_running, age, stale_after=args.stale_after)
+    report["lock"] = diag
+    if lock_exists and getattr(args, "fix", False) and diag["clearable"]:
+        try:
+            lock_path.unlink()
+            report["lock"]["cleared"] = True
+            report["lock"]["reason"] += "  [CLEARED]"
+        except OSError as ex:
+            report["lock"]["cleared"] = False
+            report["blocking"].append(f"index.lock present and unlink failed: {ex}")
+    elif lock_exists and diag["verdict"] == "live":
+        report["blocking"].append("git index.lock is LIVE (a git op is running)")
+    elif lock_exists and diag["verdict"] == "stale" and not getattr(args, "fix", False):
+        report["lock"]["hint"] = "re-run with --fix to clear"
+
+    # 3. SHELL policy first move (render from RAG when given)
+    ssr = None
+    rag_path = getattr(args, "rag", None)
+    if rag_path:
+        try:
+            hot = json_mod.loads(Path(rag_path).read_text(encoding="utf-8"))
+            ssr = hot.get("operating_protocol", {}).get("session_start_shell_rule")
+        except (OSError, ValueError):
+            ssr = None
+    report["shell"] = {
+        "first_move": ("First shell/git/test action via tmux-mcp (PRIMARY). "
+                       "wsl-exec = atomic single commands only. Cowork sandbox BANNED."),
+        "rag_rule_present": bool(ssr),
+    }
+
+    # --- Output ---
+    if getattr(args, "json_output", False):
+        print(json_mod.dumps(report, indent=2))
+        return 1 if report["blocking"] else 0
+
+    print("RAG Runtime Kernel - doctor (preflight)")
+    print("=" * 50)
+    e = report["env"]
+    print(f"ENV   best python : {e['best_python'] or 'NONE (blocking)'}")
+    if e["broken_pip"]:
+        print(f"      broken pip  : {', '.join(e['broken_pip'])}")
+    print(f"      tooling     : present={','.join(e['tooling_present']) or '-'} "
+          f"| missing={','.join(e['tooling_missing']) or '-'}")
+    lk = report["lock"]
+    print(f"LOCK  {lk['verdict']:8s}: {lk['reason']}")
+    if lk.get("hint"):
+        print(f"      hint        : {lk['hint']}")
+    print(f"SHELL first move : {report['shell']['first_move']}")
+    if ssr:
+        print("      (rendered from RAG operating_protocol.session_start_shell_rule)")
+    print("=" * 50)
+    if report["blocking"]:
+        for b in report["blocking"]:
+            print(f"BLOCKING: {b}")
+        return 1
+    print("OK: preflight clean.")
+    return 0
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Add a NEW canonical tracked item through the guarded, atomic store API.
+
+    Closes the long-flagged no-ADD-verb gap: the lifecycle verbs only TRANSITION
+    existing items and ``migrate_backlog`` refuses a non-empty array, so there was
+    no CLI path to introduce a brand-new tracked item without hand-editing JSON —
+    the exact drift the project forbids (E-037 / E-040). This wires
+    ``drift_store.add_items_file``: one validated spec -> unique-id invariant ->
+    atomic write (tmp -> verify -> .bak -> rename). A duplicate id fails LOUD and
+    writes nothing.
+    """
+    from rag_kernel.drift_control import ItemKind, ItemStatus, ItemValidationError
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        DuplicateItemError,
+        TrackedItemStore,
+        add_items_file,
+        load_hot,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    try:
+        status = ItemStatus(args.status.upper())
+    except ValueError:
+        print(f"Error: unknown status {args.status!r}; valid: "
+              f"{[s.value for s in ItemStatus]}", file=sys.stderr)
+        return 1
+    try:
+        kind = ItemKind(args.kind.upper())
+    except ValueError:
+        print(f"Error: unknown kind {args.kind!r}; valid: "
+              f"{[k.value for k in ItemKind]}", file=sys.stderr)
+        return 1
+
+    spec: dict = {
+        "id": args.item_id,
+        "title": args.title,
+        "status": status,
+        "kind": kind,
+        "session": args.session,
+        "note": args.note,
+    }
+    if status == ItemStatus.SUPERSEDED:
+        if not getattr(args, "by", None):
+            print("Error: adding at status SUPERSEDED requires --by", file=sys.stderr)
+            return 1
+        spec["superseded_by"] = args.by
+
+    try:
+        store = TrackedItemStore.from_hot(load_hot(rag_path))
+    except DriftStoreError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+    if args.item_id in store:
+        print(f"Error: id {args.item_id!r} already exists "
+              f"(add is fail-loud on duplicates)", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        print(f"[DRY RUN] would add {args.item_id} "
+              f"[{status.value}/{kind.value}] (no write)")
+        return 0
+
+    try:
+        add_items_file(rag_path, [spec])
+    except (DuplicateItemError, DriftStoreError, ItemValidationError) as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    print(f"added {args.item_id}: {status.value} {kind.value}  "
+          f"{args.title!r}  [session {args.session}]")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1471,6 +1779,8 @@ def main(argv: list[str] | None = None) -> int:
         "render": cmd_render,
         "note": cmd_note,
         "audit": cmd_audit,
+        "doctor": cmd_doctor,
+        "add": cmd_add,
     }
     return commands[args.command](args)
 

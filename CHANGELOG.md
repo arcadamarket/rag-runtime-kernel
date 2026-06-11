@@ -4,6 +4,31 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+### Added — `doctor` preflight + guarded `add` verb (ENV-NORM increment 1, UNRELEASED)
+
+- **`rag_kernel doctor`** — a deterministic, fail-closed preflight: (1) ENV — best
+  working Python, broken-pip flags, and the fetch/VCS/shell tooling set, rendered
+  from the *same* `build_env_audit` authority as `audit-env` (extracted, no second
+  copy to drift); (2) LOCK — detects a stale `.git/index.lock` and, only with
+  `--fix` and only when `diagnose_index_lock` proves it clearable (no git process
+  running **and** aged past `--stale-after`), clears it; a LIVE lock is never
+  touched. This turns the recurring stale-lock waste (E-042 / S61 / S62) into an
+  enforced check. (3) SHELL — prints the prescribed first move (tmux-mcp primary),
+  rendered from `operating_protocol.session_start_shell_rule` when `--rag` is given
+  (no second copy of the rule). `--emit-runner PATH` writes the script-file runner
+  template (the anti-mangling pattern from E-036/E-042).
+- **`rag_kernel add`** — the missing CLI path to introduce a **new** canonical
+  tracked item, wiring the existing `drift_store.add_items_file` (lifecycle verbs
+  only *transition* existing items; `migrate_backlog` refuses a non-empty array).
+  One validated spec → unique-id invariant → atomic write; a duplicate id, unknown
+  status/kind, or a `SUPERSEDED` add without `--by` fails loud and writes nothing.
+  Closes the long-flagged no-ADD-verb gap (E-037/E-040 context).
+- CLI-only — **no new module** (health stays 20/20), **no schema/WAL/TLA+ change**
+  (drift gate `268149294421` unchanged). +20 tests (`tests/test_doctor.py`,
+  `tests/test_add_verb.py`). This is **increment 1 of the ENV-NORM milestone and is
+  NOT a release**: spec v3.2.2 (§Shell-Execution rewrite), the `wsl-exec` reference
+  sweep, the eBay-guide fixes, and the `v0.4.2` cut land in increment 2.
+
 ### Changed — INIT spec v3.2.1: known-issues reconciliation + environment-audit hardening (INS-043/044/045)
 
 - `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md` supersedes v3.2.0 (v3.2.0 retained as
