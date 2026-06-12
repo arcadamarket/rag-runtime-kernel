@@ -6,6 +6,23 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.4] — 2026-06-12
+
+**FIX-1 — integrity auditor + WAL hardening (K1+K2).** Closes the headline finding of the eBay Session-Zero deploy audit: the kernel's own `audit --strict` reported "0 findings" over a RAG that carried a broken WAL, a stale backup, unsubstituted placeholders, leaked template keys, a COLD pinned to the wrong spec version, an empty `written_by_session` and a negative machine-minted session id. An integrity product whose integrity check green-lights a defective artifact has no moat, so the auditor now grows seven fail-loud integrity invariants (same fail-closed family as the E-040 render check), and the WAL gets a replay-based monotonicity self-test surfaced in `health`. Dogfooded live: the new auditor caught a real latent COLD↔HOT drift (3.1.2 vs 3.2.2) in this project's own production RAG that every prior session passed clean. `DRIFT_AUDIT_VERSION` → 1.2.0; **+21 tests (1,180 total)**; no new module (health 20/20), no schema/WAL-format/TLA+ change (drift gate `268149294421`).
+
+### Added — integrity invariants (FIX-1 / K1+K2)
+
+- **`check_wal_integrity`** — replays `WAL.jsonl` and fails loud unless the sequence is strictly monotonic by +1 (a duplicate, gap, or decrease all violate the WAL contract — the eBay WAL had two `seq:3` and no `seq:4`).
+- **`check_bak_parity`** — the `.bak` must be a parity-mirror (equal checkpoint seq) or the rollback-prior (one behind); a backup that fails to parse or sits multiple checkpoints stale (eBay: HOT seq 3, `.bak` seq 0) is flagged as unable to actually restore.
+- **`check_cold_hot_version`** — `RAG_COLD.json.init_prompt_reference` version must equal the live HOT spec version (eBay COLD pinned v3.1.9 under a v3.2.2 deploy). BOM-tolerant read so a benign UTF-8 BOM cannot mask the drift.
+- **`check_placeholder_tokens`** — any value that is *exactly* an unsubstituted `<PLACEHOLDER>` token (the eBay `<ISO>` timestamps) is an error; rule prose merely mentioning a template token (`S<NN>`) is not a false positive (whole-value match only).
+- **`check_template_keys`** — `_`-prefixed `:template` scaffold keys (`_required`/`_note`) must never leak into live `operating_protocol`.
+- **`check_written_by_session`** — a checkpointed RAG must carry a non-empty `meta.written_by_session` (self-skips a pre-checkpoint `BOOTING` RAG).
+- **`check_session_id_coherence`** — flags a malformed/negative machine-minted session id (`S-12488-…`) in `written_by_session` or any `sessions_recent[].id`.
+- **`WAL.verify_integrity()` + `health` WAL-replay self-test** — a broken write-ahead log can no longer read as 20/20-healthy.
+
+Each check **self-skips when its source is absent** (no WAL/COLD/`.bak`, a `BOOTING` RAG), so a healthy or not-yet-populated deployment audits clean. The full suite dogfoods a synthetic reproduction of the exact eBay-defective RAG and asserts every invariant fires.
+
 ## [v0.4.3] — 2026-06-11
 
 **AUDIT-CS-FRESHNESS (E-043).** The `audit` command now guards the human-readable `current_status` narrative against the live authorities its facts denormalize — `rag_kernel.__version__` and the git HEAD — failing loud on a stale snapshot (the S62→S67 drift where `current_status` froze at an old version while the runtime moved on). New `check_current_status_freshness` auditor check (`DRIFT_AUDIT_VERSION` → 1.1.0), a new `audit --git-head` flag with best-effort auto-resolution from the RAG's worktree pointer, and 17 tests. No new module (health 20/20), no schema/WAL/TLA+ change (drift gate `268149294421`). **1,159 tests.**

@@ -5,7 +5,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "OS-level runtime bridge for LLM memory persistence",
   "spec_version": "3.2.2",
   "python_requires": ">=3.10",
@@ -29,7 +29,7 @@ Zero external dependencies. Python 3.10+ standard library only.
     "drift_control": "Canonical project-state status enum + lifecycle state machine (OPEN→IN_PROGRESS→{RESOLVED|DEFERRED|SUPERSEDED|DISCARDED}, DEFERRED↔OPEN): pure, fail-loud item-lifecycle core (DRIFT-ELIM increment 1)",
     "drift_store": "Deterministic, atomic mutation API over the RAG tracked_items array: guarded transitions, atomic persistence (tmp→verify→.bak→rename), one-time backlog migration — the canonical store every status render projects from (DRIFT-ELIM increment 2)",
     "drift_render": "Deterministic, idempotent renderers projecting the canonical tracked_items array into the legacy open_tasks / deferred_items arrays, the Rule 12 status-report backlog, and the ERROR_LOG backlog summary — makes tracked_items the sole authority, every status mention a derived render (DRIFT-ELIM increment 4)",
-    "drift_audit": "Fail-loud session-boundary auditor: asserts the rendered legacy open_tasks/deferred_items match the canonical tracked_items array (E-040 regression), supersede refs resolve, notes don't contradict status (INS-038), and no Cowork-memory side stores exist in the project root (Rule 13) — DRIFT-ELIM increment 5"
+    "drift_audit": "Fail-loud session-boundary auditor: asserts the rendered legacy open_tasks/deferred_items match the canonical tracked_items array (E-040 regression), supersede refs resolve, notes don't contradict status (INS-038), no Cowork-memory side stores exist in the project root (Rule 13), current_status version/HEAD match the live authorities (E-043), and the FIX-1 integrity family — WAL monotonicity, RAG↔.bak parity, unsubstituted-placeholder scan, leaked template-key scan, COLD↔HOT spec-version coherence, non-empty written_by_session, session-id coherence (K1+K2)"
   },
   "cli_commands": {
     "init": "python -m rag_kernel init (--spec <path.md> | --allow-void) [--output RAG/] [--dry-run]",
@@ -57,7 +57,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 
 # ── Capability Discovery ──────────────────────────────────────

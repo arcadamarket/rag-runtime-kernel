@@ -605,8 +605,27 @@ def cmd_health(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"  [FAIL] {mod_name}: {e}")
 
+    # FIX-1 (K1): WAL-replay self-test. A broken write-ahead log (non-monotonic
+    # seq) must not read as healthy — the eBay deploy showed 20/20 over a WAL with
+    # a duplicate seq and a gap. Checks the conventional WAL locations under the
+    # project; self-skips when no WAL exists (so a fresh/CLI-only project is clean).
+    from pathlib import Path as _Path
+
+    from rag_kernel.persistence import WAL
+
+    base = _Path(project_path)
+    wal_ok = True
+    for cand in (base / "WAL.jsonl", base / "RAG" / "WAL.jsonl"):
+        if cand.exists():
+            anomalies = WAL(cand).verify_integrity()
+            if anomalies:
+                wal_ok = False
+                print(f"  [FAIL] WAL {cand.name}: " + "; ".join(anomalies))
+            else:
+                print(f"  [PASS] WAL {cand.name}: strictly monotonic")
+
     print(f"\nResult: {passed}/{total} modules OK.")
-    return 0 if passed == total else 1
+    return 0 if (passed == total and wal_ok) else 1
 
 
 def cmd_serve(args: argparse.Namespace) -> int:

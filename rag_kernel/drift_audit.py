@@ -63,6 +63,9 @@ also *verifies* that every render still equals the state it persisted.
               "check_note_status_contradiction", "check_side_rule_stores",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
+              "check_placeholder_tokens", "check_template_keys",
+              "check_written_by_session", "check_session_id_coherence",
+              "check_wal_integrity", "check_bak_parity", "check_cold_hot_version",
               "canonical_facts", "audit_hot", "audit_file", "assert_clean"],
   "use_when": "Verifying at a session boundary that every status render still matches the canonical tracked_items array and no parallel state store exists",
   "never_bypass": true
@@ -71,6 +74,7 @@ also *verifies* that every render still equals the state it persisted.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,7 +94,12 @@ from rag_kernel import drift_render
 # Bump when a check's contract or the report shape changes in a way a test pins.
 # 1.1.0 — added check_current_status_freshness (E-043): guards the current_status
 #         narrative against the live runtime version / git HEAD authorities.
-DRIFT_AUDIT_VERSION = "1.1.0"
+# 1.2.0 — FIX-1 (K1+K2): added the integrity-invariant family the auditor was blind
+#         to — WAL monotonicity, RAG<->.bak parity, unresolved-<PLACEHOLDER> scan,
+#         _-prefixed template-key scan, COLD<->HOT spec-version coherence, non-empty
+#         written_by_session, and session-id coherence. All fail-loud ERRORs (same
+#         family as the E-040 render check); each self-skips when its source is absent.
+DRIFT_AUDIT_VERSION = "1.2.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -176,6 +185,27 @@ _CS_VERSION_TOKEN_RE = re.compile(r"\bv?(\d+\.\d+\.\d+)\b")
 _CS_HEAD_RE = re.compile(
     r"\b(?:latest\s+commit|head|commit)[`'\s:=]{1,6}([0-9a-f]{7,40})\b", re.IGNORECASE
 )
+
+# --- integrity invariants (FIX-1 / K1+K2) ----------------------------------
+# An unresolved build-time placeholder: a value that IS *exactly* an
+# UPPER_SNAKE token in angle brackets (e.g. "<ISO>", "<SESSION_ID>"). Matched
+# whole-string ONLY — so a timestamp field literally holding "<ISO>" is caught
+# (K3) while rule PROSE that merely mentions a template token (e.g. the report
+# heading "S<NN> close" inside operating_protocol) is NOT a false positive.
+_PLACEHOLDER_VALUE_RE = re.compile(r"^<[A-Z][A-Z0-9_]*>$")
+# A semver-ish version token (first X.Y.Z found), used for COLD<->HOT coherence.
+_SEMVER_RE = re.compile(r"(\d+\.\d+\.\d+)")
+# A malformed/machine-minted session id: "S" immediately followed by "-<digit>"
+# (the negative-looking S-12488-1781260490 the eBay deploy minted, K7). A
+# canonical id is "S" + a non-negative integer (S0, S70, ...).
+_BAD_SESSION_ID_RE = re.compile(r"^S-\d")
+# State in which written_by_session is legitimately not-yet-stamped: a freshly
+# init'd RAG sits BOOTING before its first checkpoint stamps the session id.
+_PRE_CHECKPOINT_STATE = "BOOTING"
+# Conventional sibling filenames beside RAG_MASTER.json (overridable via
+# meta.rag_files) for the file-based integrity checks.
+_DEFAULT_WAL_NAME = "WAL.jsonl"
+_DEFAULT_COLD_NAME = "RAG_COLD.json"
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +716,261 @@ def check_current_status_freshness(
 
 
 # ---------------------------------------------------------------------------
+# Integrity invariants (FIX-1 / K1+K2) — the family the auditor was blind to
+# ---------------------------------------------------------------------------
+#
+# The eBay Session-Zero deploy produced a RAG on which ``audit --strict`` reported
+# "0 findings" while it carried a broken WAL, a stale backup, unsubstituted
+# placeholders, leaked template keys, a COLD pinned to the wrong spec version, an
+# empty written_by_session and a machine-minted negative session id (audit report
+# K1, K3–K7). An integrity product whose integrity check green-lights a defective
+# artifact has no moat, so each defect below becomes a deterministic, fail-loud
+# ERROR — the same fail-closed family as the E-040 render-parity check. Every check
+# SELF-SKIPS when its source is absent (no WAL file, no COLD, no meta, a BOOTING
+# pre-checkpoint RAG), so a healthy or not-yet-populated deployment audits clean
+# rather than being falsely flagged.
+
+def _load_json_bom(path: Path) -> dict:
+    """Load a JSON object tolerant of a UTF-8 BOM (``load_hot`` is not).
+
+    The COLD / .bak siblings can carry a BOM (the production COLD does). A BOM is
+    benign and must not cause the integrity check to silently self-skip, so these
+    file-reading checks decode with ``utf-8-sig`` rather than the strict
+    ``load_hot``. Raises on genuinely malformed JSON.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError(f"root must be a JSON object, got {type(data).__name__}")
+    return data
+
+
+def _walk_strings(node, path=()):
+    """Yield (dotted-path, str-value) for every string leaf in a JSON value."""
+    if isinstance(node, str):
+        yield "/".join(path) or "<root>", node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            yield from _walk_strings(v, path + (str(k),))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _walk_strings(v, path + (str(i),))
+
+
+def check_placeholder_tokens(hot: dict) -> list[AuditFinding]:
+    """ERROR for any value that is an unsubstituted ``<PLACEHOLDER>`` token (K3).
+
+    Whole-string match only: a field literally holding ``"<ISO>"`` (the eBay
+    ``created_utc`` / ``sessions_recent[].d`` defect) is caught, while rule prose
+    that merely *mentions* a template token (``S<NN>``) is not flagged.
+    """
+    findings: list[AuditFinding] = []
+    if not isinstance(hot, dict):
+        return findings
+    for loc, val in _walk_strings(hot):
+        if _PLACEHOLDER_VALUE_RE.match(val.strip()):
+            findings.append(AuditFinding(
+                check="placeholder_tokens", severity=ERROR,
+                detail=(f"unsubstituted placeholder {val.strip()!r} at {loc} — "
+                        "init/configure must substitute real values at build time")))
+    return findings
+
+
+def check_template_keys(hot: dict) -> list[AuditFinding]:
+    """ERROR for any ``_``-prefixed template key leaked into operating_protocol (K5).
+
+    The §32 ``:template`` scaffold carries ``_required`` / ``_note`` placeholder
+    keys; they must be stripped at configure/commit and never appear in live
+    governance, where they only dilute the rule set the LLM ingests each boot.
+    """
+    findings: list[AuditFinding] = []
+    op = hot.get("operating_protocol") if isinstance(hot, dict) else None
+    if isinstance(op, dict):
+        for k in op:
+            if isinstance(k, str) and k.startswith("_"):
+                findings.append(AuditFinding(
+                    check="template_keys", severity=ERROR,
+                    detail=(f"template/placeholder key {k!r} leaked into "
+                            "operating_protocol — strip _-prefixed keys at configure/commit")))
+    return findings
+
+
+def check_written_by_session(hot: dict) -> list[AuditFinding]:
+    """ERROR if a checkpointed RAG has an empty ``meta.written_by_session`` (K7).
+
+    Self-skips a freshly init'd ``BOOTING`` RAG (not yet checkpointed, so not yet
+    stamped). Once the machine has left BOOTING, every checkpoint must stamp the
+    session id — an empty field breaks the session lineage the RAG depends on.
+    """
+    findings: list[AuditFinding] = []
+    meta = hot.get("meta") if isinstance(hot, dict) else None
+    if not isinstance(meta, dict) or "written_by_session" not in meta:
+        return findings
+    if hot.get("state_machine_status") == _PRE_CHECKPOINT_STATE:
+        return findings
+    wbs = meta.get("written_by_session")
+    if not isinstance(wbs, str) or not wbs.strip():
+        findings.append(AuditFinding(
+            check="written_by_session", severity=ERROR,
+            detail=("meta.written_by_session is empty on a checkpointed RAG — every "
+                    "checkpoint must stamp the canonical session id")))
+    return findings
+
+
+def check_session_id_coherence(hot: dict) -> list[AuditFinding]:
+    """ERROR for a malformed/machine-minted session id (K7).
+
+    A canonical id is ``S`` + a non-negative integer. The eBay deploy minted a
+    negative-looking ``S-12488-1781260490`` (a signed PID/hash bug); that — and any
+    ``S-<digit>`` shape — is flagged in ``meta.written_by_session`` and every
+    ``sessions_recent[].id``. Plausible positive ids are left alone (no over-fit).
+    """
+    findings: list[AuditFinding] = []
+    if not isinstance(hot, dict):
+        return findings
+    candidates: list[tuple[str, str]] = []
+    meta = hot.get("meta")
+    if isinstance(meta, dict):
+        wbs = meta.get("written_by_session")
+        if isinstance(wbs, str) and wbs.strip():
+            candidates.append(("meta.written_by_session", wbs.strip()))
+    sr = hot.get("sessions_recent")
+    if isinstance(sr, list):
+        for i, e in enumerate(sr):
+            if isinstance(e, dict) and isinstance(e.get("id"), str):
+                candidates.append((f"sessions_recent[{i}].id", e["id"].strip()))
+    for loc, sid in candidates:
+        if _BAD_SESSION_ID_RE.match(sid):
+            findings.append(AuditFinding(
+                check="session_id_coherence", severity=ERROR,
+                detail=(f"{loc} = {sid!r} is a malformed/negative session id "
+                        "(expected S<non-negative-int>) — fix the id generator")))
+    return findings
+
+
+def check_wal_integrity(wal_path: Path | str) -> list[AuditFinding]:
+    """ERROR if the WAL sequence is not strictly monotonic by +1 (K1).
+
+    Replays the append-only ``WAL.jsonl`` and asserts ``seq[n+1] == seq[n] + 1``:
+    a duplicate seq, a gap, or a decrease all violate the core WAL contract (the
+    eBay WAL had two ``seq:3`` and no ``seq:4``). Self-skips when no WAL exists.
+    Malformed lines are skipped (replay tolerance), not treated as a seq defect.
+    """
+    findings: list[AuditFinding] = []
+    p = Path(wal_path)
+    if not p.exists():
+        return findings
+    seqs: list[int] = []
+    try:
+        text = p.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return findings
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        s = d.get("seq")
+        if isinstance(s, int):
+            seqs.append(s)
+    prev: Optional[int] = None
+    for s in seqs:
+        if prev is not None and s != prev + 1:
+            if s == prev:
+                kind = f"duplicate seq {s}"
+            elif s < prev:
+                kind = f"decreasing seq {prev} -> {s}"
+            else:
+                kind = f"gap {prev} -> {s} (skipped {prev + 1})"
+            findings.append(AuditFinding(
+                check="wal_integrity", severity=ERROR,
+                detail=(f"WAL {p.name} is not strictly monotonic: {kind} — "
+                        "a WAL must increment by exactly 1 (single seq allocator)")))
+        prev = s
+    return findings
+
+
+def check_bak_parity(rag_path: Path | str, hot: dict) -> list[AuditFinding]:
+    """ERROR if the ``.bak`` is not a faithful backup of HOT (K6).
+
+    The ``.bak`` must be either a parity-mirror (same checkpoint seq) or exactly the
+    rollback-prior (one seq behind). The eBay backup sat 3 checkpoints stale
+    (HOT seq 3, .bak seq 0) with a different md5 — a backup that can't actually
+    restore. A ``.bak`` that fails to parse, or whose seq diverges by more than one,
+    is flagged. Self-skips when no ``.bak`` exists.
+    """
+    findings: list[AuditFinding] = []
+    p = Path(rag_path)
+    bak = p.with_suffix(p.suffix + ".bak")
+    if not bak.exists():
+        return findings
+    try:
+        bak_hot = _load_json_bom(bak)
+    except Exception as exc:  # noqa: BLE001 — any load failure is a broken backup
+        findings.append(AuditFinding(
+            check="bak_parity", severity=ERROR,
+            detail=f"{bak.name} does not parse as a valid RAG backup: {exc}"))
+        return findings
+    hot_seq = (hot.get("meta") or {}).get("last_checkpoint_seq")
+    bak_seq = (bak_hot.get("meta") or {}).get("last_checkpoint_seq")
+    if isinstance(hot_seq, int) and isinstance(bak_seq, int):
+        if bak_seq not in (hot_seq, hot_seq - 1):
+            findings.append(AuditFinding(
+                check="bak_parity", severity=ERROR,
+                detail=(f"{bak.name} last_checkpoint_seq={bak_seq} diverges from HOT "
+                        f"{hot_seq} (expected equal=parity-mirror or one-behind="
+                        "rollback-prior) — stale/broken backup")))
+    return findings
+
+
+def check_cold_hot_version(cold_path: Path | str, hot: dict) -> list[AuditFinding]:
+    """ERROR if COLD's init-prompt version disagrees with the HOT spec version (K4).
+
+    ``RAG_COLD.json.init_prompt_reference`` records the spec the COLD scaffold was
+    built from; it must equal the spec the HOT RAG runs (``meta.rag_files.init_prompt``
+    filename version, falling back to ``meta.policy_version``). The eBay COLD pinned
+    v3.1.9 while the deploy ran v3.2.2. Self-skips when COLD is absent/unparseable or
+    either version token cannot be read.
+    """
+    findings: list[AuditFinding] = []
+    p = Path(cold_path)
+    if not p.exists():
+        return findings
+    try:
+        cold = _load_json_bom(p)
+    except Exception:  # noqa: BLE001 — a malformed COLD is out of scope for THIS check
+        return findings
+
+    cold_ver = None
+    ipr = cold.get("init_prompt_reference") if isinstance(cold, dict) else None
+    if isinstance(ipr, dict):
+        raw = ipr.get("version") or ipr.get("filename")
+        if isinstance(raw, str):
+            m = _SEMVER_RE.search(raw)
+            cold_ver = m.group(1) if m else None
+
+    hot_ver = None
+    meta = hot.get("meta") if isinstance(hot, dict) else None
+    if isinstance(meta, dict):
+        ip = (meta.get("rag_files") or {}).get("init_prompt")
+        if isinstance(ip, str):
+            m = _SEMVER_RE.search(ip)
+            hot_ver = m.group(1) if m else None
+        if hot_ver is None and isinstance(meta.get("policy_version"), str):
+            m = _SEMVER_RE.search(meta["policy_version"])
+            hot_ver = m.group(1) if m else None
+
+    if cold_ver and hot_ver and cold_ver != hot_ver:
+        findings.append(AuditFinding(
+            check="cold_hot_version", severity=ERROR,
+            detail=(f"COLD init_prompt_reference version {cold_ver} != HOT spec "
+                    f"version {hot_ver} — rebuild/refresh COLD to the live spec")))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Aggregate runners
 # ---------------------------------------------------------------------------
 
@@ -726,6 +1011,13 @@ def audit_hot(
     findings += check_ledger_consistency(hot)
     findings += check_record_coverage(hot, error_log_path=error_log_path)
     findings += check_current_status_freshness(hot, version=version, git_head=git_head)
+    # FIX-1 integrity invariants over the in-memory state (each self-skips when its
+    # source is absent): unsubstituted placeholders, leaked template keys, empty
+    # written_by_session, malformed session ids.
+    findings += check_placeholder_tokens(hot)
+    findings += check_template_keys(hot)
+    findings += check_written_by_session(hot)
+    findings += check_session_id_coherence(hot)
     if doc_paths:
         findings += check_repo_claim_reconciliation(
             doc_paths, store,
@@ -780,10 +1072,22 @@ def audit_file(
         dr = Path(docs_root)
         doc_paths = [dr / "README.md", dr / "CHANGELOG.md", dr / "docs" / "ROADMAP.md"]
 
-    return audit_hot(
+    report = audit_hot(
         hot, root=use_root, error_log_path=elp, doc_paths=doc_paths,
         version=version, module_count=module_count, drift_sha=drift_sha,
         git_head=git_head)
+
+    # FIX-1 file-based integrity invariants over the sibling files beside
+    # RAG_MASTER.json (names overridable via meta.rag_files). Each self-skips when
+    # its file is absent, so a project with no WAL/COLD still audits clean.
+    rag_files = (hot.get("meta") or {}).get("rag_files") or {}
+    wal_name = rag_files.get("wal") or _DEFAULT_WAL_NAME
+    cold_name = rag_files.get("cold") or _DEFAULT_COLD_NAME
+    extra: list[AuditFinding] = []
+    extra += check_wal_integrity(p.parent / wal_name)
+    extra += check_bak_parity(p, hot)
+    extra += check_cold_hot_version(p.parent / cold_name, hot)
+    return AuditReport(report.findings + tuple(extra))
 
 
 def assert_clean(report: AuditReport, *, strict: bool = False) -> None:
@@ -816,6 +1120,13 @@ __all__ = [
     "check_record_coverage",
     "check_repo_claim_reconciliation",
     "check_current_status_freshness",
+    "check_placeholder_tokens",
+    "check_template_keys",
+    "check_written_by_session",
+    "check_session_id_coherence",
+    "check_wal_integrity",
+    "check_bak_parity",
+    "check_cold_hot_version",
     "canonical_facts",
     "audit_hot",
     "audit_file",

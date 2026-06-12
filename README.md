@@ -19,14 +19,14 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **Who it's for** | Anyone. No Python, no Node, no install. | Builders of large, multi-session, token-critical projects who want hard guarantees. |
 | **What you run** | One markdown specification, dropped into a chat session. | The `rag_kernel` Python runtime (MCP or HTTP server) alongside the spec. |
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
-| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,159 passing tests. |
+| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,180 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.2** | Runtime kernel **v0.4.3** |
+| **Version** | Specification **v3.2.2** | Runtime kernel **v0.4.4** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
 
-> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.2`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.3`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.2`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.4`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
@@ -257,7 +257,7 @@ rag-runtime-kernel/
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
 │   ├── v3.2_ARCHITECTURE_DESIGN.md            # Runtime architecture design doc
 │   └── ROADMAP.md                             # Development roadmap
-├── rag_kernel/                                # Tier 2 runtime kernel (v0.4.3)
+├── rag_kernel/                                # Tier 2 runtime kernel (v0.4.4)
 │   ├── __init__.py                            # Package entry, discover() capability registry
 │   ├── __main__.py                            # CLI (init / configure / health / serve / mcp / session / checkpoint / gc / graph / resolve / defer / render / note)
 │   ├── api.py                                 # HTTP API (FastAPI)
@@ -278,8 +278,8 @@ rag-runtime-kernel/
 │   ├── drift_control.py                       # DRIFT-ELIM: item-lifecycle core — ItemStatus enum + LIFECYCLE guards + immutable TrackedItem (v0.4.0)
 │   ├── drift_store.py                         # DRIFT-ELIM: atomic mutation API over tracked_items + backlog migration; lifecycle CLI (v0.4.0)
 │   ├── drift_render.py                        # DRIFT-ELIM: deterministic renders of open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items (sole authority); render CLI (v0.4.0)
-│   └── drift_audit.py                         # DRIFT-ELIM: fail-loud session-boundary auditor — render parity, supersede refs, note/status, side-store scan (v0.4.0)
-├── tests/                                     # 1,159 tests (v0.4.3 release)
+│   └── drift_audit.py                         # DRIFT-ELIM: fail-loud session-boundary auditor — render parity, supersede refs, note/status, side-store scan, current_status freshness + FIX-1 integrity invariants (WAL/​.bak/​COLD/​placeholder/​template-key/​session-id) (v0.4.4)
+├── tests/                                     # 1,180 tests (v0.4.4 release)
 ├── .github/                                   # FUNDING.yml + issue templates
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
@@ -314,6 +314,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 | Line | Version | Status | Focus |
 |---|---|---|---|
 | Spec | **v3.2.2** | Released | **ENV-NORM** — §3a tool hierarchy rewritten to **tmux-mcp primary** for shell/git/test (composed commands verbatim, no orphan `1`); `wsl-exec` demoted to atomic fallback; new `session_start_shell_rule`; §3 `doctor` boot preflight. Prior v3.2.1: known-issues registry reconciled to 12 universal keys (INS-044 fetch-to-disk), §37 fetch/VCS/shell tooling enumeration + `audit-env` (INS-045), §31 Step 0 environment audit (INS-043). |
+| Runtime | **v0.4.4** | Released | **FIX-1 — integrity auditor + WAL hardening (K1+K2)** from the eBay Session-Zero deploy audit: seven fail-loud integrity invariants (WAL monotonicity, RAG↔.bak parity, COLD↔HOT spec-version, unsubstituted-placeholder, leaked-template-key, non-empty `written_by_session`, session-id coherence) + a `health` WAL-replay self-test. Dogfooded live — caught a real latent COLD↔HOT drift in this repo's own RAG. No new module (19), health 20/20, 1,180 tests. |
 | Runtime | **v0.4.3** | Released | **AUDIT-CS-FRESHNESS** — `audit` now guards the `current_status` narrative against the live runtime version + git HEAD (E-043), failing loud on a stale snapshot; new `audit --git-head` flag with best-effort auto-resolution. No new module (19), health 20/20, 1,159 tests. |
 | Runtime | **v0.4.2** | Released | **ENV-NORM** — `doctor` preflight (env summary, fail-closed stale-`.git/index.lock` `--fix`, shell-policy first-move, `--emit-runner`) + guarded `add` verb (closes the no-ADD-verb gap), paired with spec v3.2.2 tmux-primary tool hierarchy. No new module (19), health 20/20, 1,142 tests. |
 | Runtime | **v0.4.1** | Released | Kernel hardening from the eBay S0 deployment audit: `audit-env` fetch/VCS/shell tooling enumeration (INS-045) + `init` fail-loud on missing `--spec` (INS-046), bundling DRIFT-ELIM inc 6. No new module (19), health 20/20, 1,123 tests. |

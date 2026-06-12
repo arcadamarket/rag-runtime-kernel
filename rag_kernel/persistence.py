@@ -380,6 +380,30 @@ class WAL:
             pass
         return max_seq
 
+    def verify_integrity(self) -> list[str]:
+        """Replay the WAL and return monotonicity anomalies (empty list == OK).
+
+        The WAL contract is a single monotonic allocator: ``seq[n+1] == seq[n]+1``.
+        A duplicate, a gap, or a decrease all break it (the eBay Session-Zero WAL
+        recorded two ``seq:3`` and skipped ``seq:4``). This replay self-test is the
+        fail-loud check consumed by ``health`` and the drift auditor (FIX-1 / K1);
+        it reads the file directly, so it works whether or not the WAL is open and
+        self-skips a non-existent WAL (``replay`` returns no entries).
+        """
+        anomalies: list[str] = []
+        prev: Optional[int] = None
+        for entry in self.replay(since=0):
+            s = entry.seq
+            if prev is not None and s != prev + 1:
+                if s == prev:
+                    anomalies.append(f"duplicate seq {s}")
+                elif s < prev:
+                    anomalies.append(f"decreasing seq {prev} -> {s}")
+                else:
+                    anomalies.append(f"gap {prev} -> {s} (skipped {prev + 1})")
+            prev = s
+        return anomalies
+
     def __enter__(self) -> "WAL":
         self.open()
         return self
