@@ -5,7 +5,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "OS-level runtime bridge for LLM memory persistence",
   "spec_version": "3.2.2",
   "python_requires": ">=3.10",
@@ -18,7 +18,7 @@ Zero external dependencies. Python 3.10+ standard library only.
     "concurrency": "File-based mutex (.rag_kernel.lock) + split-brain detection",
     "api": "HTTP JSON API server (port 7437)",
     "mcp_transport": "MCP stdio transport for Claude Desktop (JSON-RPC 2.0)",
-    "spec_parser": "Deterministic MD→RAG parser (zero tokens, zero LLM); substitutes a single <SPEC_VERSION> self-version token across HOT+COLD and stamps the COLD init_prompt_reference from the spec's own version, fail-loud on any survivor (FIX-2, K4)",
+    "spec_parser": "Deterministic MD→RAG parser (zero tokens, zero LLM); substitutes a single <SPEC_VERSION> self-version token across HOT+COLD and stamps the COLD init_prompt_reference from the spec's own version, fail-loud on any survivor (FIX-2, K4); also substitutes the build-deterministic <ISO> placeholder and strips _-prefixed template keys from operating_protocol so a fresh deploy is born clean (FIX-3, K3+K5)",
     "session_logger": "Structured JSONL session logger — universal observability",
     "conflict_engine": "Rule-based conflict auto-categorization with suggested resolutions",
     "generated_guards": "TLA+-derived transition table + per-action enabling guards (FV-PHASE4 enforced structural source)",
@@ -58,7 +58,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.4.5"
+__version__ = "0.4.6"
 
 
 # ── Capability Discovery ──────────────────────────────────────

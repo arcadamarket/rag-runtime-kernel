@@ -59,9 +59,17 @@ _SECTION_HEADER = re.compile(r'^##\s+§(\S+)\s*[—–-]\s*(.+)$')
 # document header) so HOT policy_version / init_prompt and the COLD
 # init_prompt_reference can never drift apart on a fresh deploy (FIX-2, K4).
 # NOTE: this is deliberately distinct from the session-zero placeholders
-# (<ISO>, <from user>, <absolute path>) which are filled by the LLM, NOT the
+# (<from user>, <absolute path>) which are filled by the LLM, NOT the
 # parser, and must therefore NOT trigger the fail-loud survivor scan.
 VERSION_PLACEHOLDER = "<SPEC_VERSION>"
+
+# Build-deterministic timestamp placeholder (FIX-3, K3). Unlike <from user> /
+# <absolute path> (which need human/LLM input), an ISO timestamp IS known at
+# build time, so the parser substitutes <ISO> with the build timestamp. This
+# root-causes the eBay sessions_recent[].d / created_utc defect that the FIX-1
+# drift_audit placeholder_tokens check could only DETECT — a fresh deploy is
+# now born coherent rather than caught after the fact.
+ISO_PLACEHOLDER = "<ISO>"
 
 # Minimal void RAG — valid structure with empty fields
 VOID_RAG: dict[str, Any] = {
@@ -383,7 +391,54 @@ class SpecParser:
         if result.cold_template is not None:
             result.cold_template = self._substitute_version(result.cold_template, sv)
             self._stamp_cold(result.cold_template, sv)
+        # FIX-3 build-time hygiene so a fresh deploy is born clean, not merely
+        # caught by the FIX-1 auditor after the fact:
+        #   (K3) substitute the build-deterministic <ISO> placeholder, and
+        #   (K5) strip _-prefixed template/placeholder keys from
+        #        operating_protocol.
+        # Single-source the timestamp from the meta.created_utc already stamped
+        # in _merge_blocks so every substituted <ISO> equals the build time.
+        now_iso = ""
+        if isinstance(result.merged, dict):
+            now_iso = result.merged.get("meta", {}).get("created_utc") or ""
+        if not now_iso:
+            now_iso = datetime.now(timezone.utc).isoformat()
+        result.merged = self._substitute_iso(result.merged, now_iso)
+        self._strip_template_keys(result.merged)
+        if result.cold_template is not None:
+            result.cold_template = self._substitute_iso(result.cold_template, now_iso)
+            self._strip_template_keys(result.cold_template)
         self._check_version_placeholder(result)
+
+    @classmethod
+    def _substitute_iso(cls, obj: Any, now_iso: str) -> Any:
+        """Recursively replace the ISO_PLACEHOLDER token with the build time (K3).
+
+        No-op when ``now_iso`` is empty (the FIX-1 audit then flags any survivor).
+        """
+        if not now_iso:
+            return obj
+        if isinstance(obj, dict):
+            return {k: cls._substitute_iso(v, now_iso) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [cls._substitute_iso(v, now_iso) for v in obj]
+        if isinstance(obj, str):
+            return obj.replace(ISO_PLACEHOLDER, now_iso)
+        return obj
+
+    @staticmethod
+    def _strip_template_keys(rag: dict) -> None:
+        """Strip _-prefixed template/placeholder keys from operating_protocol (K5).
+
+        Mirrors the drift_audit ``check_template_keys`` invariant exactly (top-level
+        operating_protocol keys), so build-prevention and detection agree (DRY).
+        """
+        if not isinstance(rag, dict):
+            return
+        op = rag.get("operating_protocol")
+        if isinstance(op, dict):
+            for k in [k for k in op if isinstance(k, str) and k.startswith("_")]:
+                del op[k]
 
     @classmethod
     def _substitute_version(cls, obj: Any, spec_version: str) -> Any:

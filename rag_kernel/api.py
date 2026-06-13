@@ -87,6 +87,18 @@ COLD_FILENAME = "RAG_COLD.json"
 WAL_FILENAME = "WAL.jsonl"
 
 
+def generate_session_id() -> str:
+    """Canonical auto session id for an unattended boot (FIX-3, K7).
+
+    Shape: ``S`` + a non-negative integer (millisecond epoch). This satisfies the
+    drift_audit session-id coherence invariant (``^S<non-negative-int>``) —
+    unlike the old ``S-{pid}-{epoch}`` form, whose ``S-`` prefix the auditor
+    flags as a malformed/negative id (the eBay ``S-12488-...`` defect). A
+    human-assigned ``SNN`` passed explicitly always takes precedence.
+    """
+    return f"S{int(time.time() * 1000)}"
+
+
 # ---------------------------------------------------------------------------
 # Kernel Application (ties all components together)
 # ---------------------------------------------------------------------------
@@ -104,7 +116,7 @@ class KernelApp:
         session_id: Optional[str] = None,
     ) -> None:
         self.project_dir = project_dir
-        self.session_id = session_id or f"S-{os.getpid()}-{int(time.time())}"
+        self.session_id = session_id or generate_session_id()
 
         # Paths
         self.hot_path = project_dir / HOT_FILENAME
@@ -699,6 +711,11 @@ class KernelApp:
         self._hot["meta"]["state_hash"] = state_hash
         self._hot["meta"]["last_checkpoint_seq"] = self.wal.seq
         self._hot["meta"]["session_id"] = self.session_id
+        # FIX-3 (K7): stamp the canonical session id as written_by_session on
+        # every checkpoint (covers close, which routes through here). The eBay
+        # deploy left written_by_session empty because the runtime persisted
+        # only meta.session_id — breaking the RAG's session lineage.
+        self._hot["meta"]["written_by_session"] = self.session_id
 
         do_full = (
             force_full
@@ -1088,6 +1105,8 @@ class KernelApp:
         self._hot["meta"]["state_hash"] = state_hash
         self._hot["meta"]["last_checkpoint_seq"] = self.wal.seq
         self._hot["meta"]["session_id"] = self.session_id
+        # FIX-3 (K7): a rollback persists HOT too — stamp lineage here as well.
+        self._hot["meta"]["written_by_session"] = self.session_id
 
         # Atomic restore (creates/refreshes .bak), then audit the rollback.
         atomic_write_json(self.hot_path, self._hot)
