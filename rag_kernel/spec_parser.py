@@ -458,21 +458,29 @@ class SpecParser:
         hot_pv = meta.get("policy_version")
         hot_ip = meta.get("rag_files", {}).get("init_prompt")
 
-        # No version placeholder may survive anywhere in HOT/COLD.
-        for label, blob in (("HOT", rag), ("COLD", cold)):
-            if blob is None:
-                continue
-            for p in SpecParser._scan_placeholder(blob):
-                findings.append(
-                    f"{VERSION_PLACEHOLDER} placeholder unsubstituted in "
-                    f"{label} at {p}"
-                )
-
         cold_v = cold_fn = None
         if isinstance(cold, dict):
             ipr = cold.get("init_prompt_reference", {}) or {}
             cold_v = ipr.get("version")
             cold_fn = ipr.get("filename")
+
+        # A version placeholder is only a defect in the STRUCTURAL self-version
+        # fields — those are what `spec_parser` substitutes at init. Narrative
+        # fields (current_status, sessions_recent, tracked_items history) may
+        # legitimately *mention* the token name in prose, so a whole-blob scan
+        # would false-positive on any mature RAG that documents the mechanism
+        # (consistent with the field-targeted FIX-1 audit invariant).
+        for label, val, path in (
+            ("HOT", hot_pv, "meta.policy_version"),
+            ("HOT", hot_ip, "meta.rag_files.init_prompt"),
+            ("COLD", cold_v, "init_prompt_reference.version"),
+            ("COLD", cold_fn, "init_prompt_reference.filename"),
+        ):
+            if isinstance(val, str) and VERSION_PLACEHOLDER in val:
+                findings.append(
+                    f"{VERSION_PLACEHOLDER} placeholder unsubstituted in "
+                    f"{label} at {path}"
+                )
             if hot_pv and cold_v and hot_pv != cold_v:
                 findings.append(
                     f"COLD↔HOT version drift: HOT policy_version={hot_pv!r} "

@@ -142,8 +142,16 @@ class TestVerifyCoherence:
             "filename": f"INIT_UNIVERSAL_RUNTIME_KERNEL_v{v}.md"}}
 
     def test_clean(self):
+        # Narrative fields may legitimately *mention* the token name in prose;
+        # only the structural self-version fields are scanned (field-targeted,
+        # consistent with the FIX-1 audit invariant), so a coherent RAG whose
+        # current_status / sessions_recent narrate the mechanism stays clean.
+        hot = self._hot()
+        hot["current_status"] = {
+            "rag_kernel_version": "v0.4.5 — spec uses one <SPEC_VERSION> token"}
+        hot["sessions_recent"] = [{"s": "parametrized to <SPEC_VERSION>"}]
         assert SpecParser.verify_coherence(
-            self._hot(), self._cold(), "3.2.2") == []
+            hot, self._cold(), "3.2.2") == []
 
     def test_cold_hot_version_drift(self):
         findings = SpecParser.verify_coherence(
