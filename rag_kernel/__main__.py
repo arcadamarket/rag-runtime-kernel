@@ -341,6 +341,25 @@ def build_parser() -> argparse.ArgumentParser:
     add_item_parser.add_argument("--by", type=str, default=None, help="superseding item id (required if --status SUPERSEDED)")
     add_item_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
 
+    # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Verify a freshly-built RAG: HOT↔COLD self-version coherence, no unsubstituted version placeholder (zero tokens).",
+    )
+    verify_parser.add_argument(
+        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    verify_parser.add_argument(
+        "--cold", type=Path, default=None,
+        help="Path to RAG_COLD.json (default: RAG_COLD.json beside the RAG file)",
+    )
+    verify_parser.add_argument(
+        "--spec", type=Path, default=None,
+        help="Optional spec MD to assert HOT/COLD versions equal the spec's own version.",
+    )
+    verify_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
+
     return parser
 
 
@@ -356,6 +375,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(sp.report(result))
         if result.errors:
             print(f"\nWARNING: {len(result.errors)} parse errors (blocks skipped).")
+        # FIX-2 fail-loud: an unresolved <SPEC_VERSION> means the spec header
+        # carried no parseable version — writing now would birth a COLD↔HOT
+        # drift. Refuse rather than emit a defective RAG.
+        version_errs = [e for e in result.errors if e.section_id == "version"]
+        if version_errs:
+            print(
+                "\nFATAL: unresolved self-version token(s) — refusing to write "
+                "a drifted RAG (FIX-2):",
+                file=sys.stderr,
+            )
+            for e in version_errs:
+                print(f"  - {e.message}", file=sys.stderr)
+            return 2
         rag = result.merged
         cold = result.cold_template
     elif args.spec and not args.spec.exists():
@@ -1836,6 +1868,65 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Deterministic post-init coherence gate (FIX-2, K4/K8).
+
+    Loads the HOT RAG and its COLD sidecar and asserts the self-version is
+    consistent: HOT ``policy_version`` == COLD ``init_prompt_reference.version``,
+    matching ``init_prompt`` filenames, and no surviving ``<SPEC_VERSION>``
+    token. With ``--spec`` it also asserts both equal the spec's own version.
+    Zero LLM, zero tokens. Exit non-zero on any finding (fail-loud gate).
+    """
+    import json
+    from rag_kernel.spec_parser import SpecParser
+
+    rag_path = args.rag
+    if not rag_path.exists():
+        print(f"Error: RAG not found: {rag_path}", file=sys.stderr)
+        return 2
+    cold_path = args.cold or (rag_path.parent / "RAG_COLD.json")
+
+    def _load(p: Path) -> dict:
+        # utf-8-sig tolerates a BOM (production COLD files carry one).
+        with open(p, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+
+    rag = _load(rag_path)
+    cold = _load(cold_path) if cold_path.exists() else None
+
+    spec_version = ""
+    if args.spec is not None:
+        if not args.spec.exists():
+            print(f"Error: spec not found: {args.spec}", file=sys.stderr)
+            return 2
+        with open(args.spec, "r", encoding="utf-8") as f:
+            spec_version = SpecParser()._extract_version(f.readlines())
+
+    findings = SpecParser.verify_coherence(rag, cold, spec_version)
+
+    if getattr(args, "json_output", False):
+        print(json.dumps({
+            "ok": not findings,
+            "rag": str(rag_path),
+            "cold": str(cold_path) if cold else None,
+            "spec_version": spec_version or None,
+            "findings": findings,
+        }, indent=2))
+    else:
+        print(f"verify: {rag_path}")
+        print(f"  COLD: {cold_path if cold else '(none)'}")
+        if spec_version:
+            print(f"  spec version: {spec_version}")
+        if findings:
+            print(f"  FAIL — {len(findings)} finding(s):")
+            for fnd in findings:
+                print(f"    - {fnd}")
+        else:
+            print("  OK — HOT↔COLD self-version coherent, no placeholders.")
+
+    return 1 if findings else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1856,6 +1947,7 @@ def main(argv: list[str] | None = None) -> int:
         "audit": cmd_audit,
         "doctor": cmd_doctor,
         "add": cmd_add,
+        "verify": cmd_verify,
     }
     return commands[args.command](args)
 

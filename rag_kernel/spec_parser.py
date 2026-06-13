@@ -54,6 +54,15 @@ _FENCE_CLOSE = re.compile(r'^```\s*$')
 # Section header regex: ## §N — TITLE
 _SECTION_HEADER = re.compile(r'^##\s+§(\S+)\s*[—–-]\s*(.+)$')
 
+# Single self-version placeholder token embedded in the HOT/COLD templates.
+# spec_parser substitutes it with the spec's own version (parsed from the
+# document header) so HOT policy_version / init_prompt and the COLD
+# init_prompt_reference can never drift apart on a fresh deploy (FIX-2, K4).
+# NOTE: this is deliberately distinct from the session-zero placeholders
+# (<ISO>, <from user>, <absolute path>) which are filled by the LLM, NOT the
+# parser, and must therefore NOT trigger the fail-loud survivor scan.
+VERSION_PLACEHOLDER = "<SPEC_VERSION>"
+
 # Minimal void RAG — valid structure with empty fields
 VOID_RAG: dict[str, Any] = {
     "meta": {
@@ -209,6 +218,10 @@ class SpecParser:
         # Merge all blocks into final RAG
         result.merged = self._merge_blocks(result)
 
+        # Substitute the single self-version token across HOT + COLD,
+        # stamp the COLD reference, and fail-loud on any survivor (FIX-2).
+        self._postprocess(result)
+
         return result
 
     def parse_string(self, content: str) -> ParseResult:
@@ -217,6 +230,7 @@ class SpecParser:
         result = self._parse_lines(lines)
         result.spec_version = self._extract_version(lines)
         result.merged = self._merge_blocks(result)
+        self._postprocess(result)
         return result
 
     def _parse_lines(self, lines: list[str]) -> ParseResult:
@@ -350,6 +364,139 @@ class SpecParser:
                 rag[key] = deepcopy(default)
 
         return rag
+
+    # ── Self-version parametrization (FIX-2, K4) ───────────────
+
+    def _postprocess(self, result: ParseResult) -> None:
+        """Resolve the single self-version token across HOT + COLD.
+
+        1. Substitute every ``<SPEC_VERSION>`` with the parsed spec version
+           in both the merged HOT and the COLD template.
+        2. Stamp the COLD ``init_prompt_reference`` (version + filename) from
+           that same single source — belt-and-suspenders even if the template
+           omits the placeholder.
+        3. Fail loud (append a ParseError) if any ``<SPEC_VERSION>`` survives,
+           which means the spec header carried no parseable version.
+        """
+        sv = result.spec_version
+        result.merged = self._substitute_version(result.merged, sv)
+        if result.cold_template is not None:
+            result.cold_template = self._substitute_version(result.cold_template, sv)
+            self._stamp_cold(result.cold_template, sv)
+        self._check_version_placeholder(result)
+
+    @classmethod
+    def _substitute_version(cls, obj: Any, spec_version: str) -> Any:
+        """Recursively replace the VERSION_PLACEHOLDER token with spec_version.
+
+        No-op when spec_version is empty (the survivor scan then flags it).
+        """
+        if not spec_version:
+            return obj
+        if isinstance(obj, dict):
+            return {k: cls._substitute_version(v, spec_version)
+                    for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [cls._substitute_version(v, spec_version) for v in obj]
+        if isinstance(obj, str):
+            return obj.replace(VERSION_PLACEHOLDER, spec_version)
+        return obj
+
+    @staticmethod
+    def _stamp_cold(cold: dict, spec_version: str) -> dict:
+        """Stamp the COLD init_prompt_reference from the single spec version."""
+        if not cold or not spec_version:
+            return cold
+        ipr = cold.get("init_prompt_reference")
+        if isinstance(ipr, dict):
+            ipr["version"] = spec_version
+            ipr["filename"] = (
+                f"INIT_UNIVERSAL_RUNTIME_KERNEL_v{spec_version}.md"
+            )
+        return cold
+
+    @staticmethod
+    def _scan_placeholder(obj: Any, path: str = "$") -> list[str]:
+        """Return JSON-ish paths where VERSION_PLACEHOLDER still appears."""
+        hits: list[str] = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                hits += SpecParser._scan_placeholder(v, f"{path}.{k}")
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                hits += SpecParser._scan_placeholder(v, f"{path}[{i}]")
+        elif isinstance(obj, str) and VERSION_PLACEHOLDER in obj:
+            hits.append(path)
+        return hits
+
+    def _check_version_placeholder(self, result: ParseResult) -> None:
+        """Append a (fatal-class) ParseError for each surviving version token."""
+        for label, blob in (("HOT", result.merged),
+                            ("COLD", result.cold_template)):
+            if blob is None:
+                continue
+            for p in self._scan_placeholder(blob):
+                result.errors.append(ParseError(
+                    "version", 0,
+                    f"Unsubstituted {VERSION_PLACEHOLDER} survived in "
+                    f"{label} at {p} (spec_version="
+                    f"{result.spec_version or '(none)'!r}) — the spec header "
+                    f"has no parseable version token."
+                ))
+
+    @staticmethod
+    def verify_coherence(rag: dict, cold: Optional[dict] = None,
+                         spec_version: str = "") -> list[str]:
+        """Deterministic post-init coherence check (powers `rag_kernel verify`).
+
+        Asserts the self-version is consistent across HOT and COLD and that no
+        version placeholder leaked through. Returns a list of findings
+        (empty = coherent). Zero LLM, zero tokens.
+        """
+        findings: list[str] = []
+        meta = rag.get("meta", {}) if isinstance(rag, dict) else {}
+        hot_pv = meta.get("policy_version")
+        hot_ip = meta.get("rag_files", {}).get("init_prompt")
+
+        # No version placeholder may survive anywhere in HOT/COLD.
+        for label, blob in (("HOT", rag), ("COLD", cold)):
+            if blob is None:
+                continue
+            for p in SpecParser._scan_placeholder(blob):
+                findings.append(
+                    f"{VERSION_PLACEHOLDER} placeholder unsubstituted in "
+                    f"{label} at {p}"
+                )
+
+        cold_v = cold_fn = None
+        if isinstance(cold, dict):
+            ipr = cold.get("init_prompt_reference", {}) or {}
+            cold_v = ipr.get("version")
+            cold_fn = ipr.get("filename")
+            if hot_pv and cold_v and hot_pv != cold_v:
+                findings.append(
+                    f"COLD↔HOT version drift: HOT policy_version={hot_pv!r} "
+                    f"!= COLD init_prompt_reference.version={cold_v!r}"
+                )
+            if hot_ip and cold_fn and hot_ip != cold_fn:
+                findings.append(
+                    f"COLD↔HOT init_prompt drift: HOT rag_files.init_prompt="
+                    f"{hot_ip!r} != COLD init_prompt_reference.filename="
+                    f"{cold_fn!r}"
+                )
+
+        if spec_version:
+            if hot_pv and hot_pv != spec_version:
+                findings.append(
+                    f"HOT policy_version={hot_pv!r} != spec version="
+                    f"{spec_version!r}"
+                )
+            if cold_v and cold_v != spec_version:
+                findings.append(
+                    f"COLD init_prompt_reference.version={cold_v!r} != spec "
+                    f"version={spec_version!r}"
+                )
+        return findings
 
     def _extract_version(self, lines: list[str]) -> str:
         """Extract spec version from the document title or header."""

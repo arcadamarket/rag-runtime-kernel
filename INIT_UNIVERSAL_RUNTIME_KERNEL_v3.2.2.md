@@ -1224,7 +1224,7 @@ Once all inputs validated:
     "root_project": "<absolute path>",
     "root_deliverables": "<absolute path>",
     "root_rag": "<absolute path>",
-    "policy_version": "3.1.9",
+    "policy_version": "<SPEC_VERSION>",
     "state_hash": "",
     "inventory_hash": "",
     "last_checkpoint_seq": 0,
@@ -1240,7 +1240,7 @@ Once all inputs validated:
       "cold_evidence": null,
       "backup": "RAG_MASTER.json.bak",
       "snapshot_log": "RUNTIME_SNAPSHOT.log",
-      "init_prompt": "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.9.md",
+      "init_prompt": "INIT_UNIVERSAL_RUNTIME_KERNEL_v<SPEC_VERSION>.md",
       "_resolve": "join(root_rag, filename)",
       "_partition_note": "In single-file mode, only 'cold' is populated. When partitioned (§8), 'cold' becomes null and partition keys are populated. Sub-parts use arrays: e.g. cold_evidence: ['RAG_COLD_evidence.part_1.json', ...]"
     }
@@ -1280,6 +1280,8 @@ Once all inputs validated:
 }
 ```
 
+**Note:** The `<SPEC_VERSION>` token in the HOT (§32) and COLD (§33) templates is a single self-version placeholder. `spec_parser` deterministically substitutes it with this specification's own version (parsed from the document header) at `init` time, and stamps the COLD `init_prompt_reference` from the same source — so HOT `policy_version`, HOT `rag_files.init_prompt`, and COLD `init_prompt_reference` can never drift apart on a fresh deploy. `init` fails loud if any `<SPEC_VERSION>` token survives. (Other `<...>` placeholders such as `<ISO>`, `<from user>`, `<absolute path>` are filled at session-zero and are NOT version tokens.)
+
 **Note:** `pov_roles` is initialized empty. Populated from user input during Step 3 of session-zero. Hash fields (`state_hash`, `inventory_hash`) are populated by the runtime kernel in ENFORCED mode. In AUTONOMOUS mode, they initialize as empty strings — the boot sequence MUST treat empty hash fields as "not yet computed" and skip hash validation on the first boot. On first CHECKPOINTING, compute and store hashes; subsequent boots validate normally.
 
 ---
@@ -1302,9 +1304,9 @@ Once all inputs validated:
     "_partition_note": "In single-file mode, partition_id is null. In partitioned mode (§8), each file has a unique partition_id and part tracking."
   },
   "init_prompt_reference": {
-    "filename": "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.9.md",
+    "filename": "INIT_UNIVERSAL_RUNTIME_KERNEL_v<SPEC_VERSION>.md",
     "location_key": "root_rag",
-    "version": "3.1.9"
+    "version": "<SPEC_VERSION>"
   },
   "documents_inventory": {
     "last_scan_utc": "<ISO>",

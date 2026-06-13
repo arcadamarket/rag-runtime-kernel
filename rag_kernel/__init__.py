@@ -5,7 +5,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "OS-level runtime bridge for LLM memory persistence",
   "spec_version": "3.2.2",
   "python_requires": ">=3.10",
@@ -18,7 +18,7 @@ Zero external dependencies. Python 3.10+ standard library only.
     "concurrency": "File-based mutex (.rag_kernel.lock) + split-brain detection",
     "api": "HTTP JSON API server (port 7437)",
     "mcp_transport": "MCP stdio transport for Claude Desktop (JSON-RPC 2.0)",
-    "spec_parser": "Deterministic MD→RAG parser (zero tokens, zero LLM)",
+    "spec_parser": "Deterministic MD→RAG parser (zero tokens, zero LLM); substitutes a single <SPEC_VERSION> self-version token across HOT+COLD and stamps the COLD init_prompt_reference from the spec's own version, fail-loud on any survivor (FIX-2, K4)",
     "session_logger": "Structured JSONL session logger — universal observability",
     "conflict_engine": "Rule-based conflict auto-categorization with suggested resolutions",
     "generated_guards": "TLA+-derived transition table + per-action enabling guards (FV-PHASE4 enforced structural source)",
@@ -36,7 +36,8 @@ Zero external dependencies. Python 3.10+ standard library only.
     "health": "python -m rag_kernel health [--path .]",
     "serve": "python -m rag_kernel serve --project <path> [--port 7437]",
     "mcp": "python -m rag_kernel mcp --project <path>",
-    "configure": "python -m rag_kernel configure --rag <path> --context <path>"
+    "configure": "python -m rag_kernel configure --rag <path> --context <path>",
+    "verify": "python -m rag_kernel verify [--rag <path>] [--cold <path>] [--spec <path.md>] — deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)"
   },
   "invocation_rules": {
     "MUST_USE_KERNEL": [
@@ -57,7 +58,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 
 # ── Capability Discovery ──────────────────────────────────────
