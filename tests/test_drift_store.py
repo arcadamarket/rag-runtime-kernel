@@ -65,7 +65,7 @@ def _write_hot(path: Path, hot: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 def test_version_and_key_constants():
-    assert DRIFT_STORE_VERSION == "1.0.0"
+    assert DRIFT_STORE_VERSION == "1.1.0"
     assert TRACKED_ITEMS_KEY == "tracked_items"
 
 

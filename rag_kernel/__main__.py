@@ -55,7 +55,10 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "items": "Read-only render of the canonical tracked_items array",
     "render": "Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items; --apply rewrites the legacy arrays atomically (DRIFT-ELIM increment 4)",
     "note": "Refresh a tracked item's one-line note through the guarded API (status untouched) — DRIFT-ELIM increment 5 (INS-038)",
-    "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5"
+    "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5",
+    "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
+    "add-rule": "Append a NEW operating_protocol rule through the guarded atomic store (FIX-5/P3, fail-loud on existing key)",
+    "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)"
   },
   "use_when": "Any CLI invocation of rag_kernel"
 }
@@ -340,6 +343,22 @@ def build_parser() -> argparse.ArgumentParser:
     add_item_parser.add_argument("--note", type=str, default="", help="one-line note")
     add_item_parser.add_argument("--by", type=str, default=None, help="superseding item id (required if --status SUPERSEDED)")
     add_item_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
+
+    # -- add-rule (FIX-5/P3: guarded ADD verb for operating_protocol rules) --
+    add_rule_parser = subparsers.add_parser(
+        "add-rule",
+        help="Append a NEW operating_protocol rule through the guarded atomic store (fail-loud on an existing key).",
+    )
+    add_rule_parser.add_argument("key", type=str, help="operating_protocol rule key (e.g. strict_obey)")
+    add_rule_parser.add_argument("value", type=str, nargs="?", default=None,
+                                 help="rule text (string). Omit and use --value-file for long rules.")
+    add_rule_parser.add_argument("--value-file", dest="value_file", type=Path, default=None,
+                                 help="read the rule text from this file instead of the positional arg")
+    add_rule_parser.add_argument("--rag", type=Path, default=Path("RAG/RAG_MASTER.json"), help="Path to RAG_MASTER.json")
+    add_rule_parser.add_argument("--session", type=str, required=True, help="session id (audit trail; stamps meta.last_updated_utc)")
+    add_rule_parser.add_argument("--allow-overwrite", dest="allow_overwrite", action="store_true",
+                                 help="replace an existing rule of the same key (default: fail loud)")
+    add_rule_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
 
     # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
     verify_parser = subparsers.add_parser(
@@ -1868,6 +1887,77 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_add_rule(args: argparse.Namespace) -> int:
+    """Append a NEW operating_protocol rule through the guarded, atomic store (FIX-5/P3).
+
+    Closes the no-add-rule-verb gap: operating_protocol rules (e.g. the STRICT-OBEY
+    operator directive) were previously introduced by hand-editing RAG_MASTER.json
+    — the manual-JSON drift the project forbids (E-037 / E-039). This wires
+    ``drift_store.add_operating_protocol_rule_file``: validate -> fail-loud on an
+    existing key (unless ``--allow-overwrite``) -> atomic write (tmp -> verify ->
+    .bak parity -> rename). The rule text may come from the positional argument or,
+    for long rules, ``--value-file``.
+    """
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        DuplicateItemError,
+        OPERATING_PROTOCOL_KEY,
+        add_operating_protocol_rule_file,
+        load_hot,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    # Rule text: --value-file takes precedence over the positional value.
+    if args.value_file is not None:
+        if not args.value_file.exists():
+            print(f"Error: value file not found: {args.value_file}", file=sys.stderr)
+            return 1
+        value = args.value_file.read_text(encoding="utf-8").strip()
+    elif args.value is not None:
+        value = args.value
+    else:
+        print("Error: provide the rule text as the positional value or via --value-file",
+              file=sys.stderr)
+        return 1
+    if not value.strip():
+        print("Error: rule value is empty", file=sys.stderr)
+        return 1
+
+    try:
+        hot = load_hot(rag_path)
+    except DriftStoreError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+    op = hot.get(OPERATING_PROTOCOL_KEY)
+    exists = isinstance(op, dict) and args.key in op
+    if exists and not args.allow_overwrite:
+        print(f"Error: operating_protocol already has rule {args.key!r} "
+              f"(add-rule is fail-loud; pass --allow-overwrite to replace)", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        verb = "replace" if exists else "add"
+        print(f"[DRY RUN] would {verb} operating_protocol rule {args.key!r} "
+              f"({len(value)} chars) (no write)")
+        return 0
+
+    try:
+        add_operating_protocol_rule_file(
+            rag_path, args.key, value, allow_overwrite=args.allow_overwrite)
+    except (DuplicateItemError, DriftStoreError) as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    action = "replaced" if exists else "added"
+    print(f"{action} operating_protocol rule {args.key!r} ({len(value)} chars) "
+          f"[session {args.session}]")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Deterministic post-init coherence gate (FIX-2, K4/K8).
 
@@ -1947,6 +2037,7 @@ def main(argv: list[str] | None = None) -> int:
         "audit": cmd_audit,
         "doctor": cmd_doctor,
         "add": cmd_add,
+        "add-rule": cmd_add_rule,
         "verify": cmd_verify,
     }
     return commands[args.command](args)

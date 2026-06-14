@@ -105,7 +105,12 @@ from rag_kernel import drift_render
 #         seq-based equal-or-one-behind allowance — the one-behind branch was the
 #         rollback-prev contract the operator rejected. Paired with the enforce half
 #         (mirror_bak=True on the canonical writers).
-DRIFT_AUDIT_VERSION = "1.3.0"
+#   1.4.0 — FIX-5/P2: check_context_side_stores flags a stray ``*_context.json``
+#         persisted in the RAG directory (a redundant copy of state already merged
+#         into the canonical RAG by ``configure`` — the eBay ``ebay_context.json``
+#         side-file). Extends the Rule 13 side-store family from the project root
+#         (Cowork-memory MDs) to the RAG dir (context inputs).
+DRIFT_AUDIT_VERSION = "1.4.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -136,6 +141,13 @@ _COMPLETION_CLAIM_RE = re.compile(
 # Exact name + two glob patterns; scanned inside the project root ONLY.
 _FORBIDDEN_STORE_NAMES: frozenset[str] = frozenset({"MEMORY.md"})
 _FORBIDDEN_STORE_GLOBS: tuple[str, ...] = ("feedback_*.md", "project_*.md")
+# Stray per-project context inputs persisted in the RAG directory (FIX-5 / P2).
+# ``*_context.json`` is a legitimate TRANSIENT input to ``configure`` — its content
+# is merged INTO the canonical RAG. A copy left beside RAG_MASTER.json is a
+# redundant second artifact (the eBay ``ebay_context.json`` defect). Scanned in
+# the RAG dir ONLY (non-recursive), so a context file located elsewhere as a true
+# transient input is unaffected.
+_CONTEXT_SIDE_STORE_GLOB: str = "*_context.json"
 # Directories never scanned (VCS internals / build caches).
 _SKIP_DIRS: frozenset[str] = frozenset({".git", "__pycache__", ".pytest_cache"})
 
@@ -415,6 +427,36 @@ def check_side_rule_stores(root: Path | str) -> list[AuditFinding]:
                     "— all rules/state belong in the RAG (Rule 13 / E-039)"
                 ),
             ))
+    return findings
+
+
+def check_context_side_stores(rag_dir: Path | str) -> list[AuditFinding]:
+    """ERROR for each stray ``*_context.json`` persisted in the RAG directory (FIX-5 / P2).
+
+    A ``*_context.json`` is a transient input to ``configure`` whose content is
+    merged into the canonical RAG; a copy lingering beside RAG_MASTER.json is a
+    redundant second artifact and a parallel-state hazard (the eBay
+    ``ebay_context.json`` side-file the deploy audit flagged). Scans the RAG
+    directory ONLY and non-recursively (``glob``, not ``rglob``), so a context
+    file located elsewhere as a genuine one-off input is unaffected, and the
+    filesystem_boundary rule (E-026) is respected. Returns one ERROR per hit.
+    """
+    d = Path(rag_dir)
+    findings: list[AuditFinding] = []
+    if not d.is_dir():
+        return findings
+    for p in sorted(d.glob(_CONTEXT_SIDE_STORE_GLOB)):
+        if not p.is_file():
+            continue
+        findings.append(AuditFinding(
+            check="context_side_stores",
+            severity=ERROR,
+            detail=(
+                f"redundant context input persisted beside the RAG: {p.name} "
+                "— its content is merged into RAG_MASTER.json by `configure`; "
+                "remove the stray copy (Rule 13 / FIX-5 P2)"
+            ),
+        ))
     return findings
 
 
@@ -1113,6 +1155,10 @@ def audit_file(
     extra += check_wal_integrity(p.parent / wal_name)
     extra += check_bak_parity(p, hot)
     extra += check_cold_hot_version(p.parent / cold_name, hot)
+    # FIX-5/P2: stray *_context.json beside the RAG (RAG dir = p.parent). Part of
+    # the Rule 13 side-store family, so gated by the same scan_root toggle.
+    if use_root is not None:
+        extra += check_context_side_stores(p.parent)
     return AuditReport(report.findings + tuple(extra))
 
 
@@ -1142,6 +1188,7 @@ __all__ = [
     "check_supersede_refs",
     "check_note_status_contradiction",
     "check_side_rule_stores",
+    "check_context_side_stores",
     "check_ledger_consistency",
     "check_record_coverage",
     "check_repo_claim_reconciliation",

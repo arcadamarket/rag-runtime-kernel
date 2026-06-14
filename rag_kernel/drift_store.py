@@ -56,7 +56,9 @@ project's own bookkeeping.
               "seed_items", "migrate_backlog", "migrate_backlog_file",
               "LEDGER_DISPOSITION_TO_STATUS", "INFERENCE_LEDGER_KEY",
               "ledger_disposition_to_status", "inference_specs_from_hot",
-              "add_items", "add_items_file"],
+              "add_items", "add_items_file",
+              "OPERATING_PROTOCOL_KEY", "add_operating_protocol_rule",
+              "add_operating_protocol_rule_file"],
   "use_when": "Reading, transitioning, or persisting the canonical status of tracked project items in RAG_MASTER.json",
   "never_bypass": true
 }
@@ -77,7 +79,9 @@ from rag_kernel.drift_control import (
 from rag_kernel.persistence import atomic_write_json
 
 # Bump when the on-disk layout of tracked_items / this module's contract changes.
-DRIFT_STORE_VERSION = "1.0.0"
+# 1.1.0 (FIX-5/P3): added the guarded operating_protocol rule-mutation path
+# (add_operating_protocol_rule[_file]) — an additive contract extension.
+DRIFT_STORE_VERSION = "1.1.0"
 
 # The single canonical array key inside RAG_MASTER.json (HOT). Everything else
 # that mentions item status is, or will become, a render of this array.
@@ -539,6 +543,88 @@ def add_items_file(
     p = Path(path)
     hot = load_hot(p)
     add_items(hot, specs, allow_existing=allow_existing)
+    if touch_meta:
+        _touch_meta(hot, now)
+    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
+    return hot
+
+
+# ---------------------------------------------------------------------------
+# Operating-protocol rule mutation (FIX-5 / P3) — governed, atomic
+# ---------------------------------------------------------------------------
+# ``operating_protocol`` is the project's rule vault. New rules (e.g. the
+# STRICT-OBEY operator directive) were previously introduced by hand-editing
+# RAG_MASTER.json — the exact manual-JSON drift the project forbids (E-037 /
+# E-039): an authority changed outside the guarded, atomic, .bak-mirroring write
+# path. This is the guarded counterpart, mirroring the tracked_items add path:
+# validate -> fail-loud on an already-present key (no silent overwrite) -> atomic
+# write (tmp -> verify -> .bak parity -> rename). LLM proposes the rule text; this
+# layer decides legality (key collision, shape) and persists deterministically.
+
+# The rule vault key inside RAG_MASTER.json (HOT).
+OPERATING_PROTOCOL_KEY = "operating_protocol"
+
+
+def add_operating_protocol_rule(
+    hot: dict,
+    key: str,
+    value: str,
+    *,
+    allow_overwrite: bool = False,
+) -> dict:
+    """Append a NEW string-valued rule into ``hot[operating_protocol]`` (pure on dict).
+
+    Fail-loud guards (nothing is mutated unless all pass):
+      * ``operating_protocol`` must exist and be a JSON object;
+      * ``key`` must be a non-empty string and (unless ``allow_overwrite``) must
+        NOT already be present — a collision raises :class:`DuplicateItemError`,
+        so an existing rule is never silently clobbered;
+      * ``value`` must be a non-empty string (rules are string-valued; nested
+        structured config is out of scope for this guarded verb).
+
+    Mutates and returns ``hot``.
+    """
+    op = hot.get(OPERATING_PROTOCOL_KEY)
+    if op is None:
+        raise DriftStoreError(
+            f"{OPERATING_PROTOCOL_KEY!r} is absent; cannot add a rule to a RAG without one"
+        )
+    if not isinstance(op, dict):
+        raise DriftStoreError(
+            f"{OPERATING_PROTOCOL_KEY!r} must be a JSON object, got {type(op).__name__}"
+        )
+    if not isinstance(key, str) or not key.strip():
+        raise DriftStoreError("operating_protocol rule key must be a non-empty string")
+    if not isinstance(value, str) or not value.strip():
+        raise DriftStoreError("operating_protocol rule value must be a non-empty string")
+    if key in op and not allow_overwrite:
+        raise DuplicateItemError(
+            f"operating_protocol already has a rule {key!r}; "
+            "pass allow_overwrite=True to replace it"
+        )
+    op[key] = value
+    return hot
+
+
+def add_operating_protocol_rule_file(
+    path: Path | str,
+    key: str,
+    value: str,
+    *,
+    allow_overwrite: bool = False,
+    now: Optional[str] = None,
+    touch_meta: bool = True,
+) -> dict:
+    """Atomically append a new ``operating_protocol`` rule to a RAG file (refreshes .bak).
+
+    The guarded, atomic counterpart to :func:`add_operating_protocol_rule`: load ->
+    add (key-collision invariant) -> ``atomic_write_json`` (tmp -> verify -> .bak
+    parity -> rename). On any guard failure nothing is written and the prior file +
+    its ``.bak`` are intact.
+    """
+    p = Path(path)
+    hot = load_hot(p)
+    add_operating_protocol_rule(hot, key, value, allow_overwrite=allow_overwrite)
     if touch_meta:
         _touch_meta(hot, now)
     atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
