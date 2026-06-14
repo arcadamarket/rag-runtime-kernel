@@ -97,6 +97,36 @@ _ITEM_VERB_HELP = {
 }
 
 
+def _default_rag_path() -> Path:
+    """Layout-aware default for ``--rag`` (FIX-6 / K9).
+
+    The historical default ``RAG/RAG_MASTER.json`` assumes the command is run
+    from the project root. In a nested deploy layout (``rag_kernel/`` living
+    *under* ``RAG/``), running from inside the RAG dir made that default resolve
+    to ``RAG/RAG/RAG_MASTER.json`` — the doubled path the eBay Session-Zero
+    deploy hit (K9), which simply errors "not found".
+
+    This resolves the RAG whether invoked from the project root OR from inside the
+    RAG dir, by returning the first EXISTING candidate (a read-only existence
+    probe — deterministic, no I/O beyond ``stat``):
+
+      1. ``RAG/RAG_MASTER.json``  — run from the project root (canonical layout)
+      2. ``RAG_MASTER.json``      — run from inside the RAG dir (no RAG/ prefix)
+
+    If neither exists, it returns the canonical root-layout path so the command's
+    own not-found error stays sensible. It never prepends ``RAG/`` to a path that
+    already lives in the RAG dir, so it cannot double ``RAG/RAG``.
+    """
+    candidates = (
+        Path("RAG") / "RAG_MASTER.json",  # project root
+        Path("RAG_MASTER.json"),          # inside the RAG dir
+    )
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rag_kernel",
@@ -229,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
         vp = subparsers.add_parser(_verb, help=_vhelp)
         vp.add_argument("item_id", type=str, help="id of the tracked item")
         vp.add_argument(
-            "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+            "--rag", type=Path, default=_default_rag_path(),
             help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
         )
         vp.add_argument(
@@ -243,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # -- items (read-only render of tracked_items) --
     items_parser = subparsers.add_parser("items", help="List the canonical tracked_items array (read-only).")
-    items_parser.add_argument("--rag", type=Path, default=Path("RAG/RAG_MASTER.json"), help="Path to RAG_MASTER.json")
+    items_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
     items_parser.add_argument("--status", type=str, default=None, help="Filter by status (e.g. OPEN, DEFERRED)")
     items_parser.add_argument("--kind", type=str, default=None, help="Filter by kind (e.g. TASK, MILESTONE)")
     items_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of a table")
@@ -254,7 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from the canonical tracked_items array.",
     )
     render_parser.add_argument(
-        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        "--rag", type=Path, default=_default_rag_path(),
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
     )
     render_parser.add_argument(
@@ -275,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     note_parser.add_argument("item_id", type=str, help="id of the tracked item")
     note_parser.add_argument("note", type=str, help="new one-line note text")
     note_parser.add_argument(
-        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        "--rag", type=Path, default=_default_rag_path(),
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
     )
     note_parser.add_argument(
@@ -290,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Audit the RAG: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores.",
     )
     audit_parser2.add_argument(
-        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        "--rag", type=Path, default=_default_rag_path(),
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
     )
     audit_parser2.add_argument(
@@ -336,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_item_parser.add_argument("item_id", type=str, help="id of the new tracked item")
     add_item_parser.add_argument("title", type=str, help="one-line title")
-    add_item_parser.add_argument("--rag", type=Path, default=Path("RAG/RAG_MASTER.json"), help="Path to RAG_MASTER.json")
+    add_item_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
     add_item_parser.add_argument("--status", type=str, default="OPEN", help="initial status (default: OPEN)")
     add_item_parser.add_argument("--kind", type=str, default="TASK", help="item kind (default: TASK)")
     add_item_parser.add_argument("--session", type=str, required=True, help="session id recorded on the item (audit trail)")
@@ -354,7 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="rule text (string). Omit and use --value-file for long rules.")
     add_rule_parser.add_argument("--value-file", dest="value_file", type=Path, default=None,
                                  help="read the rule text from this file instead of the positional arg")
-    add_rule_parser.add_argument("--rag", type=Path, default=Path("RAG/RAG_MASTER.json"), help="Path to RAG_MASTER.json")
+    add_rule_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
     add_rule_parser.add_argument("--session", type=str, required=True, help="session id (audit trail; stamps meta.last_updated_utc)")
     add_rule_parser.add_argument("--allow-overwrite", dest="allow_overwrite", action="store_true",
                                  help="replace an existing rule of the same key (default: fail loud)")
@@ -366,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify a freshly-built RAG: HOT↔COLD self-version coherence, no unsubstituted version placeholder (zero tokens).",
     )
     verify_parser.add_argument(
-        "--rag", type=Path, default=Path("RAG/RAG_MASTER.json"),
+        "--rag", type=Path, default=_default_rag_path(),
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
     )
     verify_parser.add_argument(
