@@ -396,5 +396,5 @@ def apply_renders_file(
             meta["last_updated_utc"] = datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
             )
-    atomic_write_json(p, hot)
+    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
     return hot

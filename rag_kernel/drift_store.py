@@ -290,7 +290,7 @@ def mutate_hot(
     store.write_into(hot)
     if touch_meta:
         _touch_meta(hot, now)
-    atomic_write_json(p, hot)
+    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
     return hot
 
 
@@ -404,7 +404,7 @@ def migrate_backlog_file(
     migrate_backlog(hot, specs, allow_overwrite=allow_overwrite)
     if touch_meta:
         _touch_meta(hot, now)
-    atomic_write_json(p, hot)
+    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
     return hot
 
 
@@ -541,5 +541,5 @@ def add_items_file(
     add_items(hot, specs, allow_existing=allow_existing)
     if touch_meta:
         _touch_meta(hot, now)
-    atomic_write_json(p, hot)
+    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
     return hot

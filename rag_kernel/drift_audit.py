@@ -74,6 +74,7 @@ also *verifies* that every render still equals the state it persisted.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -99,7 +100,12 @@ from rag_kernel import drift_render
 #         _-prefixed template-key scan, COLD<->HOT spec-version coherence, non-empty
 #         written_by_session, and session-id coherence. All fail-loud ERRORs (same
 #         family as the E-040 render check); each self-skips when its source is absent.
-DRIFT_AUDIT_VERSION = "1.2.0"
+# 1.3.0 — FIX-4 (K6): check_bak_parity now asserts true BYTE-PARITY between HOT and
+#         its .bak (operator-settled parity-mirror contract), replacing the FIX-1
+#         seq-based equal-or-one-behind allowance — the one-behind branch was the
+#         rollback-prev contract the operator rejected. Paired with the enforce half
+#         (mirror_bak=True on the canonical writers).
+DRIFT_AUDIT_VERSION = "1.3.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -893,19 +899,28 @@ def check_wal_integrity(wal_path: Path | str) -> list[AuditFinding]:
 
 
 def check_bak_parity(rag_path: Path | str, hot: dict) -> list[AuditFinding]:
-    """ERROR if the ``.bak`` is not a faithful backup of HOT (K6).
+    """ERROR if the ``.bak`` is not a BYTE-PARITY mirror of HOT (K6, FIX-4).
 
-    The ``.bak`` must be either a parity-mirror (same checkpoint seq) or exactly the
-    rollback-prior (one seq behind). The eBay backup sat 3 checkpoints stale
-    (HOT seq 3, .bak seq 0) with a different md5 — a backup that can't actually
-    restore. A ``.bak`` that fails to parse, or whose seq diverges by more than one,
-    is flagged. Self-skips when no ``.bak`` exists.
+    FIX-4 settled the ``.bak`` contract as **parity-mirror** (operator decision):
+    after a clean checkpoint / session close the ``.bak`` must be a byte-identical
+    copy of HOT, so recovery restores the *exact* known-good state the
+    ``recovery_protocol`` ("attempt .bak first") promises. The earlier FIX-1
+    allowance for a rollback-prior (one-seq-behind) ``.bak`` is removed — that was
+    the rollback-prev contract the operator rejected, and a backup whose bytes
+    differ from HOT is the eBay K6 defect (HOT seq 3, ``.bak`` seq 0, different
+    md5: a backup that cannot actually restore). The enforce half lives in the
+    canonical writers (full checkpoint/close, drift_store, drift_render) which
+    refresh ``.bak`` to parity via ``atomic_write_json(..., mirror_bak=True)``.
+
+    Self-skips when no ``.bak`` exists. A ``.bak`` that fails to parse is flagged
+    (a corrupt mirror is worse than none).
     """
     findings: list[AuditFinding] = []
     p = Path(rag_path)
     bak = p.with_suffix(p.suffix + ".bak")
     if not bak.exists():
         return findings
+    # A backup that no longer parses cannot restore — flag it loud.
     try:
         bak_hot = _load_json_bom(bak)
     except Exception as exc:  # noqa: BLE001 — any load failure is a broken backup
@@ -913,15 +928,26 @@ def check_bak_parity(rag_path: Path | str, hot: dict) -> list[AuditFinding]:
             check="bak_parity", severity=ERROR,
             detail=f"{bak.name} does not parse as a valid RAG backup: {exc}"))
         return findings
-    hot_seq = (hot.get("meta") or {}).get("last_checkpoint_seq")
-    bak_seq = (bak_hot.get("meta") or {}).get("last_checkpoint_seq")
-    if isinstance(hot_seq, int) and isinstance(bak_seq, int):
-        if bak_seq not in (hot_seq, hot_seq - 1):
-            findings.append(AuditFinding(
-                check="bak_parity", severity=ERROR,
-                detail=(f"{bak.name} last_checkpoint_seq={bak_seq} diverges from HOT "
-                        f"{hot_seq} (expected equal=parity-mirror or one-behind="
-                        "rollback-prior) — stale/broken backup")))
+    # Parity is byte-equality between the on-disk HOT and its .bak mirror.
+    try:
+        bak_bytes = bak.read_bytes()
+        hot_bytes = p.read_bytes()
+    except OSError as exc:
+        findings.append(AuditFinding(
+            check="bak_parity", severity=ERROR,
+            detail=f"could not read {p.name}/{bak.name} for parity comparison: {exc}"))
+        return findings
+    if bak_bytes != hot_bytes:
+        hot_sha = hashlib.sha256(hot_bytes).hexdigest()[:12]
+        bak_sha = hashlib.sha256(bak_bytes).hexdigest()[:12]
+        hot_seq = (hot.get("meta") or {}).get("last_checkpoint_seq")
+        bak_seq = (bak_hot.get("meta") or {}).get("last_checkpoint_seq")
+        findings.append(AuditFinding(
+            check="bak_parity", severity=ERROR,
+            detail=(f"{bak.name} is not a byte-parity mirror of {p.name} "
+                    f"(HOT sha {hot_sha} seq {hot_seq} vs .bak sha {bak_sha} "
+                    f"seq {bak_seq}) — stale/broken backup, parity-mirror contract "
+                    "(FIX-4/K6)")))
     return findings
 
 

@@ -77,12 +77,22 @@ class WALError(PersistenceError):
 # Atomic writes (M-020)
 # ---------------------------------------------------------------------------
 
-def atomic_write(path: Path, data: bytes) -> None:
+def atomic_write(path: Path, data: bytes, *, mirror_bak: bool = False) -> None:
     """Write data to path atomically with post-write verification.
 
     Sequence: write to .tmp -> verify hash -> backup existing to .bak -> rename.
     The rename is the commit point. Crash at any earlier stage leaves the
     original file intact.
+
+    ``mirror_bak`` (FIX-4 / K6 — parity-mirror contract): the step-3 backup above
+    captures the PRIOR file, which is the crash-safety copy that protects the
+    write window (default, unchanged). When ``mirror_bak`` is True the ``.bak`` is
+    additionally refreshed AFTER the commit rename to a BYTE-IDENTICAL copy of the
+    just-committed file, so the backup restores the exact known-good state rather
+    than the previous one. This realizes the operator-settled *parity-mirror*
+    contract (not rollback-prev). Canonical RAG-state writers — full checkpoint /
+    session close, drift_store mutations, drift_render apply — opt in; generic
+    writes (COLD, etc.) keep the prior-file crash backup.
     """
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     bak_path = path.with_suffix(path.suffix + ".bak")
@@ -98,18 +108,28 @@ def atomic_write(path: Path, data: bytes) -> None:
         tmp_path.unlink(missing_ok=True)
         raise WriteVerificationError(path, expected_hash, actual_hash)
 
-    # 3. Backup existing file (if any)
+    # 3. Backup existing file (if any) — prior-file crash copy for the write window
     if path.exists():
         shutil.copy2(path, bak_path)
 
     # 4. Atomic rename (commit point)
     tmp_path.replace(path)
 
+    # 5. FIX-4 (K6): parity-mirror refresh — .bak := byte-identical copy of HOT.
+    if mirror_bak:
+        shutil.copy2(path, bak_path)
 
-def atomic_write_json(path: Path, obj: Any, indent: int = 2) -> None:
-    """Convenience wrapper: serialize obj to JSON, then atomic_write."""
+
+def atomic_write_json(
+    path: Path, obj: Any, indent: int = 2, *, mirror_bak: bool = False
+) -> None:
+    """Convenience wrapper: serialize obj to JSON, then atomic_write.
+
+    ``mirror_bak`` forwards to :func:`atomic_write` to enforce the FIX-4 / K6
+    parity-mirror ``.bak`` contract for canonical RAG-state writes.
+    """
     data = json.dumps(obj, indent=indent, ensure_ascii=False).encode("utf-8")
-    atomic_write(path, data)
+    atomic_write(path, data, mirror_bak=mirror_bak)
 
 
 # ---------------------------------------------------------------------------

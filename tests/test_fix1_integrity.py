@@ -166,16 +166,32 @@ def test_bak_stale_seq_is_error(tmp_path):
     assert _checks(f) == {"bak_parity"}
 
 
-def test_bak_parity_mirror_and_rollback_prev_clean(tmp_path):
+def test_bak_byte_parity_mirror_clean(tmp_path):
+    # FIX-4: a byte-identical .bak (parity-mirror) is the only clean state.
     rag = tmp_path / "RAG_MASTER.json"
     hot = {"meta": {"last_checkpoint_seq": 7}}
     _write_json(rag, hot)
-    # parity-mirror (equal)
     _write_json(rag.with_suffix(".json.bak"), {"meta": {"last_checkpoint_seq": 7}})
     assert check_bak_parity(rag, hot) == []
-    # rollback-prior (one behind)
+
+
+def test_bak_rollback_prev_now_errors(tmp_path):
+    # FIX-4 removed the FIX-1 one-seq-behind allowance: rollback-prev was the
+    # contract the operator rejected, so a one-behind .bak is no longer clean.
+    rag = tmp_path / "RAG_MASTER.json"
+    hot = {"meta": {"last_checkpoint_seq": 7}}
+    _write_json(rag, hot)
     _write_json(rag.with_suffix(".json.bak"), {"meta": {"last_checkpoint_seq": 6}})
-    assert check_bak_parity(rag, hot) == []
+    assert _checks(check_bak_parity(rag, hot)) == {"bak_parity"}
+
+
+def test_bak_same_seq_byte_diff_errors(tmp_path):
+    # Same checkpoint seq but different bytes = a broken mirror that cannot restore.
+    rag = tmp_path / "RAG_MASTER.json"
+    hot = {"meta": {"last_checkpoint_seq": 7}, "x": 1}
+    _write_json(rag, hot)
+    _write_json(rag.with_suffix(".json.bak"), {"meta": {"last_checkpoint_seq": 7}, "x": 2})
+    assert _checks(check_bak_parity(rag, hot)) == {"bak_parity"}
 
 
 def test_bak_absent_self_skips(tmp_path):

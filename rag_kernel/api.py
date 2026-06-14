@@ -723,8 +723,13 @@ class KernelApp:
         )
 
         if do_full:
-            # Full checkpoint: atomic write (creates .bak)
-            atomic_write_json(self.hot_path, self._hot)
+            # Full checkpoint: atomic write. FIX-4 (K6): a full checkpoint — which
+            # the session close always routes through — refreshes .bak to a
+            # byte-identical parity-mirror of the just-committed HOT, so the backup
+            # restores the exact known-good close state (operator-settled
+            # parity-mirror, not rollback-prev). This is the enforce half of the
+            # K6 contract whose audit half is drift_audit.check_bak_parity.
+            atomic_write_json(self.hot_path, self._hot, mirror_bak=True)
 
             self.wal.append(
                 "CHECKPOINT",
