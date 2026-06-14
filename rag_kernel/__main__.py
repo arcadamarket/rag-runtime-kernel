@@ -1214,10 +1214,16 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
         print(f"  Checkpoint seq: {checkpoint_seq}")
         return 0
 
-    # Atomic write via persistence module
+    # Atomic write via persistence module.
+    # mirror_bak=True refreshes RAG_MASTER.json.bak to a byte-identical copy of
+    # HOT after the commit, enforcing the FIX-4 / K6 parity-mirror .bak contract
+    # for this canonical session-close write — matching api.checkpoint do_full.
+    # Without it the standalone CLI `checkpoint` left .bak one seq behind (E-045),
+    # which audit.check_bak_parity correctly fails loud on unless a later
+    # mirroring write (render --apply) happened to follow (FIX-8).
     try:
         from rag_kernel.persistence import atomic_write_json
-        atomic_write_json(rag_path, rag)
+        atomic_write_json(rag_path, rag, mirror_bak=True)
     except ImportError:
         # Fallback: direct write if persistence not available
         with open(rag_path, "w", encoding="utf-8") as f:
