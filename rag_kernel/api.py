@@ -729,7 +729,11 @@ class KernelApp:
             # restores the exact known-good close state (operator-settled
             # parity-mirror, not rollback-prev). This is the enforce half of the
             # K6 contract whose audit half is drift_audit.check_bak_parity.
-            atomic_write_json(self.hot_path, self._hot, mirror_bak=True)
+            # FIX-7 (T1): live pre-write side-store guard — session-close checkpoint
+            # refuses to commit while a parallel rule/state store is live (Rule 13).
+            atomic_write_json(
+                self.hot_path, self._hot, mirror_bak=True, guard_side_stores=True
+            )
 
             self.wal.append(
                 "CHECKPOINT",

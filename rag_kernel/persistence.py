@@ -77,7 +77,13 @@ class WALError(PersistenceError):
 # Atomic writes (M-020)
 # ---------------------------------------------------------------------------
 
-def atomic_write(path: Path, data: bytes, *, mirror_bak: bool = False) -> None:
+def atomic_write(
+    path: Path,
+    data: bytes,
+    *,
+    mirror_bak: bool = False,
+    guard_side_stores: bool = False,
+) -> None:
     """Write data to path atomically with post-write verification.
 
     Sequence: write to .tmp -> verify hash -> backup existing to .bak -> rename.
@@ -93,7 +99,19 @@ def atomic_write(path: Path, data: bytes, *, mirror_bak: bool = False) -> None:
     contract (not rollback-prev). Canonical RAG-state writers — full checkpoint /
     session close, drift_store mutations, drift_render apply — opt in; generic
     writes (COLD, etc.) keep the prior-file crash backup.
+
+    ``guard_side_stores`` (FIX-7 / T1 — live pre-write side-store guard): when
+    True the write is REFUSED (raises :class:`SideStoreViolation`) the moment a
+    forbidden parallel rule/state store exists in scope — a Cowork-memory
+    ``MEMORY.md`` / ``feedback_*.md`` / ``project_*.md`` anywhere in the project
+    root, or a stray ``*_context.json`` beside the RAG. This fires the Rule 13 /
+    E-039 invariant AT WRITE TIME, during the session, instead of only after the
+    fact at ``audit``: a canonical RAG mutation cannot commit while a parallel
+    store is live. Runs BEFORE any byte is written. Same opt-in set as
+    ``mirror_bak`` (the canonical RAG-state writers); generic writes leave it off.
     """
+    if guard_side_stores:
+        assert_no_side_stores(path)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     bak_path = path.with_suffix(path.suffix + ".bak")
 
@@ -121,15 +139,140 @@ def atomic_write(path: Path, data: bytes, *, mirror_bak: bool = False) -> None:
 
 
 def atomic_write_json(
-    path: Path, obj: Any, indent: int = 2, *, mirror_bak: bool = False
+    path: Path,
+    obj: Any,
+    indent: int = 2,
+    *,
+    mirror_bak: bool = False,
+    guard_side_stores: bool = False,
 ) -> None:
     """Convenience wrapper: serialize obj to JSON, then atomic_write.
 
     ``mirror_bak`` forwards to :func:`atomic_write` to enforce the FIX-4 / K6
     parity-mirror ``.bak`` contract for canonical RAG-state writes.
+    ``guard_side_stores`` forwards to enforce the FIX-7 / T1 live pre-write
+    side-store guard on the same canonical RAG-state writes.
     """
     data = json.dumps(obj, indent=indent, ensure_ascii=False).encode("utf-8")
-    atomic_write(path, data, mirror_bak=mirror_bak)
+    atomic_write(
+        path, data, mirror_bak=mirror_bak, guard_side_stores=guard_side_stores
+    )
+
+
+# ---------------------------------------------------------------------------
+# Side-store guard (FIX-7 / T1) — single source of truth for "forbidden
+# parallel rule/state store", shared by the live pre-write guard here AND by
+# drift_audit's after-the-fact checks (which delegate to the finders below).
+#
+# Rule 13 / E-039: every rule and every piece of project state belongs IN THE
+# RAG. A Cowork-memory ``MEMORY.md`` / ``feedback_*.md`` / ``project_*.md`` in
+# the project root, or a stray ``*_context.json`` beside the RAG (its content is
+# merged into RAG_MASTER.json by ``configure`` — the eBay ``ebay_context.json``
+# defect), is a parallel store that the RAG exists to prevent. persistence is the
+# dependency-free leaf every canonical writer imports, so the guard lives here
+# (drift_store / drift_render are imported BY drift_audit and cannot import it
+# back without a cycle).
+# ---------------------------------------------------------------------------
+
+# Forbidden parallel rule/state store shapes (scanned in the project ROOT).
+SIDE_STORE_FORBIDDEN_NAMES: frozenset[str] = frozenset({"MEMORY.md"})
+SIDE_STORE_FORBIDDEN_GLOBS: tuple[str, ...] = ("feedback_*.md", "project_*.md")
+# Stray per-project context input persisted in the RAG DIR (non-recursive).
+SIDE_STORE_CONTEXT_GLOB: str = "*_context.json"
+# Directories never scanned (VCS internals / build caches).
+SIDE_STORE_SKIP_DIRS: frozenset[str] = frozenset(
+    {".git", "__pycache__", ".pytest_cache"}
+)
+
+
+class SideStoreViolation(PersistenceError):
+    """Raised by :func:`assert_no_side_stores` when a forbidden parallel store exists.
+
+    Fail-loud by design (Rule 13 / E-039): a canonical RAG write must STOP while a
+    parallel rule/state store is live, so the divergence is impossible to commit
+    rather than merely flagged afterward.
+    """
+
+    def __init__(self, offenders: Sequence[Tuple[str, Path]]) -> None:
+        self.offenders: list[Tuple[str, Path]] = list(offenders)
+        rendered = "; ".join(f"{kind}:{p}" for kind, p in self.offenders)
+        super().__init__(
+            "refusing canonical RAG write — forbidden parallel rule/state "
+            f"store(s) present (Rule 13 / E-039): {rendered}. All rules/state "
+            "belong in the RAG; remove the side store(s) and retry."
+        )
+
+
+def find_forbidden_rule_stores(root: Path | str) -> list[Path]:
+    """All ``MEMORY.md`` / ``feedback_*.md`` / ``project_*.md`` under ``root`` (rglob).
+
+    Scans ``root`` recursively, skipping VCS/build dirs. Respects the
+    filesystem_boundary rule (E-026): the caller passes the project root, never
+    Desktop/AppData/the Cowork memory dir.
+    """
+    root_path = Path(root)
+    hits: list[Path] = []
+    if not root_path.exists():
+        return hits
+    for p in sorted(root_path.rglob("*")):
+        if not p.is_file():
+            continue
+        if any(part in SIDE_STORE_SKIP_DIRS for part in p.parts):
+            continue
+        if p.name in SIDE_STORE_FORBIDDEN_NAMES or any(
+            p.match(g) for g in SIDE_STORE_FORBIDDEN_GLOBS
+        ):
+            hits.append(p)
+    return hits
+
+
+def find_context_side_stores(rag_dir: Path | str) -> list[Path]:
+    """All ``*_context.json`` directly inside ``rag_dir`` (non-recursive glob)."""
+    d = Path(rag_dir)
+    hits: list[Path] = []
+    if not d.is_dir():
+        return hits
+    for p in sorted(d.glob(SIDE_STORE_CONTEXT_GLOB)):
+        if p.is_file():
+            hits.append(p)
+    return hits
+
+
+def find_side_stores(
+    rag_dir: Path | str, root: Path | str
+) -> list[Tuple[str, Path]]:
+    """Both side-store families as ``(kind, path)`` pairs (``rule_store`` / ``context_store``)."""
+    out: list[Tuple[str, Path]] = []
+    out.extend(("rule_store", p) for p in find_forbidden_rule_stores(root))
+    out.extend(("context_store", p) for p in find_context_side_stores(rag_dir))
+    return out
+
+
+def assert_no_side_stores(
+    rag_path: Path | str, *, root: Optional[Path | str] = None
+) -> None:
+    """Fail-loud pre-write guard: raise :class:`SideStoreViolation` if any forbidden store exists.
+
+    ``rag_path`` is the file about to be written (e.g. ``RAG_MASTER.json``); its
+    parent is the RAG dir, scanned non-recursively for ``*_context.json`` and
+    recursively for the Cowork-memory rule-store shapes.
+
+    SCOPE (deliberate, layered): ``root`` defaults to the RAG DIR itself, NOT the
+    whole project root. The live guard is a fast write-time tripwire over the
+    RAG's own directory subtree — the high-value neighborhood where a parallel
+    store (a stray ``*_context.json`` beside the RAG, or a ``MEMORY.md`` dropped
+    into the RAG dir) collides with canonical state. The COMPREHENSIVE
+    project-root recursive sweep remains :func:`drift_audit.check_side_rule_stores`
+    (the after-the-fact auditor) — keeping the per-write cost bounded and the
+    behavior deterministic regardless of what unrelated files sit above the RAG
+    dir. Pass ``root`` explicitly to widen the guard to the project root. No
+    offenders -> returns silently.
+    """
+    rag_dir = Path(rag_path).parent
+    scan_root = Path(root) if root is not None else rag_dir
+    offenders = find_side_stores(rag_dir, scan_root)
+    if offenders:
+        raise SideStoreViolation(offenders)
 
 
 # ---------------------------------------------------------------------------

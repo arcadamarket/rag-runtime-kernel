@@ -294,7 +294,9 @@ def mutate_hot(
     store.write_into(hot)
     if touch_meta:
         _touch_meta(hot, now)
-    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
     return hot
 
 
@@ -408,7 +410,9 @@ def migrate_backlog_file(
     migrate_backlog(hot, specs, allow_overwrite=allow_overwrite)
     if touch_meta:
         _touch_meta(hot, now)
-    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
     return hot
 
 
@@ -545,7 +549,9 @@ def add_items_file(
     add_items(hot, specs, allow_existing=allow_existing)
     if touch_meta:
         _touch_meta(hot, now)
-    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
     return hot
 
 
@@ -627,5 +633,7 @@ def add_operating_protocol_rule_file(
     add_operating_protocol_rule(hot, key, value, allow_overwrite=allow_overwrite)
     if touch_meta:
         _touch_meta(hot, now)
-    atomic_write_json(p, hot, mirror_bak=True)  # FIX-4 (K6): parity-mirror .bak
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
     return hot

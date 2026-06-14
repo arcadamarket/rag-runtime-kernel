@@ -19,14 +19,14 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **Who it's for** | Anyone. No Python, no Node, no install. | Builders of large, multi-session, token-critical projects who want hard guarantees. |
 | **What you run** | One markdown specification, dropped into a chat session. | The `rag_kernel` Python runtime (MCP or HTTP server) alongside the spec. |
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
-| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,279 passing tests. |
+| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,299 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.2** | Runtime kernel **v0.4.9** |
+| **Version** | Specification **v3.2.2** | Runtime kernel **v0.4.10** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
 
-> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.2`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.9`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.2`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.10`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
@@ -257,12 +257,12 @@ rag-runtime-kernel/
 │   ├── LOCAL_TESTING_GUIDE.md                 # Local dev testing & GPT Custom Actions
 │   ├── v3.2_ARCHITECTURE_DESIGN.md            # Runtime architecture design doc
 │   └── ROADMAP.md                             # Development roadmap
-├── rag_kernel/                                # Tier 2 runtime kernel (v0.4.9)
+├── rag_kernel/                                # Tier 2 runtime kernel (v0.4.10)
 │   ├── __init__.py                            # Package entry, discover() capability registry
 │   ├── __main__.py                            # CLI (init / configure / verify / health / serve / mcp / session / checkpoint / gc / graph / resolve / defer / render / note)
 │   ├── api.py                                 # HTTP API (FastAPI)
 │   ├── state_machine.py                       # Deterministic state engine
-│   ├── persistence.py                         # Atomic writes, WAL, hash verification
+│   ├── persistence.py                         # Atomic writes, WAL, hash verification; live pre-write side-store guard (FIX-7, v0.4.10)
 │   ├── cold_manager.py                        # COLD partition manager
 │   ├── concurrency.py                         # Lock manager, write-collision guard
 │   ├── conflict_engine.py                     # Conflict auto-categorization (7 categories, auto-resolve)
@@ -279,7 +279,7 @@ rag-runtime-kernel/
 │   ├── drift_store.py                         # DRIFT-ELIM: atomic mutation API over tracked_items + backlog migration; lifecycle CLI (v0.4.0)
 │   ├── drift_render.py                        # DRIFT-ELIM: deterministic renders of open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items (sole authority); render CLI (v0.4.0)
 │   └── drift_audit.py                         # DRIFT-ELIM: fail-loud session-boundary auditor — render parity, supersede refs, note/status, side-store scan, current_status freshness + FIX-1 integrity invariants (WAL/​.bak/​COLD/​placeholder/​template-key/​session-id) (v0.4.4)
-├── tests/                                     # 1,279 tests (v0.4.9 release)
+├── tests/                                     # 1,299 tests (v0.4.10 release)
 ├── .github/                                   # FUNDING.yml + issue templates
 ├── formal/
 │   ├── RAGKernel.tla                          # TLA+ state machine specification
@@ -314,7 +314,8 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 | Line | Version | Status | Focus |
 |---|---|---|---|
 | Spec | **v3.2.2** | Released | **ENV-NORM** — §3a tool hierarchy rewritten to **tmux-mcp primary** for shell/git/test (composed commands verbatim, no orphan `1`); `wsl-exec` demoted to atomic fallback; new `session_start_shell_rule`; §3 `doctor` boot preflight. Prior v3.2.1: known-issues registry reconciled to 12 universal keys (INS-044 fetch-to-disk), §37 fetch/VCS/shell tooling enumeration + `audit-env` (INS-045), §31 Step 0 environment audit (INS-043). |
-| Runtime | **v0.4.9** | Released | **FIX-4 — parity-mirror `.bak` contract (K6)** from the eBay Session-Zero deploy audit: settles + enforces the `.bak` semantics FIX-1 left ambiguous (where the eBay backup sat 3 checkpoints stale, HOT seq 3 / `.bak` seq 0). The `.bak` is now a **byte-identical parity-mirror** of the last committed HOT, refreshed via an opt-in `mirror_bak=True` on the canonical writers (full checkpoint/close, `drift_store`, `drift_render`); the generic write path keeps its prior-file crash backup. `check_bak_parity` now asserts true byte-parity (the rollback-prev one-behind allowance is gone). `DRIFT_AUDIT_VERSION` → 1.3.0. No new module (19), health 20/20, 1,279 tests. |
+| Runtime | **v0.4.10** | Released | **FIX-7 T1 — live pre-write side-store guard (T1)** from the eBay Session-Zero deploy audit: the Rule 13 / E-039 parallel-store invariant (a Cowork-memory `MEMORY.md` / `feedback_*.md` / `project_*.md`, or a stray `*_context.json` beside the RAG) now fires **at write time** — a new `persistence.assert_no_side_stores` guard, opt-in via `guard_side_stores=True` on the canonical RAG-state writers (full checkpoint/close, `drift_store`, `drift_render`), **refuses to commit** while such a store is live, instead of only flagging it after the fact at `audit`. The side-store patterns + scan logic are single-sourced in `persistence`; `drift_audit`'s two existing checks now delegate to it (DRY) so guard and audit cannot diverge. The live guard is scoped to the RAG directory subtree (fast write-time tripwire); the comprehensive project-root sweep stays with `audit`. **(T3 — `web_access_protocol` as a decision table — ships separately as spec v3.2.3.)** No new module (19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change), 1,299 tests. |
+| Runtime | **v0.4.9** | Released | **FIX-6 — layout-aware `--rag` default (K9)** from the eBay Session-Zero deploy audit: a shared `_default_rag_path()` resolver finds `RAG_MASTER.json` whether a command runs from the project root or inside the RAG dir (first existing candidate, never doubling `RAG/RAG`), applied to every RAG-taking command. CLI-only, no new module (19), health 20/20, 1,279 tests. |
 | Runtime | **v0.4.6** | Released | **FIX-3 — init/configure build-time hygiene (K3+K5+K7)** from the eBay Session-Zero deploy audit: `spec_parser` substitutes the build-deterministic `<ISO>` placeholder and strips `_`-prefixed `:template` keys from `operating_protocol` so a fresh deploy is born clean, and `KernelApp` mints a canonical `S<int>` session id (not `S-{pid}-…`) and stamps `meta.written_by_session` on every checkpoint — preventing at build the defects FIX-1 could only detect. Dogfooded: `init --spec v3.2.2` went from 3 audit findings to 0. No new module (19), health 20/20, 1,219 tests. |
 | Runtime | **v0.4.5** | Released | **FIX-2 — single self-version token + `verify` gate (K4+K8)** from the eBay Session-Zero deploy audit: the spec's HOT/COLD templates now carry one `<SPEC_VERSION>` token that `spec_parser` substitutes and stamps into the COLD `init_prompt_reference` from the spec's own version — root-causing the COLD↔HOT version drift FIX-1 could only detect. New deterministic `rag_kernel verify` post-init coherence gate; `init` fails loud on any unsubstituted token; SESSION_ZERO verify gate rewritten off the file-size heuristic onto `verify`/`audit`. No new module (19), health 20/20, 1,202 tests. |
 | Runtime | **v0.4.4** | Released | **FIX-1 — integrity auditor + WAL hardening (K1+K2)** from the eBay Session-Zero deploy audit: seven fail-loud integrity invariants (WAL monotonicity, RAG↔.bak parity, COLD↔HOT spec-version, unsubstituted-placeholder, leaked-template-key, non-empty `written_by_session`, session-id coherence) + a `health` WAL-replay self-test. Dogfooded live — caught a real latent COLD↔HOT drift in this repo's own RAG. No new module (19), health 20/20, 1,180 tests. |

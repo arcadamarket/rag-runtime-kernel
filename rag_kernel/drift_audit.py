@@ -91,6 +91,7 @@ from rag_kernel.drift_store import (
     load_hot,
 )
 from rag_kernel import drift_render
+from rag_kernel import persistence
 
 # Bump when a check's contract or the report shape changes in a way a test pins.
 # 1.1.0 — added check_current_status_freshness (E-043): guards the current_status
@@ -110,6 +111,11 @@ from rag_kernel import drift_render
 #         into the canonical RAG by ``configure`` — the eBay ``ebay_context.json``
 #         side-file). Extends the Rule 13 side-store family from the project root
 #         (Cowork-memory MDs) to the RAG dir (context inputs).
+# 1.4.0 (cont.) — FIX-7/T1: check_side_rule_stores + check_context_side_stores now
+#         DELEGATE to the persistence side-store finders (single source of truth),
+#         so the after-the-fact audit and the new live pre-write guard
+#         (persistence.assert_no_side_stores) cannot diverge. Behavior/report shape
+#         unchanged — same findings, same messages — so the version stays 1.4.0.
 DRIFT_AUDIT_VERSION = "1.4.0"
 
 # Severities.
@@ -137,19 +143,12 @@ _COMPLETION_CLAIM_RE = re.compile(
     r"\b(" + "|".join(_COMPLETION_CLAIM_WORDS) + r")\b", re.IGNORECASE
 )
 
-# Forbidden parallel rule/state stores (Cowork memory + side MDs), Rule 13 / E-039.
-# Exact name + two glob patterns; scanned inside the project root ONLY.
-_FORBIDDEN_STORE_NAMES: frozenset[str] = frozenset({"MEMORY.md"})
-_FORBIDDEN_STORE_GLOBS: tuple[str, ...] = ("feedback_*.md", "project_*.md")
-# Stray per-project context inputs persisted in the RAG directory (FIX-5 / P2).
-# ``*_context.json`` is a legitimate TRANSIENT input to ``configure`` — its content
-# is merged INTO the canonical RAG. A copy left beside RAG_MASTER.json is a
-# redundant second artifact (the eBay ``ebay_context.json`` defect). Scanned in
-# the RAG dir ONLY (non-recursive), so a context file located elsewhere as a true
-# transient input is unaffected.
-_CONTEXT_SIDE_STORE_GLOB: str = "*_context.json"
-# Directories never scanned (VCS internals / build caches).
-_SKIP_DIRS: frozenset[str] = frozenset({".git", "__pycache__", ".pytest_cache"})
+# Forbidden parallel rule/state store patterns (Cowork-memory MDs in the project
+# root + stray ``*_context.json`` beside the RAG), Rule 13 / E-039 / FIX-5 P2.
+# FIX-7 / T1 relocated these patterns + their scan logic into ``persistence`` as
+# the SINGLE source of truth, so the after-the-fact audit checks below and the
+# live pre-write guard (persistence.assert_no_side_stores) cannot drift apart.
+# The two ``check_*`` functions delegate to the persistence finders.
 
 # --- Rule 11 published-doc reconciliation (increment 6) --------------------
 # Closed vocabulary of PENDING / not-done status words. A published doc line that
@@ -403,30 +402,19 @@ def check_side_rule_stores(root: Path | str) -> list[AuditFinding]:
     """
     root_path = Path(root)
     findings: list[AuditFinding] = []
-    if not root_path.exists():
-        return findings
-    for p in sorted(root_path.rglob("*")):
-        if not p.is_file():
-            continue
-        if any(part in _SKIP_DIRS for part in p.parts):
-            continue
-        name = p.name
-        hit = name in _FORBIDDEN_STORE_NAMES or any(
-            p.match(g) for g in _FORBIDDEN_STORE_GLOBS
-        )
-        if hit:
-            try:
-                rel = p.relative_to(root_path)
-            except ValueError:
-                rel = p
-            findings.append(AuditFinding(
-                check="side_rule_stores",
-                severity=ERROR,
-                detail=(
-                    f"forbidden parallel rule/state store inside project root: {rel} "
-                    "— all rules/state belong in the RAG (Rule 13 / E-039)"
-                ),
-            ))
+    for p in persistence.find_forbidden_rule_stores(root_path):
+        try:
+            rel = p.relative_to(root_path)
+        except ValueError:
+            rel = p
+        findings.append(AuditFinding(
+            check="side_rule_stores",
+            severity=ERROR,
+            detail=(
+                f"forbidden parallel rule/state store inside project root: {rel} "
+                "— all rules/state belong in the RAG (Rule 13 / E-039)"
+            ),
+        ))
     return findings
 
 
@@ -441,13 +429,8 @@ def check_context_side_stores(rag_dir: Path | str) -> list[AuditFinding]:
     file located elsewhere as a genuine one-off input is unaffected, and the
     filesystem_boundary rule (E-026) is respected. Returns one ERROR per hit.
     """
-    d = Path(rag_dir)
     findings: list[AuditFinding] = []
-    if not d.is_dir():
-        return findings
-    for p in sorted(d.glob(_CONTEXT_SIDE_STORE_GLOB)):
-        if not p.is_file():
-            continue
+    for p in persistence.find_context_side_stores(rag_dir):
         findings.append(AuditFinding(
             check="context_side_stores",
             severity=ERROR,
