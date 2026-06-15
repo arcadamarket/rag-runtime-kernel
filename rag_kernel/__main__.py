@@ -160,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Transition state_machine_status to READY after successful init (default: stays BOOTING)",
     )
     init_parser.add_argument(
+        "--session", type=str, default="S0",
+        help="Session id stamped by the first session-stamping checkpoint when "
+             "--auto-ready is set (FIX-9). Default: S0 (Session Zero bootstrap).",
+    )
+    init_parser.add_argument(
         "--path-style", type=str, choices=["windows", "posix", "auto"], default="auto",
         help="Normalize root paths to OS-native separators (default: auto-detect)",
     )
@@ -493,15 +498,62 @@ def cmd_init(args: argparse.Namespace) -> int:
         for e in errors:
             print(f"  - {e}")
 
-    # Auto-ready: transition BOOTING -> READY if init succeeded with no errors
-    if getattr(args, "auto_ready", False) and not errors:
+    # Auto-ready (FIX-9 / U1): --auto-ready must yield a STAMPED, audit-clean RAG.
+    # A bare BOOTING->READY flip used to leave meta.written_by_session="" and
+    # last_checkpoint_seq=0; once READY, drift_audit.check_written_by_session
+    # fails loud (it self-skips only while BOOTING), so the very first auditor run
+    # on the prescribed clean-deploy path failed by construction. This is the K7
+    # residual FIX-3 did not close — checkpoint stamps written_by_session, but
+    # --auto-ready bypassed checkpoint entirely. Route the transition through the
+    # first session-stamping checkpoint: stamp written_by_session, seq->1, the
+    # session record, and mirror .bak (mirror_bak=True, matching api.checkpoint
+    # do_full and the standalone `checkpoint` verb) so a fresh
+    # `init --spec ... --auto-ready` is `audit --strict` clean with zero manual
+    # workarounds.
+    auto_ready = getattr(args, "auto_ready", False) and not errors
+    if auto_ready:
+        from datetime import datetime, timezone
+
+        session_id = getattr(args, "session", None) or "S0"
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         rag["state_machine_status"] = "READY"
-        print("\n--auto-ready: state_machine_status set to READY.")
+        rag["meta"]["last_updated_utc"] = now
+        rag["meta"]["session_id"] = session_id
+        rag["meta"]["written_by_session"] = session_id
+        rag["meta"]["last_checkpoint_seq"] = (
+            rag["meta"].get("last_checkpoint_seq", 0) + 1
+        )
+        sessions = rag.get("sessions_recent", [])
+        sessions.append({
+            "id": session_id,
+            "d": now,
+            "s": (
+                f"{session_id}: bootstrap init via --auto-ready — first "
+                "session-stamping checkpoint (FIX-9 / U1)."
+            ),
+        })
+        rag["sessions_recent"] = sessions[-5:]
+        print(
+            f"\n--auto-ready: BOOTING -> READY via first session-stamping "
+            f"checkpoint (session {session_id}, seq "
+            f"{rag['meta']['last_checkpoint_seq']})."
+        )
 
     if not args.dry_run:
         output_dir = args.output or Path("RAG")
         hot_path = output_dir / "RAG_MASTER.json"
-        written = sp.write_rag(rag, hot_path)
+        if auto_ready:
+            # Stamped checkpoint write: mirror .bak for FIX-4 / K6 byte-parity,
+            # matching api.checkpoint do_full and the standalone `checkpoint` verb.
+            # (sp.write_rag mkdir's its parent; atomic_write_json does not, so
+            # create the output dir before the atomic .tmp write.)
+            from rag_kernel.persistence import atomic_write_json
+
+            hot_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(hot_path, rag, mirror_bak=True)
+            written = str(hot_path)
+        else:
+            written = sp.write_rag(rag, hot_path)
         print(f"\nRAG_MASTER.json written to: {written}")
         if cold:
             cold_path = output_dir / "RAG_COLD.json"
