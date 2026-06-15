@@ -179,6 +179,17 @@ SIDE_STORE_FORBIDDEN_NAMES: frozenset[str] = frozenset({"MEMORY.md"})
 SIDE_STORE_FORBIDDEN_GLOBS: tuple[str, ...] = ("feedback_*.md", "project_*.md")
 # Stray per-project context input persisted in the RAG DIR (non-recursive).
 SIDE_STORE_CONTEXT_GLOB: str = "*_context.json"
+# Sanctioned, persistent project-context store(s) that live in the RAG dir on
+# PURPOSE and are NEVER flagged as side-stores (FIX-11 / U3). ``RAG_CONTEXT.json``
+# is a non-loaded, lazy-loaded partitioned store (rag_kernel.cold_manager
+# .ProjectContextManager) for project-specific context the operating LLM does not
+# read into its context window — modeled on RAG_COLD.json. This is categorically
+# different from a *transient* ``*_context.json`` input to ``configure`` (e.g. the
+# eBay ``ebay_context.json``), which STAYS flagged so it is consumed, not
+# persisted in parallel to canonical state. Compared case-insensitively so the
+# sanction is platform-stable (pathlib glob is case-sensitive on POSIX but
+# case-insensitive on Windows).
+SANCTIONED_CONTEXT_STORES: frozenset[str] = frozenset({"rag_context.json"})
 # Directories never scanned (VCS internals / build caches).
 SIDE_STORE_SKIP_DIRS: frozenset[str] = frozenset(
     {".git", "__pycache__", ".pytest_cache"}
@@ -227,13 +238,20 @@ def find_forbidden_rule_stores(root: Path | str) -> list[Path]:
 
 
 def find_context_side_stores(rag_dir: Path | str) -> list[Path]:
-    """All ``*_context.json`` directly inside ``rag_dir`` (non-recursive glob)."""
+    """Stray ``*_context.json`` directly inside ``rag_dir`` (non-recursive glob).
+
+    Excludes the sanctioned persistent project-context store(s) named in
+    :data:`SANCTIONED_CONTEXT_STORES` (e.g. ``RAG_CONTEXT.json``, FIX-11 / U3),
+    which are legitimate non-loaded stores rather than redundant side-files. The
+    name match is case-insensitive so the sanction holds on both POSIX and
+    Windows.
+    """
     d = Path(rag_dir)
     hits: list[Path] = []
     if not d.is_dir():
         return hits
     for p in sorted(d.glob(SIDE_STORE_CONTEXT_GLOB)):
-        if p.is_file():
+        if p.is_file() and p.name.lower() not in SANCTIONED_CONTEXT_STORES:
             hits.append(p)
     return hits
 

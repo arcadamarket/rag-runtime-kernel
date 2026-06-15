@@ -18,9 +18,9 @@ Spec reference: architecture.md — Memory Architecture (HOT/COLD)
 {
   "module": "rag_kernel.cold_manager",
   "capability": "cold_storage",
-  "description": "Lazy-loading COLD archive with token budgeting and partition eviction",
-  "exports": ["ColdManager", "ColdPartition"],
-  "use_when": "Loading archival data (past sessions, historical conflicts, old deliverables)",
+  "description": "Lazy-loading COLD archive + sanctioned project-context store with token budgeting and partition eviction",
+  "exports": ["ColdManager", "ColdPartition", "ProjectContextManager", "CONTEXT_FILENAME"],
+  "use_when": "Loading archival data (past sessions, historical conflicts, old deliverables) or a non-loaded project-context partition",
   "never_bypass": false
 }
 Satisfies: M-015 (COLD partition lazy-loading), M-033 (token budget)
@@ -356,6 +356,61 @@ class ColdManager:
         with self._lock:
             return (
                 f"ColdManager(path={self._path}, "
+                f"partitions={len(self._index)}, "
+                f"loaded={len(self._cache)})"
+            )
+
+
+# ---------------------------------------------------------------------------
+# ProjectContextManager (FIX-11 / U3) — sanctioned project-context partition
+# ---------------------------------------------------------------------------
+
+#: Canonical filename of the sanctioned, non-loaded project-context store. Lives
+#: in the RAG directory beside ``RAG_MASTER.json`` / ``RAG_COLD.json`` and is
+#: explicitly allowlisted in ``persistence.SANCTIONED_CONTEXT_STORES`` so the
+#: side-store auditor (Rule 13 / FIX-5 P2) never flags it.
+CONTEXT_FILENAME = "RAG_CONTEXT.json"
+
+
+class ProjectContextManager(ColdManager):
+    """Lazy-loading manager for the sanctioned project-context store (FIX-11 / U3).
+
+    Same lazy, partitioned, atomic, token-budgeted store as :class:`ColdManager`,
+    but pointed at ``RAG_CONTEXT.json`` — a SANCTIONED, PERSISTENT, NON-LOADED
+    landing slice for project-specific context (e.g. a deployment's domain data)
+    that the operating LLM does **not** read into its context window at boot.
+
+    Why it exists
+    -------------
+    Before FIX-11 the deploy guide told operators to drop a ``*_context.json``
+    into the RAG dir and ``configure``-merge it into HOT — which the side-store
+    auditor then flagged as a redundant parallel store (the eBay
+    ``ebay_context.json`` contradiction, S80 deploy audit U3). The sanctioned
+    store gives that project context a legitimate, auditor-clean home that is
+    loaded on demand only (COLD-style), instead of bloating always-loaded HOT or
+    tripping the Rule 13 / E-039 parallel-store guard.
+
+    Contract
+    --------
+    * NEVER merged into ``RAG_MASTER.json`` and NEVER auto-loaded at boot.
+    * No ``.bak`` mirror (follows COLD, not the HOT FIX-4 / K6 parity contract).
+    * Allowlisted in ``persistence.SANCTIONED_CONTEXT_STORES`` so both the live
+      pre-write guard (``assert_no_side_stores``) and ``audit`` leave it alone,
+      while a *transient* ``ebay_context.json`` stays flagged.
+    """
+
+    #: Re-export so callers can reference the canonical name off the class.
+    FILENAME = CONTEXT_FILENAME
+
+    @classmethod
+    def default(cls, rag_dir: Path | str) -> "ProjectContextManager":
+        """Construct a manager for ``<rag_dir>/RAG_CONTEXT.json``."""
+        return cls(Path(rag_dir) / CONTEXT_FILENAME)
+
+    def __repr__(self) -> str:
+        with self._lock:
+            return (
+                f"ProjectContextManager(path={self._path}, "
                 f"partitions={len(self._index)}, "
                 f"loaded={len(self._cache)})"
             )

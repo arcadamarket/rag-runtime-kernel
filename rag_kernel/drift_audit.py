@@ -428,6 +428,11 @@ def check_context_side_stores(rag_dir: Path | str) -> list[AuditFinding]:
     directory ONLY and non-recursively (``glob``, not ``rglob``), so a context
     file located elsewhere as a genuine one-off input is unaffected, and the
     filesystem_boundary rule (E-026) is respected. Returns one ERROR per hit.
+
+    The sanctioned, persistent project-context store(s) in
+    ``persistence.SANCTIONED_CONTEXT_STORES`` (e.g. ``RAG_CONTEXT.json``, the
+    non-loaded FIX-11 / U3 partition) are excluded by the finder and are never
+    flagged — only transient ``*_context.json`` inputs are.
     """
     findings: list[AuditFinding] = []
     for p in persistence.find_context_side_stores(rag_dir):
