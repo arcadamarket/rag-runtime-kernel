@@ -15,6 +15,9 @@ Usage:
     python -m rag_kernel resolve <item-id> --session S50 [--rag RAG/RAG_MASTER.json] [--reason "..."]
     python -m rag_kernel defer <item-id> --session S50 [--reason "..."]
     python -m rag_kernel items [--status OPEN] [--kind TASK] [--json]
+    python -m rag_kernel context set <partition> '<json>' [--value-file F] [--rag-dir RAG/] [--dry-run]
+    python -m rag_kernel context get <partition> [--rag-dir RAG/] [--json]
+    python -m rag_kernel context list [--rag-dir RAG/] [--json]
 
 Commands:
     init       Parse init prompt MD and create RAG_MASTER.json deterministically (zero tokens).
@@ -31,6 +34,7 @@ Commands:
                (siblings: defer, reopen, start, discard, supersede) via drift_store.
     items      List the canonical tracked_items array (read-only render).
     render     Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items (--apply to write).
+    context    Read/write the sanctioned, non-loaded RAG_CONTEXT.json project-context store (set|get|list).
 
 Design doc reference: v3.2_ARCHITECTURE_DESIGN.md section 9
 Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (session/checkpoint/gc), GRAPH-ORCH runtime-wiring (graph command), DRIFT-ELIM increment 3 (resolve|defer|… + items), DRIFT-ELIM increment 4 (render)
@@ -58,7 +62,8 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5",
     "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
     "add-rule": "Append a NEW operating_protocol rule through the guarded atomic store (FIX-5/P3, fail-loud on existing key)",
-    "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)"
+    "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)",
+    "context": "Read/write the sanctioned, non-loaded RAG_CONTEXT.json project-context store (set|get|list) — FIX-11 inc2 / U3"
   },
   "use_when": "Any CLI invocation of rag_kernel"
 }
@@ -413,6 +418,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional spec MD to assert HOT/COLD versions equal the spec's own version.",
     )
     verify_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
+
+    # -- context (FIX-11 inc2 / U3: CLI group over the sanctioned RAG_CONTEXT.json store) --
+    # A governed path to land project-specific context into the sanctioned,
+    # NON-LOADED RAG_CONTEXT.json store inc1 introduced — instead of hand-editing
+    # JSON or dropping a transient *_context.json the side-store auditor flags.
+    context_parser = subparsers.add_parser(
+        "context",
+        help="Read/write the sanctioned, non-loaded project-context store (RAG_CONTEXT.json).",
+    )
+    context_sub = context_parser.add_subparsers(dest="context_action", help="set | get | list")
+    _ctx_dir_default = _default_rag_path().parent
+
+    ctx_set = context_sub.add_parser("set", help="Create/replace a context partition (atomic, no .bak).")
+    ctx_set.add_argument("partition", type=str, help="top-level partition key")
+    ctx_set.add_argument(
+        "value", type=str, nargs="?", default=None,
+        help="partition value as JSON (object/array/scalar). Omit and use --value-file for large values.",
+    )
+    ctx_set.add_argument("--value-file", dest="value_file", type=Path, default=None,
+                         help="read the JSON value from this file instead of the positional arg")
+    ctx_set.add_argument("--rag-dir", dest="rag_dir", type=Path, default=_ctx_dir_default,
+                         help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
+    ctx_set.add_argument("--dry-run", action="store_true", help="validate without writing")
+
+    ctx_get = context_sub.add_parser("get", help="Lazy-load and print one context partition.")
+    ctx_get.add_argument("partition", type=str, help="top-level partition key")
+    ctx_get.add_argument("--rag-dir", dest="rag_dir", type=Path, default=_ctx_dir_default,
+                         help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
+    ctx_get.add_argument("--json", dest="json_output", action="store_true",
+                         help="print the raw JSON value only (no header)")
+
+    ctx_list = context_sub.add_parser("list", help="List partitions with loaded state + token budget.")
+    ctx_list.add_argument("--rag-dir", dest="rag_dir", type=Path, default=_ctx_dir_default,
+                          help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
+    ctx_list.add_argument("--json", dest="json_output", action="store_true",
+                          help="output the summary as JSON")
 
     return parser
 
@@ -2117,6 +2158,113 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_context(args: argparse.Namespace) -> int:
+    """Read/write the sanctioned project-context store (FIX-11 inc2 / U3).
+
+    A thin, governed CLI over ``rag_kernel.cold_manager.ProjectContextManager`` —
+    the sanctioned, NON-LOADED, lazy/partitioned/atomic ``RAG_CONTEXT.json`` store
+    inc1 introduced. It gives operators a path to land project-specific context
+    WITHOUT hand-editing JSON (the E-037/E-040 drift the project forbids) and
+    WITHOUT the transient ``*_context.json`` side store the auditor flags (the eBay
+    U3 contradiction, S80). Writes delegate to ``update_partition`` ->
+    ``atomic_write_json`` (COLD-style: deliberately NO ``.bak`` mirror — the
+    FIX-11 contract, distinct from the HOT FIX-4/K6 parity rule); reads lazy-load a
+    single partition so an unread store costs zero boot tokens.
+
+    Sub-actions: ``set`` (create/replace a partition), ``get`` (lazy-load + print),
+    ``list`` (partitions + loaded state + token budget). Unknown ids / bad JSON
+    fail LOUD (exit 1) and write nothing.
+    """
+    from rag_kernel.cold_manager import (
+        ColdFileError,
+        PartitionNotFoundError,
+        ProjectContextManager,
+        estimate_tokens,
+    )
+
+    action = getattr(args, "context_action", None)
+    if action is None:
+        print("Usage: rag_kernel context {set|get|list} [--rag-dir DIR]", file=sys.stderr)
+        return 1
+
+    rag_dir = args.rag_dir.resolve()
+    mgr = ProjectContextManager.default(rag_dir)
+
+    if action == "set":
+        # Resolve the JSON value: --value-file takes precedence over positional.
+        if args.value_file is not None:
+            if not args.value_file.exists():
+                print(f"Error: value file not found: {args.value_file}", file=sys.stderr)
+                return 1
+            raw = args.value_file.read_text(encoding="utf-8")
+        elif args.value is not None:
+            raw = args.value
+        else:
+            print("Error: provide the value as JSON (positional) or via --value-file",
+                  file=sys.stderr)
+            return 1
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"Error: value is not valid JSON: {e}", file=sys.stderr)
+            return 1
+
+        existed = mgr.has_partition(args.partition)
+        verb = "replace" if existed else "create"
+        if args.dry_run:
+            print(f"[DRY RUN] would {verb} partition {args.partition!r} "
+                  f"(~{estimate_tokens(value)} tokens) in {mgr.path} (no write)")
+            return 0
+        # atomic_write_json does not mkdir its parent (cf. cmd_configure); ensure
+        # the RAG dir exists so a first-write into a fresh deploy succeeds.
+        mgr.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            mgr.update_partition(args.partition, value)
+        except ColdFileError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        print(f"context {verb}d {args.partition!r} in {mgr.path} "
+              f"(~{estimate_tokens(value)} tokens; no .bak — sanctioned non-loaded store).")
+        return 0
+
+    if action == "get":
+        try:
+            value = mgr.get(args.partition)
+        except (PartitionNotFoundError, ColdFileError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if getattr(args, "json_output", False):
+            print(json.dumps(value, ensure_ascii=False))
+        else:
+            print(f"# {args.partition} ({mgr.path.name})")
+            print(json.dumps(value, indent=2, ensure_ascii=False))
+        return 0
+
+    if action == "list":
+        try:
+            summary = mgr.summary()
+        except ColdFileError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if getattr(args, "json_output", False):
+            print(json.dumps(summary, indent=2, ensure_ascii=False))
+            return 0
+        if not summary["partition_names"]:
+            print(f"(no project-context partitions in {mgr.path})")
+            return 0
+        print(f"{summary['total_partitions']} partition(s) in {mgr.path} "
+              f"({summary['loaded_partitions']} loaded, "
+              f"~{summary['estimated_tokens']} tokens loaded):")
+        loaded = set(summary["loaded_names"])
+        for name in summary["partition_names"]:
+            mark = "loaded" if name in loaded else "on-disk"
+            print(f"  {name:<24} [{mark}]")
+        return 0
+
+    print(f"Unknown context action: {action}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2139,6 +2287,7 @@ def main(argv: list[str] | None = None) -> int:
         "add": cmd_add,
         "add-rule": cmd_add_rule,
         "verify": cmd_verify,
+        "context": cmd_context,
     }
     return commands[args.command](args)
 
