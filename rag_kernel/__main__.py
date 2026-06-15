@@ -694,7 +694,19 @@ def cmd_configure(args: argparse.Namespace) -> int:
             print(f"  - {e}")
 
     if not args.dry_run:
-        written = sp.write_rag(updated_rag, rag_path)
+        # FIX-10 (U2): configure is a canonical RAG-state writer, so it MUST
+        # refresh RAG_MASTER.json.bak to byte-parity via atomic_write_json(
+        # mirror_bak=True) — matching api.checkpoint do_full, the standalone
+        # `checkpoint` verb (FIX-8 / E-045) and init --auto-ready (FIX-9 / U1).
+        # The legacy sp.write_rag path did its own tmp+replace atomic write that
+        # never touched .bak, leaving the backup one write stale — the K6 / FIX-4
+        # parity-mirror gap, same family as E-045. (sp.write_rag mkdir's its parent;
+        # atomic_write_json does not, so create the parent dir before the .tmp write.)
+        from rag_kernel.persistence import atomic_write_json
+
+        rag_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(rag_path, updated_rag, mirror_bak=True)
+        written = str(rag_path)
         print(f"\nRAG_MASTER.json updated: {written}")
         print("Done. Zero tokens consumed.")
     else:
