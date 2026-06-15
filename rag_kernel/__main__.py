@@ -5,7 +5,7 @@ Usage:
     python -m rag_kernel health [--path .]
     python -m rag_kernel serve --project ~/my-project/RAG [--port 7437] [--host 127.0.0.1]
     python -m rag_kernel mcp --project ~/my-project/RAG
-    python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context project_context.json
+    python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context project_context.json [--consume]
     python -m rag_kernel session start S1 [--rag-dir RAG/]
     python -m rag_kernel session close S1 [--rag-dir RAG/]
     python -m rag_kernel checkpoint --rag RAG/RAG_MASTER.json --session S1 --summary "..."
@@ -49,7 +49,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "health": "Verify all modules importable and functional",
     "serve": "Start HTTP API server",
     "mcp": "Start MCP stdio server",
-    "configure": "Merge project-specific context into existing RAG",
+    "configure": "Merge project-specific context into existing RAG (--consume deletes the transient input after a verified merge, FIX-11 inc3/U3)",
     "session": "Start or close session logger (wraps SessionLogger)",
     "checkpoint": "Merge session summary into RAG_MASTER.json atomically",
     "gc": "Garbage collector — clean temp files, pycache, orphans",
@@ -200,6 +200,15 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser.add_argument(
         "--dry-run", action="store_true",
         help="Show what would change without writing",
+    )
+    config_parser.add_argument(
+        "--consume", action="store_true",
+        help="Delete the --context input file after a verified merge — one atomic, "
+             "auditor-clean operation so a transient merge-input never lingers in the "
+             "RAG dir as a flagged side store (FIX-11 inc3 / U3). Refuses to delete a "
+             "canonical/sanctioned file (RAG_MASTER/.bak, RAG_COLD, RAG_CONTEXT). "
+             "No-op under --dry-run. For NON-loaded project context, prefer "
+             "`context set` into the sanctioned RAG_CONTEXT.json store instead of merging into HOT.",
     )
 
     # -- health --
@@ -687,6 +696,25 @@ def cmd_configure(args: argparse.Namespace) -> int:
         print(f"Error: Context file not found: {context_path}", file=sys.stderr)
         return 1
 
+    # --consume validation (FIX-11 inc3 / U3): refuse to delete a canonical or
+    # sanctioned file BEFORE any merge, so misuse fails loud without mutating
+    # state. The merge-input is meant to be a *transient* overlay; consuming the
+    # RAG itself, its .bak, the COLD archive, or the sanctioned RAG_CONTEXT.json
+    # store would destroy real state.
+    if getattr(args, "consume", False):
+        from rag_kernel.cold_manager import CONTEXT_FILENAME
+        _protected = {
+            "rag_master.json", "rag_master.json.bak", "rag_cold.json",
+            CONTEXT_FILENAME.lower(),
+            rag_path.name.lower(), (rag_path.name + ".bak").lower(),
+        }
+        if context_path.name.lower() in _protected:
+            print(
+                f"Error: refusing to --consume a canonical/sanctioned file: "
+                f"{context_path.name}", file=sys.stderr,
+            )
+            return 1
+
     context_data: dict = {}
     suffix = context_path.suffix.lower()
 
@@ -750,6 +778,18 @@ def cmd_configure(args: argparse.Namespace) -> int:
         written = str(rag_path)
         print(f"\nRAG_MASTER.json updated: {written}")
         print("Done. Zero tokens consumed.")
+
+        # --consume (FIX-11 inc3 / U3): the merge is committed (HOT + .bak), so
+        # now delete the transient input — one atomic, auditor-clean operation so
+        # it never lingers in the RAG dir as a flagged side store. A failed unlink
+        # is a warning, not a hard failure: the merge already succeeded.
+        if getattr(args, "consume", False):
+            try:
+                context_path.unlink()
+                print(f"Consumed merge-input (deleted): {context_path}")
+            except OSError as e:
+                print(f"WARNING: --consume could not delete {context_path}: {e}",
+                      file=sys.stderr)
     else:
         print("\n[DRY RUN] No files written.")
         # Show diff summary
@@ -759,6 +799,8 @@ def cmd_configure(args: argparse.Namespace) -> int:
             print(f"  Would update: {diff_keys}")
         if new_keys:
             print(f"  Would add: {new_keys}")
+        if getattr(args, "consume", False):
+            print(f"  Would consume (delete) merge-input: {context_path}")
 
     return 0 if not errors else 1
 
