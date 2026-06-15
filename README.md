@@ -21,12 +21,12 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
 | **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 1,302 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.3** | Runtime kernel **v0.4.11** |
+| **Version** | Specification **v3.2.4** | Runtime kernel **v0.4.11** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
 
-> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.3`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.11`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.4`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.11`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
@@ -58,7 +58,7 @@ RAG Runtime Kernel moves that bookkeeping out of the model. State lives in plain
 Best for Claude Projects, ChatGPT, or any chat interface.
 
 1. Open a new project or conversation.
-2. Add [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md) to the session as a file (it's a full specification, ~100 KB — it goes into a **project/session**, not the short system-prompt field).
+2. Add [`INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md`](INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md) to the session as a file (it's a full specification, ~100 KB — it goes into a **project/session**, not the short system-prompt field).
 3. Send: **"Initialize the project."** The LLM self-bootstraps, scans your folder if it has file access, and builds the `RAG/` state.
 4. On ChatGPT / GPT Web without file tools: download the generated RAG files at session end and re-upload them at the start of each session to restore state.
 
@@ -97,7 +97,7 @@ rmdir /s /q temp-clone
 **2. Bootstrap the RAG deterministically (zero LLM tokens):**
 
 ```bash
-python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md --output RAG/
+python -m rag_kernel init --spec RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md --output RAG/
 # optional: merge project-specific context
 python -m rag_kernel configure --rag RAG/RAG_MASTER.json --context your_context.json
 ```
@@ -244,7 +244,7 @@ Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING↔RECO
 
 ```
 rag-runtime-kernel/
-├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md   # The specification (Tier 1 + Tier 2)
+├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md   # The specification (Tier 1 + Tier 2)
 ├── INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md   # Previous spec version (archived)
 ├── CONTRIBUTING.md                            # How to report issues
 ├── CHANGELOG.md                               # Version history
@@ -313,6 +313,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the complete roadmap.
 
 | Line | Version | Status | Focus |
 |---|---|---|---|
+| Spec | **v3.2.4** | Released | **STRICT-OBEY — Operator Fidelity Protocol (§49).** Promotes the operator-fidelity rule from this project's RAG into the universal spec so every project spawned from `init --spec` inherits it. A HARD RULE in four parts: obey the operator's literal instruction (no guesswork/improvisation/scope-creep/unrequested work, never substitute the model's preference); honest status (never report incomplete work as done/shipped/resolved; distinguish a developer checkpoint from a finished feature); bounded halt-and-ask (ask ONLY on genuine ambiguity or an operator-only decision — over-asking is as much a violation as over-doing; exercise delegated discretion); rendering discipline (every status/backlog/report render enumerates each item line by line, by ID, in plain language — never a bare count or glyph shorthand). New `operating_protocol.strict_obey` rag-config. Spec-only — no schema/runtime change; `init --spec v3.2.4` inherits exactly 12 known-issues + `strict_obey`, `verify` OK. |
 | Spec | **v3.2.3** | Released | **FIX-7 T3 — Web Access Protocol decision table.** §26a rewritten from cost-ordered 3-tier prose to a deterministic **first-match-wins decision table** (unknown URL → search-for-discovery-only; API/connector/MCP-first; repeatable/persistent → on-disk script; one-off-to-disk → `curl`/`wget` fetch-to-disk per INS-044; one-off in-context → WebFetch) with explicit guards (JS-shell → browser escalation; restricted-domain → STOP, no route-around; `curl_cffi` header caution) and a violation definition; the `rag-config` `web_access_protocol` string + `pre_flight_gate` web clause reconciled to match. Resolves the FIX-7 T3 web-protocol churn from the eBay Session-Zero deploy audit. Spec-only — no schema/runtime change; `init --spec v3.2.3` inherits exactly 12 known-issues, `verify` OK. Prior v3.2.2: ENV-NORM — §3a tmux-mcp-primary tool hierarchy, `session_start_shell_rule`, §3 `doctor` boot preflight. |
 | Runtime | **v0.4.11** | Released | **FIX-8 — CLI checkpoint parity-mirror `.bak` (E-045).** The standalone CLI `checkpoint` verb now passes `mirror_bak=True` to `atomic_write_json`, so a session closed on `checkpoint` alone refreshes `RAG_MASTER.json.bak` to byte-parity with the just-committed HOT — matching `api.checkpoint` do_full and the FIX-4 / K6 contract. Previously it left `.bak` one seq behind, which `audit.check_bak_parity` correctly failed loud on unless a later mirroring write (`render --apply`) happened to follow. One-line wiring fix + 3 regression tests (CLI checkpoint → byte-parity `.bak`, audit-clean with no follow-up, parity holds across repeated checkpoints). No new module (19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change), 1,302 tests. |
 | Runtime | **v0.4.10** | Released | **FIX-7 T1 — live pre-write side-store guard (T1)** from the eBay Session-Zero deploy audit: the Rule 13 / E-039 parallel-store invariant (a Cowork-memory `MEMORY.md` / `feedback_*.md` / `project_*.md`, or a stray `*_context.json` beside the RAG) now fires **at write time** — a new `persistence.assert_no_side_stores` guard, opt-in via `guard_side_stores=True` on the canonical RAG-state writers (full checkpoint/close, `drift_store`, `drift_render`), **refuses to commit** while such a store is live, instead of only flagging it after the fact at `audit`. The side-store patterns + scan logic are single-sourced in `persistence`; `drift_audit`'s two existing checks now delegate to it (DRY) so guard and audit cannot diverge. The live guard is scoped to the RAG directory subtree (fast write-time tripwire); the comprehensive project-root sweep stays with `audit`. **(T3 — `web_access_protocol` as a decision table — ships separately as spec v3.2.3.)** No new module (19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change), 1,299 tests. |

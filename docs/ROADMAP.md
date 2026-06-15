@@ -20,6 +20,12 @@
 
 ---
 
+## v3.2.4 — Released (2026-06-14)
+
+STRICT-OBEY — Operator Fidelity Protocol. New §49 promotes the operator-fidelity rule into the universal spec (was project-RAG-only): obey the operator's literal instruction (no guesswork/improvisation/scope-creep/unrequested work); honest status (never report incomplete work as done); bounded halt-and-ask (ask only on genuine ambiguity or an operator-only decision — over-asking is as much a violation as over-doing; exercise delegated discretion); and rendering discipline (every status/backlog render enumerates items line by line, by ID, in plain language — never a bare count or glyph shorthand). New `operating_protocol.strict_obey` rag-config. Spec-only — no schema or runtime change (runtime stays v0.4.11). Regression `init --spec v3.2.4` inherits exactly 12 known-issues + `strict_obey`, `verify` OK, full suite 1,302 green.
+
+---
+
 ## v3.2.3 — Released (2026-06-14)
 
 FIX-7 T3 — Web Access Protocol decision table. Completes FIX-7 (T1 shipped in runtime v0.4.10), the spec-side half of the eBay Session-Zero deploy audit's web-protocol finding. §26a is rewritten from cost-ordered 3-tier prose into a deterministic **first-match-wins decision table** (unknown URL → search-for-discovery-only; API/connector/MCP-first; repeatable/persistent → on-disk script; one-off-to-disk → `curl`/`wget` fetch-to-disk per INS-044; one-off in-context → WebFetch), with explicit guards (JS-shell → JS-capable browser escalation; restricted-domain → STOP, no route-around; `curl_cffi` header caution) and a violation definition. The `rag-config` `web_access_protocol` string and `pre_flight_gate` web clause are reconciled to match. Spec-only — no schema or runtime change (runtime stays v0.4.10). Regression `init --spec v3.2.3` inherits exactly 12 known-issues, `verify` OK, full suite 1,299 green.
