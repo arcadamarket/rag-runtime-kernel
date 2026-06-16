@@ -226,11 +226,12 @@ class SessionLogger:
         """Whether the logger is currently open for writing."""
         return self._file is not None and not self._closed
 
-    def open(self) -> None:
+    def open(self, emit_start: bool = True) -> None:
         """Open the log file for appending.
 
         If the file already exists, scans it to resume the sequence counter.
-        Writes a session_start header entry.
+        Writes a session_start header entry unless ``emit_start`` is False
+        (attach mode — a short-lived process joining an ongoing session).
         """
         if self._file is not None:
             return  # Already open
@@ -246,37 +247,44 @@ class SessionLogger:
         self._closed = False
 
         self._boot_time = _utc_now()
-        self._append_entry(
-            level=LogLevel.INFO,
-            category=EventCategory.LIFECYCLE,
-            event="session_start",
-            message=f"Session {self.session_id} started",
-            data={
-                "session_id": self.session_id,
-                "min_level": self.min_level.value,
-                "log_path": str(self._log_path),
-            },
-        )
+        if emit_start:
+            self._append_entry(
+                level=LogLevel.INFO,
+                category=EventCategory.LIFECYCLE,
+                event="session_start",
+                message=f"Session {self.session_id} started",
+                data={
+                    "session_id": self.session_id,
+                    "min_level": self.min_level.value,
+                    "log_path": str(self._log_path),
+                },
+            )
 
-    def close(self) -> None:
-        """Write session_end entry, flush, fsync, and close."""
+    def close(self, emit_end: bool = True) -> None:
+        """Write session_end entry, flush, fsync, and close.
+
+        When ``emit_end`` is False (detach mode), the file handle is flushed
+        and closed WITHOUT writing a session_end marker, so an ongoing session
+        joined by a short-lived process is not prematurely marked ended.
+        """
         if self._file is None or self._closed:
             return
 
         end_time = _utc_now()
         # total_entries = entries logged before session_end (not counting end marker itself)
-        self._append_entry(
-            level=LogLevel.INFO,
-            category=EventCategory.LIFECYCLE,
-            event="session_end",
-            message=f"Session {self.session_id} ended",
-            data={
-                "session_id": self.session_id,
-                "total_entries": self._seq,
-                "boot_time": self._boot_time,
-                "end_time": end_time,
-            },
-        )
+        if emit_end:
+            self._append_entry(
+                level=LogLevel.INFO,
+                category=EventCategory.LIFECYCLE,
+                event="session_end",
+                message=f"Session {self.session_id} ended",
+                data={
+                    "session_id": self.session_id,
+                    "total_entries": self._seq,
+                    "boot_time": self._boot_time,
+                    "end_time": end_time,
+                },
+            )
 
         self._file.flush()
         os.fsync(self._fd)
@@ -284,6 +292,26 @@ class SessionLogger:
         self._file = None
         self._fd = None
         self._closed = True
+
+    def attach(self) -> None:
+        """Join an ongoing bootstrap session log in append mode.
+
+        Opens the existing log WITHOUT writing a session_start marker and
+        resumes the sequence counter from the file. For short-lived CLI
+        processes that append their real events to a session started
+        elsewhere. Mirror of :meth:`detach`. Equivalent to
+        ``open(emit_start=False)``.
+        """
+        self.open(emit_start=False)
+
+    def detach(self) -> None:
+        """Flush, fsync, and close WITHOUT writing a session_end marker.
+
+        The mirror of :meth:`attach`: a short-lived CLI process releases the
+        log without ending the ongoing session. Equivalent to
+        ``close(emit_end=False)``.
+        """
+        self.close(emit_end=False)
 
     # -- Convenience logging methods ----------------------------------------
 

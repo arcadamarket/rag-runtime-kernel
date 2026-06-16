@@ -76,6 +76,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from rag_kernel.api import DEFAULT_PORT, KernelApp, create_server
@@ -1279,9 +1280,10 @@ def cmd_session(args: argparse.Namespace) -> int:
             print(f"WARNING: RAG_MASTER.json not found at {rag_dir}")
         return 0
     elif action == "close":
-        # Re-open to resume sequence, then close
+        # Attach to resume the sequence WITHOUT a spurious second session_start
+        # (FIX-12 / U4), then write the session_end marker.
         if logger.log_path.exists():
-            logger.open()
+            logger.attach()
             logger.close()
             print(f"Session {session_id} closed.")
             print(f"Log file: {logger.log_path}")
@@ -2307,6 +2309,121 @@ def cmd_context(args: argparse.Namespace) -> int:
     return 1
 
 
+# ---------------------------------------------------------------------------
+# Bootstrap session-log instrumentation (FIX-12 / U4)
+# ---------------------------------------------------------------------------
+
+# Verbs excluded from the central bootstrap-log wrapper:
+#   session    — manages its own session_start / session_end lifecycle markers
+#   serve, mcp — long-lived servers; nothing to bracket around
+_NO_BOOTSTRAP_LOG = frozenset({"session", "serve", "mcp"})
+
+
+def _active_session_log(rag_dir: Path) -> "Path | None":
+    """Most-recently-modified bootstrap session log in ``rag_dir``, or None.
+
+    Identifies the session a short-lived CLI process should append its real
+    events to (FIX-12 / U4). Returns None when no bootstrap log is active — in
+    which case CLI instrumentation is a silent no-op, preserving prior behaviour
+    when no session has been started.
+    """
+    from rag_kernel.session_logger import LOG_FILE_PREFIX, LOG_FILE_EXT
+
+    try:
+        logs = [
+            p
+            for p in rag_dir.glob(f"{LOG_FILE_PREFIX}*{LOG_FILE_EXT}")
+            if p.is_file()
+        ]
+    except OSError:
+        return None
+    if not logs:
+        return None
+    try:
+        return max(logs, key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _rag_dir_for(args: argparse.Namespace) -> Path:
+    """Best-effort RAG directory for the current command (for bootstrap logging)."""
+    rag = getattr(args, "rag", None)
+    if rag:
+        return Path(rag).resolve().parent
+    rag_dir = getattr(args, "rag_dir", None)
+    if rag_dir:
+        return Path(rag_dir).resolve()
+    return _default_rag_path().resolve().parent
+
+
+def _dispatch_with_bootstrap_log(
+    command: str, handler, args: argparse.Namespace
+) -> int:
+    """Run a CLI handler, appending a real ``tool_invocation`` event to the
+    active bootstrap session log (FIX-12 / U4, comprehensive scope).
+
+    Every instrumented verb — read-only (audit / verify / health / items / …)
+    and mutating alike — records its command, exit status, and duration, so a
+    deploy's ``session_log_<sid>.jsonl`` is a faithful, non-empty observability
+    artifact instead of bare start/end markers.
+
+    Observability must NEVER break the command: any logging failure is swallowed
+    and the handler's own return code (or exception) is what propagates.
+    """
+    if command in _NO_BOOTSTRAP_LOG:
+        return handler(args)
+
+    rag_dir = _rag_dir_for(args)
+    start = time.monotonic()
+    rc: "int | None" = None
+    exc: "BaseException | None" = None
+    try:
+        rc = handler(args)
+        return rc
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else 1
+        exc = e
+        raise
+    except BaseException as e:  # noqa: BLE001 — re-raised below; logging is best-effort
+        exc = e
+        raise
+    finally:
+        try:
+            duration_ms = (time.monotonic() - start) * 1000
+            log_path = _active_session_log(rag_dir)
+            if log_path is not None:
+                from rag_kernel.session_logger import (
+                    SessionLogger,
+                    LOG_FILE_PREFIX,
+                    LOG_FILE_EXT,
+                )
+
+                sid = (
+                    log_path.name[len(LOG_FILE_PREFIX): -len(LOG_FILE_EXT)]
+                    or "unknown"
+                )
+                real_error = exc is not None and not isinstance(exc, SystemExit)
+                success = (not real_error) and rc in (0, None)
+                extra: dict = {}
+                if real_error:
+                    extra["error_type"] = type(exc).__name__
+                logger = SessionLogger(
+                    sid, log_dir=rag_dir, log_filename=log_path.name
+                )
+                logger.attach()
+                logger.tool_invocation(
+                    tool="cli",
+                    command=command,
+                    result=(f"exit {rc}" if rc is not None else "ok"),
+                    success=success,
+                    duration_ms=duration_ms,
+                    **extra,
+                )
+                logger.detach()
+        except Exception:
+            pass  # never let observability break the command
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2331,7 +2448,9 @@ def main(argv: list[str] | None = None) -> int:
         "verify": cmd_verify,
         "context": cmd_context,
     }
-    return commands[args.command](args)
+    return _dispatch_with_bootstrap_log(
+        args.command, commands[args.command], args
+    )
 
 
 if __name__ == "__main__":
