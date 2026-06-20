@@ -234,6 +234,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Close even without a checkpoint by this session (UNSAFE — KA-4 override).",
     )
 
+    # -- session-start (KA-6 / KA-10 GOVERNANCE-DETERMINISM: machine-enforced
+    #    session-START ritual). One command performs the whole opening ritual so
+    #    an agent cannot hand-script it and skip a step (the eBay S2/S4 drift):
+    #      carry-forward gate (fail-loud) -> gc dry-run -> open session logger.
+    sstart_parser = subparsers.add_parser(
+        "session-start",
+        help="Enforced session-start ritual: carry-forward gate (fail-loud) -> gc dry-run -> open logger.",
+    )
+    sstart_parser.add_argument("session_id", type=str, help="Session identifier to open (e.g., S92)")
+    sstart_parser.add_argument(
+        "--rag", type=Path, default=_default_rag_path(),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    sstart_parser.add_argument(
+        "--gc-path", type=Path, default=Path("."),
+        help="Project root to scan in the gc dry-run (default: . — run from root_project)",
+    )
+    sstart_parser.add_argument("--strict", action="store_true", help="Treat audit warnings as gate failures too")
+    sstart_parser.add_argument(
+        "--git-head", type=str, default=None,
+        help="Expected git HEAD for the freshness check (default: auto-detect)",
+    )
+    sstart_parser.add_argument("--no-gc", action="store_true", help="Skip the gc dry-run scan.")
+    sstart_parser.add_argument(
+        "--force", action="store_true",
+        help="Open the session even if the carry-forward gate fails (UNSAFE).",
+    )
+
+    # -- session-end (KA-6 / KA-10: machine-enforced session-END ritual). One
+    #    command performs the whole closing ritual atomically, in order, so the
+    #    ran-but-never-checkpointed freeze (eBay S4) is structurally impossible:
+    #      checkpoint -> close logger (KA-4 gate now passes) -> audit (fail-loud).
+    send_parser = subparsers.add_parser(
+        "session-end",
+        help="Enforced session-end ritual: checkpoint -> close logger (KA-4 gate) -> audit (fail-loud).",
+    )
+    send_parser.add_argument("--rag", type=Path, required=True, help="Path to RAG_MASTER.json")
+    send_parser.add_argument("--session", type=str, required=True, help="Session ID (e.g., S92)")
+    send_parser.add_argument("--summary", type=str, required=True, help="Session summary string for the checkpoint")
+    send_parser.add_argument("--tasks", type=str, default=None, help="JSON array of open task strings to set (replaces existing)")
+    send_parser.add_argument("--status", type=str, default=None, help="New state_machine_status value")
+    send_parser.add_argument("--strict", action="store_true", help="Treat audit warnings as failures too")
+    send_parser.add_argument(
+        "--git-head", type=str, default=None,
+        help="Expected git HEAD for the audit freshness check (default: auto-detect)",
+    )
+
     # -- checkpoint --
     ckpt_parser = subparsers.add_parser(
         "checkpoint",
@@ -1465,6 +1512,177 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _carry_forward_gate(
+    rag_path: Path, *, strict: bool = False, git_head: "str | None" = None
+) -> tuple[bool, list[str]]:
+    """KA-6 session-START gate: is the INHERITED RAG coherent and safe to build on?
+
+    The precise inverse of the KA-4 close gate. KA-4 stops a session *ending*
+    without a checkpoint; this stops a session *beginning* work on a RAG that the
+    prior session left incoherent or unbanked — the upstream half of the eBay
+    S2/S4 governance freeze. It runs, as code, the two fail-loud checks the
+    canonical carry-forward verification otherwise performs by hand every session
+    start:
+
+      1. verify — HOT<->COLD self-version coherence + no surviving
+                  ``<SPEC_VERSION>`` placeholder (SpecParser.verify_coherence).
+      2. audit  — renders == canonical tracked_items (E-040), supersede refs
+                  resolve, notes don't contradict status (INS-038), ``.bak``
+                  parity (FIX-8), current_status freshness vs live HEAD (E-043),
+                  and no Cowork-memory side stores (Rule 13).
+
+    Returns ``(ok, findings)``. ``ok`` is True iff BOTH gates are clean. Disk /
+    parse / audit faults surface as findings (fail-loud) — the gate never raises
+    and never returns a silent green on an unreadable RAG.
+    """
+    import json as _json
+    from rag_kernel.spec_parser import SpecParser
+    from rag_kernel import drift_audit
+    from rag_kernel.drift_store import DriftStoreError
+
+    findings: list[str] = []
+    if not rag_path.exists():
+        return False, [f"RAG_MASTER.json not found at {rag_path}"]
+
+    # 1. verify — HOT<->COLD coherence (utf-8-sig tolerates a COLD BOM).
+    try:
+        def _load(p: Path) -> dict:
+            with open(p, "r", encoding="utf-8-sig") as f:
+                return _json.load(f)
+
+        rag = _load(rag_path)
+        cold_path = rag_path.parent / "RAG_COLD.json"
+        cold = _load(cold_path) if cold_path.exists() else None
+        for fnd in SpecParser.verify_coherence(rag, cold, ""):
+            findings.append(f"verify: {fnd}")
+    except (OSError, ValueError) as exc:
+        findings.append(f"verify: RAG/COLD unreadable ({exc})")
+
+    # 2. audit — fail-loud session auditor (renders, refs, notes, .bak parity,
+    #    freshness, side stores). Defaults match a bare ``audit`` (scan_root=True,
+    #    docs_root=None — repo-doc reconciliation is a close-time concern).
+    try:
+        head = git_head or _resolve_git_head(rag_path)
+        report = drift_audit.audit_file(rag_path, git_head=head)
+        if not report.is_clean(strict=strict):
+            findings.append("audit: " + report.summary().replace("\n", " | "))
+    except (DriftStoreError, OSError, ValueError, KeyError) as exc:
+        findings.append(f"audit: {exc}")
+
+    return (not findings), findings
+
+
+def cmd_session_start(args: argparse.Namespace) -> int:
+    """KA-6 — machine-enforced session-START ritual (one atomic command).
+
+    Performs, in order: (1) the carry-forward gate (fail-loud — refuses to start
+    on an incoherent/unbanked inherited RAG unless ``--force``), (2) a gc dry-run
+    (report-before-delete, garbage_collector rule), (3) opens the session logger.
+    Collapsing the three steps into one command removes the hand-scripted-ritual
+    surface where a step gets skipped (eBay S2/S4).
+    """
+    rag_path = args.rag.resolve()
+    rag_dir = rag_path.parent
+
+    # 1. Carry-forward gate (fail-loud).
+    ok, findings = _carry_forward_gate(
+        rag_path, strict=args.strict, git_head=getattr(args, "git_head", None)
+    )
+    print("[1/3] Carry-forward gate:")
+    if ok:
+        print("  OK — inherited RAG coherent (verify + audit clean).")
+    else:
+        for fnd in findings:
+            print(f"  FAIL — {fnd}", file=sys.stderr)
+        if not getattr(args, "force", False):
+            print(
+                f"ERROR: refusing to start session {args.session_id} — "
+                "inherited state is not carry-forward clean.",
+                file=sys.stderr,
+            )
+            print(
+                "  Reconcile the inherited RAG (or pass --force to start anyway, UNSAFE).",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "WARNING: starting despite a failed carry-forward gate (--force).",
+            file=sys.stderr,
+        )
+
+    # 2. gc dry-run (report-before-delete).
+    if not getattr(args, "no_gc", False):
+        print("[2/3] GC (dry-run):")
+        cmd_gc(argparse.Namespace(path=args.gc_path, dry_run=True))
+    else:
+        print("[2/3] GC: skipped (--no-gc).")
+
+    # 3. Open the session logger.
+    from rag_kernel.session_logger import SessionLogger
+
+    print("[3/3] Open logger:")
+    logger = SessionLogger(args.session_id, log_dir=rag_dir)
+    logger.open()
+    print(f"  Session {args.session_id} started.")
+    print(f"  Log file: {logger.log_path}")
+    return 0
+
+
+def cmd_session_end(args: argparse.Namespace) -> int:
+    """KA-6 — machine-enforced session-END ritual (one atomic, ordered command).
+
+    Performs, in order: (1) checkpoint (stamps ``meta.written_by_session`` +
+    increments ``last_checkpoint_seq`` + mirrors ``.bak``), (2) closes the session
+    logger — the KA-4 checkpoint-to-close gate now passes *because* step 1 ran,
+    (3) runs the fail-loud audit. Any step's non-zero exit aborts the rest and
+    propagates, so a session can never end half-ritualed (the eBay S4
+    ran-but-never-checkpointed freeze is structurally unreachable through this
+    path).
+    """
+    rag_path = args.rag.resolve()
+    rag_dir = rag_path.parent
+    sid = args.session
+
+    # 1. checkpoint.
+    print("[1/3] Checkpoint:")
+    rc = cmd_checkpoint(argparse.Namespace(
+        rag=args.rag, session=sid, summary=args.summary,
+        tasks=args.tasks, status=args.status, dry_run=False,
+    ))
+    if rc != 0:
+        print(
+            "ERROR: checkpoint failed — aborting session-end before close/audit.",
+            file=sys.stderr,
+        )
+        return rc
+
+    # 2. close logger (KA-4 gate now satisfied by step 1).
+    print("[2/3] Close logger:")
+    rc = cmd_session(argparse.Namespace(
+        session_action="close", session_id=sid, rag_dir=rag_dir, force=False,
+    ))
+    if rc != 0:
+        print("ERROR: session close failed — see above.", file=sys.stderr)
+        return rc
+
+    # 3. audit (fail-loud).
+    print("[3/3] Audit:")
+    rc = cmd_audit(argparse.Namespace(
+        rag=args.rag, strict=args.strict, scan_root=True,
+        error_log=None, docs_root=None,
+        git_head=getattr(args, "git_head", None), json_output=False,
+    ))
+    if rc != 0:
+        print(
+            "ERROR: post-close audit FAILED — governance state is not clean.",
+            file=sys.stderr,
+        )
+        return rc
+
+    print(f"Session {sid} ended cleanly: checkpoint + close + audit all green.")
+    return 0
+
+
 def cmd_gc(args: argparse.Namespace) -> int:
     """Garbage collector — scan and clean temp artifacts within project root.
 
@@ -2395,7 +2613,11 @@ def cmd_context(args: argparse.Namespace) -> int:
 # Verbs excluded from the central bootstrap-log wrapper:
 #   session    — manages its own session_start / session_end lifecycle markers
 #   serve, mcp — long-lived servers; nothing to bracket around
-_NO_BOOTSTRAP_LOG = frozenset({"session", "serve", "mcp"})
+#   session-start / session-end — KA-6 rituals that themselves open/close the
+#                                 logger; the wrapper must not touch it mid-ritual
+_NO_BOOTSTRAP_LOG = frozenset(
+    {"session", "session-start", "session-end", "serve", "mcp"}
+)
 
 
 def _active_session_log(rag_dir: Path) -> "Path | None":
@@ -2512,6 +2734,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = {
         "init": cmd_init, "configure": cmd_configure, "health": cmd_health,
         "serve": cmd_serve, "mcp": cmd_mcp, "session": cmd_session,
+        "session-start": cmd_session_start, "session-end": cmd_session_end,
         "checkpoint": cmd_checkpoint, "gc": cmd_gc, "audit-env": cmd_audit_env,
         "graph": cmd_graph,
         "resolve": cmd_item_transition, "defer": cmd_item_transition,

@@ -58,7 +58,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.4.13"
+__version__ = "0.4.14"
 
 
 # ── Capability Discovery ──────────────────────────────────────
