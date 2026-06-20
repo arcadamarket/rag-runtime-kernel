@@ -63,7 +63,8 @@ also *verifies* that every render still equals the state it persisted.
               "check_note_status_contradiction", "check_side_rule_stores",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
-              "check_placeholder_tokens", "check_template_keys",
+              "check_placeholder_tokens", "check_project_context_placeholders",
+              "check_template_keys",
               "check_written_by_session", "check_session_id_coherence",
               "check_wal_integrity", "check_bak_parity", "check_cold_hot_version",
               "canonical_facts", "audit_hot", "audit_file", "assert_clean"],
@@ -116,7 +117,7 @@ from rag_kernel import persistence
 #         so the after-the-fact audit and the new live pre-write guard
 #         (persistence.assert_no_side_stores) cannot diverge. Behavior/report shape
 #         unchanged — same findings, same messages — so the version stays 1.4.0.
-DRIFT_AUDIT_VERSION = "1.4.0"
+DRIFT_AUDIT_VERSION = "1.5.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -210,6 +211,20 @@ _CS_HEAD_RE = re.compile(
 # (K3) while rule PROSE that merely mentions a template token (e.g. the report
 # heading "S<NN> close" inside operating_protocol) is NOT a false positive.
 _PLACEHOLDER_VALUE_RE = re.compile(r"^<[A-Z][A-Z0-9_]*>$")
+# A residual HUMAN-FILL placeholder (KA-9): an angle-bracketed token of word
+# chars (e.g. "<from user>", "<absolute path>", "<your project>"). Unlike the
+# UPPER_SNAKE _PLACEHOLDER_VALUE_RE that the spec parser substitutes at build
+# time, these session-zero tokens are filled by the LLM at deploy — so they are
+# lowercase/spaced and the parser-token scan never caught them. Matched as a
+# SUBSTRING (a partially-filled "Build <from user>'s store" is caught too). The
+# token-must-start-with-a-letter anchor keeps a math comparison ("a < b and c >
+# d", whose first '<' is followed by a space) from being a false positive, and
+# the reporter filters to tokens carrying a lowercase letter or space so a pure
+# UPPER_SNAKE token in project_context is left to check_placeholder_tokens (no
+# double-report). This is the KA-9 gap: the eBay deploy shipped project_context
+# brief/domain/end_goal as a verbatim "<from user>".
+_HUMAN_PLACEHOLDER_RE = re.compile(r"<[A-Za-z][A-Za-z0-9 _/.\-]{0,48}>")
+_HUMAN_PLACEHOLDER_SIGNAL_RE = re.compile(r"[a-z ]")
 # A semver-ish version token (first X.Y.Z found), used for COLD<->HOT coherence.
 _SEMVER_RE = re.compile(r"(\d+\.\d+\.\d+)")
 # A malformed/machine-minted session id: "S" immediately followed by "-<digit>"
@@ -811,6 +826,40 @@ def check_placeholder_tokens(hot: dict) -> list[AuditFinding]:
     return findings
 
 
+def check_project_context_placeholders(hot: dict) -> list[AuditFinding]:
+    """ERROR for any residual human-fill ``<...>`` placeholder in project_context (KA-9).
+
+    The universal spec ships ``project_context`` (brief / domain / end_goal /
+    principals) with session-zero ``<from user>`` / ``<absolute path>`` tokens
+    that the LLM must substitute at deploy. They are lowercase/spaced, so the
+    UPPER_SNAKE :func:`check_placeholder_tokens` scan never caught them — the
+    eBay Session-Zero deploy shipped ``brief``/``domain``/``end_goal`` as a
+    verbatim ``"<from user>"`` and audited clean. This scan walks the whole
+    ``project_context`` subtree and fails loud on every surviving human-fill
+    placeholder (substring match, so a partially-filled value is caught too).
+    Self-skips when ``project_context`` is absent. Pure UPPER_SNAKE tokens are
+    deliberately left to :func:`check_placeholder_tokens` (no double-report).
+    """
+    findings: list[AuditFinding] = []
+    pc = hot.get("project_context") if isinstance(hot, dict) else None
+    if not isinstance(pc, (dict, list)):
+        return findings
+    seen: set[tuple[str, str]] = set()
+    for loc, val in _walk_strings(pc):
+        for tok in _HUMAN_PLACEHOLDER_RE.findall(val):
+            if not _HUMAN_PLACEHOLDER_SIGNAL_RE.search(tok):
+                continue  # pure UPPER_SNAKE token — owned by check_placeholder_tokens
+            key = (loc, tok)
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(AuditFinding(
+                check="project_context_placeholders", severity=ERROR,
+                detail=(f"unfilled placeholder {tok!r} at project_context/{loc} — "
+                        "init/configure must substitute a real value at session zero")))
+    return findings
+
+
 def check_template_keys(hot: dict) -> list[AuditFinding]:
     """ERROR for any ``_``-prefixed template key leaked into operating_protocol (K5).
 
@@ -1071,6 +1120,7 @@ def audit_hot(
     # source is absent): unsubstituted placeholders, leaked template keys, empty
     # written_by_session, malformed session ids.
     findings += check_placeholder_tokens(hot)
+    findings += check_project_context_placeholders(hot)
     findings += check_template_keys(hot)
     findings += check_written_by_session(hot)
     findings += check_session_id_coherence(hot)
@@ -1182,6 +1232,7 @@ __all__ = [
     "check_repo_claim_reconciliation",
     "check_current_status_freshness",
     "check_placeholder_tokens",
+    "check_project_context_placeholders",
     "check_template_keys",
     "check_written_by_session",
     "check_session_id_coherence",

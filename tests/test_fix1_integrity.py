@@ -245,6 +245,9 @@ def _defective_rag(dirpath: Path) -> Path:
         "sessions_recent": [{"id": "S1", "d": "<ISO>"},       # K3 placeholder
                             {"id": "S-12488-1781260490"}],    # K7 negative id
         "tracked_items": [],
+        "project_context": {"brief": "<from user>",           # KA-9 human-fill
+                            "domain": "<from user>",
+                            "end_goal": "<from user>"},
     }
     _write_json(rag, hot)
     _write_json(rag.with_suffix(".json.bak"), {"meta": {"last_checkpoint_seq": 0}})  # K6
@@ -266,6 +269,7 @@ def test_dogfood_ebay_defective_rag_fails_loud(tmp_path):
     # every FIX-1 invariant must fire on this artifact
     for expected in (
         "placeholder_tokens",
+        "project_context_placeholders",
         "template_keys",
         "written_by_session",
         "session_id_coherence",

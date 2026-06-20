@@ -74,6 +74,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -81,6 +82,13 @@ from pathlib import Path
 
 from rag_kernel.api import DEFAULT_PORT, KernelApp, create_server
 from rag_kernel.mcp_transport import MCPServer
+
+# KA-9: a whole-value human-fill session-zero placeholder ("<from user>",
+# "<absolute path>") — an angle-bracket token carrying a lowercase letter or
+# space. Distinct from the UPPER_SNAKE <SPEC_VERSION> the spec parser substitutes
+# (left untouched here so the parser still owns it). Used by cmd_init to null
+# unfilled project_context placeholders so a fresh deploy is born clean.
+_PC_TEMPLATE_TOKEN_RE = re.compile(r"<[^<>]*[a-z ][^<>]*>")
 
 # DRIFT-ELIM increment 3 — item-lifecycle CLI verbs.
 # Each top-level verb maps to the ItemStatus it transitions a tracked item into;
@@ -594,6 +602,33 @@ def cmd_init(args: argparse.Namespace) -> int:
         rag["meta"]["root_rag"] = normalize_path(args.root_rag, path_style)
     if args.project_name:
         rag["meta"]["project_name"] = args.project_name
+
+    # KA-9 / spec §1182: project_context (brief/domain/end_goal/principals) ships
+    # with "<from user>" session-zero template tokens. When the operator does not
+    # supply a value at init, the contract is to initialize the field to null (the
+    # model infers it during the boot scan) — NOT to leave the literal placeholder.
+    # Leaving it is exactly the eBay Session-Zero defect: a READY RAG carrying
+    # "<from user>" that the new drift_audit.check_project_context_placeholders
+    # gate fails loud on. Resolving every unfilled human-fill placeholder to null
+    # here makes a fresh `init` / `--auto-ready` born clean instead of failing the
+    # gate by construction (same born-clean discipline as FIX-9 for K7).
+    def _null_unfilled_placeholders(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(v, str) and _PC_TEMPLATE_TOKEN_RE.fullmatch(v.strip()):
+                    node[k] = None
+                else:
+                    _null_unfilled_placeholders(v)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                if isinstance(v, str) and _PC_TEMPLATE_TOKEN_RE.fullmatch(v.strip()):
+                    node[i] = None
+                else:
+                    _null_unfilled_placeholders(v)
+
+    pc = rag.get("project_context")
+    if isinstance(pc, (dict, list)):
+        _null_unfilled_placeholders(pc)
 
     errors = sp.validate_rag(rag)
     if errors:
