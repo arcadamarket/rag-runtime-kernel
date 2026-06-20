@@ -67,6 +67,7 @@ also *verifies* that every render still equals the state it persisted.
               "check_placeholder_tokens", "check_project_context_placeholders",
               "check_template_keys",
               "check_written_by_session", "check_session_id_coherence",
+              "check_sessions_recent_coherence",
               "check_wal_integrity", "check_bak_parity", "check_cold_hot_version",
               "canonical_facts", "audit_hot", "audit_file", "assert_clean"],
   "use_when": "Verifying at a session boundary that every status render still matches the canonical tracked_items array and no parallel state store exists",
@@ -131,7 +132,20 @@ from rag_kernel import persistence
 #         behind meta while audit --strict reported 0 findings. Fail-loud ERROR,
 #         self-skips when either side is absent/unparseable (this kernel's own RAG
 #         omits these keys, so it stays clean).
-DRIFT_AUDIT_VERSION = "1.6.0"
+# 1.7.0 — KA-2 (KA-10 GOVERNANCE-DETERMINISM): check_sessions_recent_coherence
+#         fails loud on duplicate-bootstrap rows in sessions_recent — two rows that
+#         share a checkpoint timestamp ``d`` (the eBay S0/S1 signature: both minted
+#         at one instant, one never actually run, while audit --strict reported 0
+#         findings and there was no governed repair path). Order-agnostic by design:
+#         the project legitimately writes sessions_recent both oldest-first (this
+#         kernel's live RAG) and newest-first (a fresh init --auto-ready RAG), and
+#         one session legitimately spans multiple rows (the S95/S95 pair), so a
+#         SHARED timestamp is the only phantom-duplicate signal safe across every
+#         shape — directional id/timestamp monotonicity would false-positive on a
+#         clean deploy. Self-skips when sessions_recent is absent/<2 rows or a row's
+#         d is missing. (Increment A; the governed row-repair/dedup verb is the
+#         paired increment B.)
+DRIFT_AUDIT_VERSION = "1.7.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -806,6 +820,33 @@ def _coerce_utc_date(value) -> Optional[date]:
     return dt.date()
 
 
+def _coerce_utc_instant(value) -> Optional[datetime]:
+    """Parse an ISO datetime string to a UTC-aware instant, else ``None``.
+
+    The instant-resolution sibling of :func:`_coerce_utc_date`, used by the
+    sessions_recent coherence check (KA-2) where two checkpoints in the SAME
+    calendar day must still be distinguished. Accepts a full ISO instant
+    (optionally ``Z``-suffixed); a timezone-aware value is normalized to UTC and a
+    naive one is read as UTC, so two rows are compared on the same footing. A bare
+    calendar day degrades to midnight UTC. Anything unparseable yields ``None`` so
+    the caller silently self-skips rather than crashing on a malformed field.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        d = _coerce_utc_date(raw)
+        if d is None:
+            return None
+        dt = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def check_current_status_coherence(hot: dict) -> list[AuditFinding]:
     """ERROR if ``current_status``'s denormalized self-facts contradict ``meta`` (KA-3).
 
@@ -1035,6 +1076,79 @@ def check_session_id_coherence(hot: dict) -> list[AuditFinding]:
     return findings
 
 
+def check_sessions_recent_coherence(hot: dict) -> list[AuditFinding]:
+    """ERROR on duplicate-bootstrap rows in the ``sessions_recent`` ledger (KA-2).
+
+    ``sessions_recent`` is the ledger of per-session checkpoints. The eBay
+    Session-Zero deploy carried duplicate *bootstrap* rows — S0 and S1 minted at the
+    SAME instant, one of which was never actually run — while ``audit --strict``
+    reported 0 findings, and there was no governed way to repair them. The
+    fail-loud invariant that closes that blind spot:
+
+      * **no duplicate-bootstrap rows** — no two rows may share a checkpoint
+        timestamp ``d``. Distinct sessions close at distinct instants; a shared
+        timestamp means a row was minted as a phantom duplicate of another, not
+        checkpointed on its own. Two rows carrying the same *unparseable* literal
+        ``d`` count too (the eBay rows shared a ``<ISO>``-class placeholder).
+
+    Deliberately NOT enforced — and why: a fixed array ORDER, strictly-unique ids,
+    or directional timestamp/id monotonicity. The project legitimately writes
+    ``sessions_recent`` in BOTH directions — this kernel's live RAG is oldest-first
+    (S92…S95) while a fresh ``init --auto-ready`` RAG is newest-first (S1 then S0) —
+    and one session legitimately spans multiple rows (this kernel's S95/S95
+    multi-checkpoint pair, distinct timestamps). A SHARED timestamp is the one
+    phantom-duplicate signal that is unambiguous across every legitimate shape;
+    anything order- or id-directional would false-positive on a clean deploy.
+    Self-skips when ``sessions_recent`` is absent / not a list / has fewer than two
+    rows, and skips any row whose ``d`` is missing (a ``<PLACEHOLDER>`` ``d`` is
+    :func:`check_placeholder_tokens`'s concern), so a healthy or not-yet-populated
+    RAG — like this kernel's own — audits clean.
+    """
+    findings: list[AuditFinding] = []
+    if not isinstance(hot, dict):
+        return findings
+    sr = hot.get("sessions_recent")
+    if not isinstance(sr, list) or len(sr) < 2:
+        return findings
+
+    # No two rows may share a checkpoint timestamp (the duplicate-bootstrap
+    # signature). Compare on the parsed UTC instant when ``d`` is parseable so a
+    # Z-suffixed instant and its offset twin collide; fall back to the exact literal
+    # for an unparseable ``d`` so two identical placeholder timestamps are caught.
+    seen_instant: dict[datetime, int] = {}
+    seen_literal: dict[str, int] = {}
+    for i, e in enumerate(sr):
+        if not isinstance(e, dict):
+            continue
+        d_raw = e.get("d")
+        d = d_raw.strip() if isinstance(d_raw, str) and d_raw.strip() else None
+        if d is None:
+            continue
+        inst = _coerce_utc_instant(d)
+        if inst is not None:
+            prior = seen_instant.get(inst)
+            if prior is not None:
+                findings.append(AuditFinding(
+                    check="sessions_recent_coherence", severity=ERROR,
+                    detail=(f"sessions_recent[{prior}] and [{i}] share checkpoint "
+                            f"timestamp {d!r} — duplicate-bootstrap rows (KA-2); two "
+                            "real checkpoints never land at the same instant. Repair "
+                            "with the governed sessions_recent dedup verb")))
+            else:
+                seen_instant[inst] = i
+        else:  # identical unparseable literal d is still a duplicate
+            prior = seen_literal.get(d)
+            if prior is not None:
+                findings.append(AuditFinding(
+                    check="sessions_recent_coherence", severity=ERROR,
+                    detail=(f"sessions_recent[{prior}] and [{i}] share timestamp "
+                            f"literal {d!r} — duplicate-bootstrap rows (KA-2)")))
+            else:
+                seen_literal[d] = i
+
+    return findings
+
+
 def check_wal_integrity(wal_path: Path | str) -> list[AuditFinding]:
     """ERROR if the WAL sequence is not strictly monotonic by +1 (K1).
 
@@ -1228,6 +1342,7 @@ def audit_hot(
     findings += check_template_keys(hot)
     findings += check_written_by_session(hot)
     findings += check_session_id_coherence(hot)
+    findings += check_sessions_recent_coherence(hot)
     if doc_paths:
         findings += check_repo_claim_reconciliation(
             doc_paths, store,
@@ -1341,6 +1456,7 @@ __all__ = [
     "check_template_keys",
     "check_written_by_session",
     "check_session_id_coherence",
+    "check_sessions_recent_coherence",
     "check_wal_integrity",
     "check_bak_parity",
     "check_cold_hot_version",

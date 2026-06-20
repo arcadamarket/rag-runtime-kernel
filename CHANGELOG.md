@@ -4,7 +4,11 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
-_Nothing yet._
+**KA-2 increment B (pending) — governed `sessions_recent` row-repair/dedup verb.** Increment A (below) ships the *detection* invariant; the paired *repair* path — a guarded, atomic verb to dedup/remove phantom-duplicate `sessions_recent` rows — is still open (tracked as KA-2, IN_PROGRESS).
+
+## [v0.4.17] — 2026-06-20
+
+**KA-2 increment A — `sessions_recent` duplicate-bootstrap auditor (GOVERNANCE-DETERMINISM / KA-10 arc).** Closes another blind spot the eBay Session-Zero deploy exposed: its `sessions_recent` ledger carried duplicate *bootstrap* rows — S0 and S1 minted at the **same timestamp**, one of which was never actually run — yet `audit --strict` reported 0 findings and there was no governed way to repair them. New `drift_audit.check_sessions_recent_coherence` fails loud (ERROR) when two rows share a checkpoint timestamp `d` (compared on the parsed UTC instant, so a `Z`-suffixed value and its offset twin collide; an unparseable `d` falls back to the exact literal, catching two identical `<ISO>`-class placeholders). The check is **order-agnostic by design**: the project legitimately writes `sessions_recent` both oldest-first (this kernel's live RAG, S92…S95) and newest-first (a fresh `init --auto-ready` RAG, `[S1, S0]`), and one session legitimately spans multiple rows (this kernel's S95/S95 multi-checkpoint pair, distinct timestamps) — so a *shared timestamp* is the only phantom-duplicate signal safe across every legitimate shape; directional id/timestamp monotonicity would false-positive on a clean deploy and was deliberately not enforced. Self-skips when `sessions_recent` is absent / not a list / has fewer than two rows, or a row's `d` is missing. Wired into `audit_hot` so it runs at every session boundary. Dogfooded: a synthetic RAG with the eBay S0/S1 shared-timestamp defect fails loud on `sessions_recent_coherence`; the live project RAG and a fresh `init --auto-ready` RAG both audit clean. This is **increment A (detection)**; the paired **increment B** — a governed row-repair/dedup verb — remains open (KA-2 stays IN_PROGRESS). `DRIFT_AUDIT_VERSION` 1.6.0 → **1.7.0**; no schema, WAL-format, or TLA+ change (drift gate `268149294421` unchanged), no new module (19, health 20/20). Suite 1,427 → **1,448** (+21). Fifth runtime increment of the KA-10 GOVERNANCE-DETERMINISM initiative (after KA-4, KA-6, KA-9, KA-3). (S96)
 
 ## [v0.4.16] — 2026-06-20
 
