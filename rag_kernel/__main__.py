@@ -394,6 +394,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     note_parser.add_argument("--dry-run", action="store_true", help="Validate without writing")
 
+    # -- dedup-sessions (KA-2 increment B: governed sessions_recent row-repair) --
+    dedup_parser = subparsers.add_parser(
+        "dedup-sessions",
+        help="Repair duplicate-bootstrap rows in sessions_recent through the guarded API (KA-2).",
+    )
+    dedup_parser.add_argument(
+        "--rag", type=Path, default=_default_rag_path(),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    dedup_parser.add_argument(
+        "--keep", choices=["first", "last"], default="first",
+        help="Which row of each duplicate-timestamp group to retain (default: first).",
+    )
+    dedup_parser.add_argument(
+        "--session", type=str, default="",
+        help="Session id (audit trail; recorded in the bootstrap session log).",
+    )
+    dedup_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Report the duplicate rows that would be removed without writing.",
+    )
+
     # -- audit (DRIFT-ELIM increment 5: fail-loud session auditor) --
     audit_parser2 = subparsers.add_parser(
         "audit",
@@ -1243,6 +1265,52 @@ def cmd_note(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
     print(f"Note updated on {args.item_id} (status untouched; .bak refreshed).")
+    return 0
+
+
+def cmd_dedup_sessions(args: argparse.Namespace) -> int:
+    """Repair duplicate-bootstrap rows in sessions_recent (KA-2 increment B).
+
+    The repair half of the KA-2 invariant: where ``audit`` FAILS LOUD on two
+    sessions_recent rows sharing a checkpoint timestamp, this verb removes the
+    phantom duplicate(s) through the guarded, atomic ``drift_store`` path (tmp ->
+    verify -> .bak parity -> rename), keeping one row per timestamp. Detection and
+    repair share one predicate (``sessions_recent_duplicate_pairs``), so this fixes
+    exactly what the auditor flags. No-op (writes nothing) when the ledger is clean.
+    """
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        dedup_sessions_recent,
+        dedup_sessions_recent_file,
+        load_hot,
+        sessions_recent_duplicate_pairs,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    try:
+        hot = load_hot(rag_path)
+        sr = hot.get("sessions_recent")
+        pairs = sessions_recent_duplicate_pairs(sr if isinstance(sr, list) else [])
+        if not pairs:
+            print("sessions_recent: no duplicate-bootstrap rows; nothing to repair.")
+            return 0
+        if args.dry_run:
+            import copy
+            _, removed = dedup_sessions_recent(copy.deepcopy(hot), keep=args.keep)
+            print(f"[dry-run] would remove {len(removed)} duplicate row(s) (keep={args.keep}):")
+            for r in removed:
+                print(f"    - {r.get('id', '?')} @ {r.get('d', '?')}")
+            return 0
+        _, removed = dedup_sessions_recent_file(rag_path, keep=args.keep)
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print(f"sessions_recent deduped: removed {len(removed)} row(s) (keep={args.keep}); .bak refreshed.")
+    for r in removed:
+        print(f"    - {r.get('id', '?')} @ {r.get('d', '?')}")
     return 0
 
 
@@ -2778,6 +2846,7 @@ def main(argv: list[str] | None = None) -> int:
         "items": cmd_items,
         "render": cmd_render,
         "note": cmd_note,
+        "dedup-sessions": cmd_dedup_sessions,
         "audit": cmd_audit,
         "doctor": cmd_doctor,
         "add": cmd_add,

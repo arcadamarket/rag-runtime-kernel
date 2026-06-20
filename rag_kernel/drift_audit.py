@@ -91,8 +91,11 @@ from rag_kernel.drift_store import (
     TRACKED_ITEMS_KEY,
     DriftStoreError,
     TrackedItemStore,
+    _coerce_utc_date,
+    _coerce_utc_instant,
     ledger_disposition_to_status,
     load_hot,
+    sessions_recent_duplicate_pairs,
 )
 from rag_kernel import drift_render
 from rag_kernel import persistence
@@ -794,57 +797,9 @@ def check_current_status_freshness(
     return findings
 
 
-def _coerce_utc_date(value) -> Optional[date]:
-    """Parse an ISO date / datetime string to its UTC calendar day, else ``None``.
-
-    Accepts a bare ``YYYY-MM-DD`` (``current_status.last_updated``'s usual shape)
-    or a full ISO instant (``meta.last_updated_utc``, possibly ``Z``-suffixed). A
-    timezone-aware instant is normalized to UTC before its day is taken; a naive
-    one is read as-is. Anything unparseable yields ``None`` so the caller silently
-    self-skips rather than crashing on a malformed field.
-    """
-    if not isinstance(value, str) or not value.strip():
-        return None
-    raw = value.strip()
-    try:                                  # bare calendar day, the common case
-        return date.fromisoformat(raw)
-    except ValueError:
-        pass
-    iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-    try:
-        dt = datetime.fromisoformat(iso)
-    except ValueError:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc)
-    return dt.date()
-
-
-def _coerce_utc_instant(value) -> Optional[datetime]:
-    """Parse an ISO datetime string to a UTC-aware instant, else ``None``.
-
-    The instant-resolution sibling of :func:`_coerce_utc_date`, used by the
-    sessions_recent coherence check (KA-2) where two checkpoints in the SAME
-    calendar day must still be distinguished. Accepts a full ISO instant
-    (optionally ``Z``-suffixed); a timezone-aware value is normalized to UTC and a
-    naive one is read as UTC, so two rows are compared on the same footing. A bare
-    calendar day degrades to midnight UTC. Anything unparseable yields ``None`` so
-    the caller silently self-skips rather than crashing on a malformed field.
-    """
-    if not isinstance(value, str) or not value.strip():
-        return None
-    raw = value.strip()
-    iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-    try:
-        dt = datetime.fromisoformat(iso)
-    except ValueError:
-        d = _coerce_utc_date(raw)
-        if d is None:
-            return None
-        dt = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+# ``_coerce_utc_date`` / ``_coerce_utc_instant`` moved to ``drift_store`` (the lower
+# module) so the KA-2 dedup verb can share them with this auditor without an import
+# cycle; they are re-imported above so this module's public surface is unchanged.
 
 
 def check_current_status_coherence(hot: dict) -> list[AuditFinding]:
@@ -1107,44 +1062,26 @@ def check_sessions_recent_coherence(hot: dict) -> list[AuditFinding]:
     findings: list[AuditFinding] = []
     if not isinstance(hot, dict):
         return findings
-    sr = hot.get("sessions_recent")
-    if not isinstance(sr, list) or len(sr) < 2:
-        return findings
 
-    # No two rows may share a checkpoint timestamp (the duplicate-bootstrap
-    # signature). Compare on the parsed UTC instant when ``d`` is parseable so a
-    # Z-suffixed instant and its offset twin collide; fall back to the exact literal
-    # for an unparseable ``d`` so two identical placeholder timestamps are caught.
-    seen_instant: dict[datetime, int] = {}
-    seen_literal: dict[str, int] = {}
-    for i, e in enumerate(sr):
-        if not isinstance(e, dict):
-            continue
-        d_raw = e.get("d")
-        d = d_raw.strip() if isinstance(d_raw, str) and d_raw.strip() else None
-        if d is None:
-            continue
-        inst = _coerce_utc_instant(d)
-        if inst is not None:
-            prior = seen_instant.get(inst)
-            if prior is not None:
-                findings.append(AuditFinding(
-                    check="sessions_recent_coherence", severity=ERROR,
-                    detail=(f"sessions_recent[{prior}] and [{i}] share checkpoint "
-                            f"timestamp {d!r} — duplicate-bootstrap rows (KA-2); two "
-                            "real checkpoints never land at the same instant. Repair "
-                            "with the governed sessions_recent dedup verb")))
-            else:
-                seen_instant[inst] = i
+    # Single source of detection: the duplicate-finding predicate lives in
+    # drift_store and is shared with the KA-2 dedup *repair* verb, so a row this
+    # auditor flags is exactly a row the verb removes (no detect/repair drift).
+    # Compare on the parsed UTC instant when ``d`` is parseable (a Z-suffixed instant
+    # and its offset twin collide); fall back to the exact literal for an unparseable
+    # ``d`` so two identical placeholder timestamps are caught.
+    for prior, i, kind, literal in sessions_recent_duplicate_pairs(hot.get("sessions_recent")):
+        if kind == "instant":
+            findings.append(AuditFinding(
+                check="sessions_recent_coherence", severity=ERROR,
+                detail=(f"sessions_recent[{prior}] and [{i}] share checkpoint "
+                        f"timestamp {literal!r} — duplicate-bootstrap rows (KA-2); two "
+                        "real checkpoints never land at the same instant. Repair "
+                        "with the governed sessions_recent dedup verb")))
         else:  # identical unparseable literal d is still a duplicate
-            prior = seen_literal.get(d)
-            if prior is not None:
-                findings.append(AuditFinding(
-                    check="sessions_recent_coherence", severity=ERROR,
-                    detail=(f"sessions_recent[{prior}] and [{i}] share timestamp "
-                            f"literal {d!r} — duplicate-bootstrap rows (KA-2)")))
-            else:
-                seen_literal[d] = i
+            findings.append(AuditFinding(
+                check="sessions_recent_coherence", severity=ERROR,
+                detail=(f"sessions_recent[{prior}] and [{i}] share timestamp "
+                        f"literal {literal!r} — duplicate-bootstrap rows (KA-2)")))
 
     return findings
 

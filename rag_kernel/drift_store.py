@@ -58,7 +58,9 @@ project's own bookkeeping.
               "ledger_disposition_to_status", "inference_specs_from_hot",
               "add_items", "add_items_file",
               "OPERATING_PROTOCOL_KEY", "add_operating_protocol_rule",
-              "add_operating_protocol_rule_file"],
+              "add_operating_protocol_rule_file",
+              "SESSIONS_RECENT_KEY", "sessions_recent_duplicate_pairs",
+              "dedup_sessions_recent", "dedup_sessions_recent_file"],
   "use_when": "Reading, transitioning, or persisting the canonical status of tracked project items in RAG_MASTER.json",
   "never_bypass": true
 }
@@ -67,7 +69,7 @@ project's own bookkeeping.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional, Sequence
 
@@ -81,11 +83,19 @@ from rag_kernel.persistence import atomic_write_json
 # Bump when the on-disk layout of tracked_items / this module's contract changes.
 # 1.1.0 (FIX-5/P3): added the guarded operating_protocol rule-mutation path
 # (add_operating_protocol_rule[_file]) — an additive contract extension.
-DRIFT_STORE_VERSION = "1.1.0"
+# 1.2.0 (KA-2 increment B): added the governed sessions_recent dedup verb
+# (dedup_sessions_recent[_file]) that REPAIRS the duplicate-bootstrap rows the
+# KA-2 auditor (increment A) detects, plus the single-source detection predicate
+# (sessions_recent_duplicate_pairs / _sessions_recent_key) the auditor now consumes
+# instead of its own inline copy — one predicate for detect AND repair.
+DRIFT_STORE_VERSION = "1.2.0"
 
 # The single canonical array key inside RAG_MASTER.json (HOT). Everything else
 # that mentions item status is, or will become, a render of this array.
 TRACKED_ITEMS_KEY = "tracked_items"
+
+# The append-only ledger of per-session checkpoints inside RAG_MASTER.json (HOT).
+SESSIONS_RECENT_KEY = "sessions_recent"
 
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -637,3 +647,189 @@ def add_operating_protocol_rule_file(
         p, hot, mirror_bak=True, guard_side_stores=True
     )
     return hot
+
+
+# ---------------------------------------------------------------------------
+# sessions_recent dedup (KA-2 increment B) — governed repair of the rows the
+# KA-2 auditor (increment A) detects.
+# ---------------------------------------------------------------------------
+# ``sessions_recent`` is the append-only ledger of per-session checkpoints. The
+# eBay Session-Zero deploy carried duplicate *bootstrap* rows — two rows minted at
+# the SAME checkpoint instant, one never actually run — and there was no governed
+# way to repair them (a hand-edit of the array is exactly the drift the project
+# forbids). Increment A added ``drift_audit.check_sessions_recent_coherence`` to
+# FAIL LOUD on that signature; this is its repair half: a guarded, atomic verb that
+# removes the phantom duplicates, keeping exactly one row per checkpoint timestamp.
+#
+# Single source of truth: the duplicate-detection predicate lives HERE
+# (``_sessions_recent_key`` + ``sessions_recent_duplicate_pairs``) and is consumed
+# by BOTH the auditor (to flag) and this dedup verb (to repair), so detection and
+# repair can never disagree — the same DRY principle the whole DRIFT-ELIM layer is
+# built on. The date coercers (``_coerce_utc_date`` / ``_coerce_utc_instant``) live
+# here too (drift_store is the lower module drift_audit imports from); drift_audit
+# re-exports them so its public surface is unchanged.
+
+
+def _coerce_utc_date(value) -> Optional[date]:
+    """Parse an ISO date / datetime string to its UTC calendar day, else ``None``.
+
+    Accepts a bare ``YYYY-MM-DD`` (``current_status.last_updated``'s usual shape)
+    or a full ISO instant (``meta.last_updated_utc``, possibly ``Z``-suffixed). A
+    timezone-aware instant is normalized to UTC before its day is taken; a naive
+    one is read as-is. Anything unparseable yields ``None`` so the caller silently
+    self-skips rather than crashing on a malformed field.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    try:                                  # bare calendar day, the common case
+        return date.fromisoformat(raw)
+    except ValueError:
+        pass
+    iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.date()
+
+
+def _coerce_utc_instant(value) -> Optional[datetime]:
+    """Parse an ISO datetime string to a UTC-aware instant, else ``None``.
+
+    The instant-resolution sibling of :func:`_coerce_utc_date`, used by the
+    sessions_recent coherence check (KA-2) where two checkpoints in the SAME
+    calendar day must still be distinguished. Accepts a full ISO instant
+    (optionally ``Z``-suffixed); a timezone-aware value is normalized to UTC and a
+    naive one is read as UTC, so two rows are compared on the same footing. A bare
+    calendar day degrades to midnight UTC. Anything unparseable yields ``None`` so
+    the caller silently self-skips rather than crashing on a malformed field.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        d = _coerce_utc_date(raw)
+        if d is None:
+            return None
+        dt = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _sessions_recent_key(row) -> Optional[tuple]:
+    """Return a hashable duplicate-detection key for a ``sessions_recent`` row,
+    or ``None`` for a row that must be skipped (not a dict, or a missing/blank ``d``).
+
+    Two rows are duplicate-bootstrap iff they yield the SAME key. Parse ``d`` to a
+    UTC instant when possible (so a ``Z``-suffixed instant and its offset twin
+    collide), else fall back to the trimmed literal (so two identical *unparseable*
+    timestamps still collide). This is the one predicate both the KA-2 auditor and
+    the dedup verb share.
+    """
+    if not isinstance(row, dict):
+        return None
+    d_raw = row.get("d")
+    d = d_raw.strip() if isinstance(d_raw, str) and d_raw.strip() else None
+    if d is None:
+        return None
+    inst = _coerce_utc_instant(d)
+    if inst is not None:
+        return ("inst", inst)
+    return ("lit", d)
+
+
+def sessions_recent_duplicate_pairs(sr) -> list[tuple[int, int, str, str]]:
+    """Find duplicate-bootstrap rows in a ``sessions_recent`` list.
+
+    Returns one ``(kept_index, dup_index, kind, literal)`` tuple per row that shares
+    a checkpoint timestamp with an EARLIER row, where ``kind`` is ``"instant"`` (the
+    ``d``\\ s parsed to the same UTC instant) or ``"literal"`` (identical unparseable
+    ``d``), and ``literal`` is the duplicate row's trimmed ``d``. Order-agnostic and
+    deterministic; rows that are not dicts, or whose ``d`` is missing/blank, are
+    skipped. Returns ``[]`` when ``sr`` is not a list of at least two rows. This is
+    the exact set of pairs the KA-2 auditor reports and the dedup verb repairs.
+    """
+    pairs: list[tuple[int, int, str, str]] = []
+    if not isinstance(sr, list) or len(sr) < 2:
+        return pairs
+    seen: dict[tuple, int] = {}
+    for i, row in enumerate(sr):
+        key = _sessions_recent_key(row)
+        if key is None:
+            continue
+        prior = seen.get(key)
+        if prior is not None:
+            kind = "instant" if key[0] == "inst" else "literal"
+            pairs.append((prior, i, kind, row["d"].strip()))
+        else:
+            seen[key] = i
+    return pairs
+
+
+def dedup_sessions_recent(hot: dict, *, keep: str = "first") -> tuple[dict, list[dict]]:
+    """Remove duplicate-bootstrap rows from ``hot[sessions_recent]`` (pure on the dict).
+
+    Keeps exactly one row per checkpoint timestamp and drops the phantom duplicate(s)
+    — the repair half of the KA-2 invariant. ``keep="first"`` (default) retains the
+    earliest-indexed row of each duplicate group; ``keep="last"`` retains the latest.
+    Rows with a missing/blank ``d`` and non-dict rows are NEVER removed. Group-correct
+    (handles 3+ rows sharing one timestamp) and idempotent: a second run finds no
+    duplicates and removes nothing. Returns ``(hot, removed_rows)`` with ``hot``
+    mutated in place; ``removed_rows`` are the dropped row dicts in original order.
+    """
+    if keep not in ("first", "last"):
+        raise DriftStoreError(f"keep must be 'first' or 'last', got {keep!r}")
+    sr = hot.get(SESSIONS_RECENT_KEY)
+    if not isinstance(sr, list) or len(sr) < 2:
+        return hot, []
+    groups: dict[tuple, list[int]] = {}
+    for i, row in enumerate(sr):
+        key = _sessions_recent_key(row)
+        if key is None:                       # untouchable (kept verbatim)
+            continue
+        groups.setdefault(key, []).append(i)
+    drop: set[int] = set()
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        chosen = idxs[0] if keep == "first" else idxs[-1]
+        drop.update(j for j in idxs if j != chosen)
+    if not drop:
+        return hot, []
+    removed = [sr[i] for i in sorted(drop)]
+    hot[SESSIONS_RECENT_KEY] = [row for i, row in enumerate(sr) if i not in drop]
+    return hot, removed
+
+
+def dedup_sessions_recent_file(
+    path: Path | str,
+    *,
+    keep: str = "first",
+    now: Optional[str] = None,
+    touch_meta: bool = True,
+) -> tuple[dict, list[dict]]:
+    """Atomically dedup ``sessions_recent`` in a RAG file (refreshes ``.bak``).
+
+    The guarded, atomic counterpart to :func:`dedup_sessions_recent`: load -> dedup
+    -> ``atomic_write_json`` (tmp -> verify -> .bak parity -> rename). When there is
+    nothing to repair NOTHING is written (no spurious .bak churn / meta touch) and
+    ``(hot, [])`` is returned. Returns ``(hot, removed_rows)``.
+    """
+    p = Path(path)
+    hot = load_hot(p)
+    _, removed = dedup_sessions_recent(hot, keep=keep)
+    if not removed:
+        return hot, []
+    if touch_meta:
+        _touch_meta(hot, now)
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
+    return hot, removed

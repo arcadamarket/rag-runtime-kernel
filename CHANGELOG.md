@@ -4,7 +4,11 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
-**KA-2 increment B (pending) — governed `sessions_recent` row-repair/dedup verb.** Increment A (below) ships the *detection* invariant; the paired *repair* path — a guarded, atomic verb to dedup/remove phantom-duplicate `sessions_recent` rows — is still open (tracked as KA-2, IN_PROGRESS).
+_Nothing yet._
+
+## [v0.4.18] — 2026-06-20
+
+**KA-2 increment B — governed `sessions_recent` row-repair/dedup verb (GOVERNANCE-DETERMINISM / KA-10 arc).** The *repair* half that completes KA-2: increment A (v0.4.17) made the kernel **fail loud** on duplicate-bootstrap `sessions_recent` rows (two rows sharing a checkpoint timestamp `d` — the eBay Session-Zero S0/S1 signature) but offered no governed way to fix them, and a hand-edit of the array is exactly the drift the project forbids. New `drift_store.dedup_sessions_recent` (pure) and `dedup_sessions_recent_file` (atomic) remove the phantom duplicate(s), keeping exactly one row per checkpoint timestamp; **group-correct** (handles 3+ rows sharing one instant), **idempotent** (a second run removes nothing), **order-preserving**, and honoring `--keep first|last`. Rows with a missing/blank `d` and non-dict rows are never touched. The file verb writes through the atomic `tmp → verify → .bak → rename` path (FIX-4 byte-parity `.bak` mirror) and is a true **no-op when the ledger is clean** (no spurious `.bak` churn). New CLI `dedup-sessions [--rag …] [--keep first|last] [--session …] [--dry-run]`. **Single source of truth — detect == repair:** the duplicate-detection predicate (`sessions_recent_duplicate_pairs` / `_sessions_recent_key`) now lives in `drift_store` and is consumed by **both** the KA-2 auditor (to flag) and this verb (to repair), so a row the auditor flags is exactly a row the verb removes; the shared date coercers moved down with it and are re-exported from `drift_audit` (public surface unchanged). Also unblocks the eBay deploy's B-3 (`sessions_recent` dedup), which was waiting on this verb. Dogfooded: a synthetic RAG with the S0/S1 shared-timestamp defect dedups to clean and then audits clean; the live project RAG is untouched (no duplicates). `DRIFT_STORE_VERSION` 1.1.0 → **1.2.0**; no schema, WAL-format, or TLA+ change (drift gate `268149294421` unchanged), no new module (19, health 20/20). Suite 1,448 → **1,469** (+21). KA-2 is now **RESOLVED**. Sixth runtime increment of the KA-10 GOVERNANCE-DETERMINISM initiative (after KA-4, KA-6, KA-9, KA-3, KA-2A). (S97)
 
 ## [v0.4.17] — 2026-06-20
 
