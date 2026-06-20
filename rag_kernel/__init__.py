@@ -5,9 +5,7 @@ Zero external dependencies. Python 3.10+ standard library only.
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
-  "version": "0.4.7",
   "description": "OS-level runtime bridge for LLM memory persistence",
-  "spec_version": "3.2.2",
   "python_requires": ">=3.10",
   "dependencies": "stdlib-only",
   "modules": {
@@ -58,7 +56,17 @@ Zero external dependencies. Python 3.10+ standard library only.
 }
 """
 
-__version__ = "0.4.18"
+# ── Single-source version authorities (KA-5 / E-046) ──────────
+# These two module constants are the SOLE source of truth for the kernel's
+# runtime version and the INIT-spec version it targets. The @rag-kernel-manifest
+# docstring above deliberately does NOT hardcode `version` / `spec_version`
+# literals — discover() injects them from here so a published manifest can never
+# drift from the authorities (E-046: the docstring copy had gone stale at
+# 0.4.7 / spec 3.2.2 while the live authorities had moved on). The drift_audit
+# `manifest_version_binding` check fails loud if a literal is ever re-introduced
+# or if the injected manifest disagrees with these constants.
+__version__ = "0.4.19"
+__spec_version__ = "3.2.5"
 
 
 # ── Capability Discovery ──────────────────────────────────────
@@ -156,6 +164,13 @@ def discover() -> dict[str, Any]:
     """
     # Package-level manifest
     pkg_manifest = _extract_manifest(__doc__) or {}
+    # KA-5 / E-046: single-source the version fields. The docstring manifest does
+    # not carry `version` / `spec_version` literals (so there is no copy to drift);
+    # inject them here from the module-level authorities so every consumer of the
+    # package manifest sees the live values. The drift_audit binding check enforces
+    # both that no literal is re-introduced and that this injection matches.
+    pkg_manifest["version"] = __version__
+    pkg_manifest["spec_version"] = __spec_version__
 
     modules: dict[str, dict] = {}
     capabilities: list[str] = []

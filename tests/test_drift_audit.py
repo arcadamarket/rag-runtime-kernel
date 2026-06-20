@@ -44,6 +44,7 @@ from rag_kernel.drift_audit import (
     assert_clean,
     audit_file,
     audit_hot,
+    check_manifest_version_binding,
     check_note_status_contradiction,
     check_render_parity,
     check_side_rule_stores,
@@ -86,8 +87,69 @@ def _rendered_hot(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_severities():
-    assert DRIFT_AUDIT_VERSION == "1.7.0"
+    assert DRIFT_AUDIT_VERSION == "1.8.0"
     assert ERROR == "error" and WARNING == "warning"
+
+
+# ---------------------------------------------------------------------------
+# manifest version single-source binding (KA-5 / E-046)
+# ---------------------------------------------------------------------------
+
+class TestManifestVersionBinding:
+    """check_manifest_version_binding asserts the @rag-kernel-manifest version
+    fields are single-sourced from rag_kernel.__version__ / __spec_version__."""
+
+    def test_live_package_binds_clean(self):
+        """The real kernel package is correctly single-sourced — no findings."""
+        assert check_manifest_version_binding() == []
+
+    def test_docstring_carries_no_version_literal(self):
+        """The single-source contract: the raw manifest docstring must NOT hardcode
+        version / spec_version (discover injects them)."""
+        import rag_kernel
+        raw = rag_kernel._extract_manifest(rag_kernel.__doc__) or {}
+        assert "version" not in raw
+        assert "spec_version" not in raw
+
+    def test_discover_injects_authorities(self):
+        """discover() surfaces the live authorities in the package manifest."""
+        import rag_kernel
+        pkg = rag_kernel.discover()["package"]
+        assert pkg["version"] == rag_kernel.__version__
+        assert pkg["spec_version"] == rag_kernel.__spec_version__
+
+    def test_reintroduced_stale_literal_is_caught(self, monkeypatch):
+        """If a stale version literal is re-introduced into the docstring, the
+        binding check fails loud (the exact E-046 regression)."""
+        import rag_kernel
+        stale_doc = rag_kernel.__doc__.replace(
+            '"package": "rag_kernel",',
+            '"package": "rag_kernel",\n  "version": "0.0.1",', 1)
+        monkeypatch.setattr(rag_kernel, "__doc__", stale_doc)
+        findings = check_manifest_version_binding()
+        assert any(f.check == "manifest_version_binding" and f.severity == ERROR
+                   and "0.0.1" in f.detail for f in findings)
+
+    def test_missing_authority_is_caught(self, monkeypatch):
+        """A missing single-source authority is itself the defect."""
+        import rag_kernel
+        monkeypatch.delattr(rag_kernel, "__spec_version__", raising=False)
+        findings = check_manifest_version_binding()
+        assert any(f.check == "manifest_version_binding" and f.severity == ERROR
+                   and "__spec_version__" in f.detail for f in findings)
+
+    def test_wired_into_audit_hot(self, monkeypatch):
+        """The binding check is always-on in audit_hot — a stale docstring literal
+        surfaces through the aggregate report even on an otherwise-clean HOT."""
+        import rag_kernel
+        clean_hot = _rendered_hot(_clean_store())
+        assert audit_hot(clean_hot).errors == ()  # baseline clean
+        stale_doc = rag_kernel.__doc__.replace(
+            '"package": "rag_kernel",',
+            '"package": "rag_kernel",\n  "spec_version": "0.0.0",', 1)
+        monkeypatch.setattr(rag_kernel, "__doc__", stale_doc)
+        report = audit_hot(clean_hot)
+        assert any(f.check == "manifest_version_binding" for f in report.errors)
 
 
 # ---------------------------------------------------------------------------

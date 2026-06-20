@@ -63,7 +63,7 @@ also *verifies* that every render still equals the state it persisted.
               "check_note_status_contradiction", "check_side_rule_stores",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
-              "check_current_status_coherence",
+              "check_current_status_coherence", "check_manifest_version_binding",
               "check_placeholder_tokens", "check_project_context_placeholders",
               "check_template_keys",
               "check_written_by_session", "check_session_id_coherence",
@@ -148,7 +148,14 @@ from rag_kernel import persistence
 #         clean deploy. Self-skips when sessions_recent is absent/<2 rows or a row's
 #         d is missing. (Increment A; the governed row-repair/dedup verb is the
 #         paired increment B.)
-DRIFT_AUDIT_VERSION = "1.7.0"
+# 1.8.0 — KA-5 (KA-10 GOVERNANCE-DETERMINISM): check_manifest_version_binding fails
+#         loud if the @rag-kernel-manifest version fields drift from the single-source
+#         authorities (rag_kernel.__version__ / __spec_version__). The docstring no
+#         longer hardcodes version/spec_version literals — discover() injects them —
+#         so the E-046 drift (docstring frozen at 0.4.7 / spec 3.2.2 while live was
+#         0.4.12 / spec 3.2.4) is now a standing regression check. Pure introspection
+#         over the package, always-on; self-skips only if rag_kernel can't import.
+DRIFT_AUDIT_VERSION = "1.8.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -724,6 +731,81 @@ def canonical_facts() -> tuple[Optional[str], Optional[int], Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# manifest version single-source binding (KA-5 / E-046)
+# ---------------------------------------------------------------------------
+
+def check_manifest_version_binding() -> list[AuditFinding]:
+    """ERROR if the ``@rag-kernel-manifest`` version fields drift from the kernel's
+    single-source authorities (KA-5 / E-046).
+
+    The runtime version (``rag_kernel.__version__``) and the targeted INIT-spec
+    version (``rag_kernel.__spec_version__``) are the SOLE source of truth. The
+    manifest docstring deliberately carries NO ``version`` / ``spec_version``
+    literal — :func:`rag_kernel.discover` injects them from the authorities — so a
+    published manifest can no longer drift the way E-046 caught (the docstring copy
+    frozen at 0.4.7 / spec 3.2.2 while the real values were 0.4.12 / spec 3.2.4).
+
+    Pure introspection over the kernel package itself (no RAG input), so it is an
+    always-on guard. Three fail-loud sub-checks:
+
+    1. **authority present** — ``__version__`` / ``__spec_version__`` must exist and
+       be non-empty strings (a missing authority IS the defect).
+    2. **no re-introduced literal** — the raw docstring manifest must not hardcode a
+       ``version`` / ``spec_version`` that disagrees with its authority (the
+       single-source contract: the literal should be absent, and is certainly wrong
+       if present and divergent).
+    3. **injection matches** — ``discover()["package"]`` must report each field equal
+       to its authority (the derive-from-authority contract).
+
+    Self-skips entirely if ``rag_kernel`` cannot be imported.
+    """
+    findings: list[AuditFinding] = []
+    try:
+        import rag_kernel
+    except Exception:
+        return findings
+
+    bindings = (
+        ("version", "__version__", getattr(rag_kernel, "__version__", None)),
+        ("spec_version", "__spec_version__", getattr(rag_kernel, "__spec_version__", None)),
+    )
+
+    # (1) authorities present + non-empty.
+    for field_name, attr, value in bindings:
+        if not isinstance(value, str) or not value.strip():
+            findings.append(AuditFinding(
+                check="manifest_version_binding", severity=ERROR,
+                detail=(f"single-source authority rag_kernel.{attr} for manifest "
+                        f"field {field_name!r} is missing or empty (KA-5/E-046)")))
+
+    # (2) the raw docstring manifest must not carry a divergent hardcoded literal.
+    try:
+        raw = rag_kernel._extract_manifest(rag_kernel.__doc__) or {}
+    except Exception:
+        raw = {}
+    for field_name, attr, value in bindings:
+        if field_name in raw and value is not None and raw[field_name] != value:
+            findings.append(AuditFinding(
+                check="manifest_version_binding", severity=ERROR,
+                detail=(f"@rag-kernel-manifest hardcodes {field_name}={raw[field_name]!r} "
+                        f"but the authority rag_kernel.{attr} is {value!r} — remove the "
+                        f"literal; discover() injects it (KA-5/E-046)")))
+
+    # (3) discover()'s injected package manifest must equal the authorities.
+    try:
+        pkg = (rag_kernel.discover() or {}).get("package", {}) or {}
+    except Exception:
+        pkg = {}
+    for field_name, attr, value in bindings:
+        if value is not None and pkg.get(field_name) != value:
+            findings.append(AuditFinding(
+                check="manifest_version_binding", severity=ERROR,
+                detail=(f"discover() package manifest {field_name}={pkg.get(field_name)!r} "
+                        f"!= authority rag_kernel.{attr} {value!r} (KA-5/E-046)")))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # current_status freshness (E-043)
 # ---------------------------------------------------------------------------
 
@@ -1271,6 +1353,9 @@ def audit_hot(
     findings += check_record_coverage(hot, error_log_path=error_log_path)
     findings += check_current_status_freshness(hot, version=version, git_head=git_head)
     findings += check_current_status_coherence(hot)
+    # KA-5/E-046: single-source manifest version binding — pure introspection over
+    # the kernel package (no hot input), always-on.
+    findings += check_manifest_version_binding()
     # FIX-1 integrity invariants over the in-memory state (each self-skips when its
     # source is absent): unsubstituted placeholders, leaked template keys, empty
     # written_by_session, malformed session ids.
