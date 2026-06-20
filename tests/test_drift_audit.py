@@ -86,7 +86,7 @@ def _rendered_hot(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_severities():
-    assert DRIFT_AUDIT_VERSION == "1.5.0"
+    assert DRIFT_AUDIT_VERSION == "1.6.0"
     assert ERROR == "error" and WARNING == "warning"
 
 

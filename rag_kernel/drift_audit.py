@@ -63,6 +63,7 @@ also *verifies* that every render still equals the state it persisted.
               "check_note_status_contradiction", "check_side_rule_stores",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
+              "check_current_status_coherence",
               "check_placeholder_tokens", "check_project_context_placeholders",
               "check_template_keys",
               "check_written_by_session", "check_session_id_coherence",
@@ -79,6 +80,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -117,7 +119,19 @@ from rag_kernel import persistence
 #         so the after-the-fact audit and the new live pre-write guard
 #         (persistence.assert_no_side_stores) cannot diverge. Behavior/report shape
 #         unchanged — same findings, same messages — so the version stays 1.4.0.
-DRIFT_AUDIT_VERSION = "1.5.0"
+# 1.5.0 — KA-9 (KA-10 GOVERNANCE-DETERMINISM): check_project_context_placeholders
+#         fails loud on residual lowercase/spaced human-fill ``<...>`` tokens in
+#         project_context that the UPPER_SNAKE scan missed (the eBay session-zero
+#         ``<from user>`` defect).
+# 1.6.0 — KA-3 (KA-10 GOVERNANCE-DETERMINISM): check_current_status_coherence
+#         asserts current_status's denormalized self-facts agree with ``meta`` —
+#         current_status.session == meta.written_by_session and the calendar day
+#         of current_status.last_updated == that of meta.last_updated_utc. The eBay
+#         deploy froze current_status.session at S0 and ran last_updated two days
+#         behind meta while audit --strict reported 0 findings. Fail-loud ERROR,
+#         self-skips when either side is absent/unparseable (this kernel's own RAG
+#         omits these keys, so it stays clean).
+DRIFT_AUDIT_VERSION = "1.6.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -766,6 +780,95 @@ def check_current_status_freshness(
     return findings
 
 
+def _coerce_utc_date(value) -> Optional[date]:
+    """Parse an ISO date / datetime string to its UTC calendar day, else ``None``.
+
+    Accepts a bare ``YYYY-MM-DD`` (``current_status.last_updated``'s usual shape)
+    or a full ISO instant (``meta.last_updated_utc``, possibly ``Z``-suffixed). A
+    timezone-aware instant is normalized to UTC before its day is taken; a naive
+    one is read as-is. Anything unparseable yields ``None`` so the caller silently
+    self-skips rather than crashing on a malformed field.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    try:                                  # bare calendar day, the common case
+        return date.fromisoformat(raw)
+    except ValueError:
+        pass
+    iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.date()
+
+
+def check_current_status_coherence(hot: dict) -> list[AuditFinding]:
+    """ERROR if ``current_status``'s denormalized self-facts contradict ``meta`` (KA-3).
+
+    Where :func:`check_current_status_freshness` guards two facts whose authority
+    lives OUTSIDE the RAG (the kernel ``__version__`` and the git HEAD), this guards
+    two facts that ``current_status`` denormalizes from ``meta`` INSIDE the same
+    RAG and must therefore equal exactly:
+
+      * ``current_status.session`` == ``meta.written_by_session``
+      * calendar day of ``current_status.last_updated`` == that of
+        ``meta.last_updated_utc``
+
+    The eBay Session-Zero deploy froze ``current_status.session`` at ``S0`` while
+    the machine had moved on, and carried a ``current_status.last_updated`` (06-16)
+    a full two days behind ``meta.last_updated_utc`` (06-18); ``audit --strict``
+    still reported 0 findings because no invariant compared the two — the same
+    governance blind spot the KA-10 arc exists to close. Each sub-check self-skips
+    when either side is absent or unparseable (mirrors the other conditional
+    checks), so a RAG whose ``current_status`` omits these keys — like this
+    kernel's own — audits clean rather than being falsely flagged. The date is
+    compared by calendar day (UTC), not by exact instant: ``current_status``
+    records a day, ``meta`` a full timestamp, and only the day is the shared
+    denormalized fact.
+    """
+    findings: list[AuditFinding] = []
+    cs = hot.get("current_status") if isinstance(hot, dict) else None
+    meta = hot.get("meta") if isinstance(hot, dict) else None
+    if not isinstance(cs, dict) or not isinstance(meta, dict):
+        return findings
+
+    # 1. session identity: current_status.session must name the session that last
+    #    wrote the RAG. Both sides must be present and non-empty to compare (an
+    #    empty written_by_session is check_written_by_session's concern, not this).
+    cs_session = cs.get("session")
+    wbs = meta.get("written_by_session")
+    if (isinstance(cs_session, str) and cs_session.strip()
+            and isinstance(wbs, str) and wbs.strip()
+            and cs_session.strip() != wbs.strip()):
+        findings.append(AuditFinding(
+            check="current_status_coherence", severity=ERROR,
+            detail=(
+                f"current_status.session = {cs_session.strip()!r} but "
+                f"meta.written_by_session = {wbs.strip()!r} — current_status is "
+                "frozen at a stale session (KA-3); refresh it at checkpoint"
+            ),
+        ))
+
+    # 2. last-updated day: current_status.last_updated and meta.last_updated_utc
+    #    must agree on the calendar day. Skip silently if either is unparseable.
+    cs_day = _coerce_utc_date(cs.get("last_updated"))
+    meta_day = _coerce_utc_date(meta.get("last_updated_utc"))
+    if cs_day is not None and meta_day is not None and cs_day != meta_day:
+        findings.append(AuditFinding(
+            check="current_status_coherence", severity=ERROR,
+            detail=(
+                f"current_status.last_updated day {cs_day.isoformat()} != "
+                f"meta.last_updated_utc day {meta_day.isoformat()} — stale "
+                "current_status snapshot (KA-3); refresh it at checkpoint"
+            ),
+        ))
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Integrity invariants (FIX-1 / K1+K2) — the family the auditor was blind to
 # ---------------------------------------------------------------------------
@@ -1116,6 +1219,7 @@ def audit_hot(
     findings += check_ledger_consistency(hot)
     findings += check_record_coverage(hot, error_log_path=error_log_path)
     findings += check_current_status_freshness(hot, version=version, git_head=git_head)
+    findings += check_current_status_coherence(hot)
     # FIX-1 integrity invariants over the in-memory state (each self-skips when its
     # source is absent): unsubstituted placeholders, leaked template keys, empty
     # written_by_session, malformed session ids.
@@ -1231,6 +1335,7 @@ __all__ = [
     "check_record_coverage",
     "check_repo_claim_reconciliation",
     "check_current_status_freshness",
+    "check_current_status_coherence",
     "check_placeholder_tokens",
     "check_project_context_placeholders",
     "check_template_keys",
