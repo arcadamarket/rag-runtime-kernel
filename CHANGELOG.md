@@ -6,6 +6,10 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.13] — 2026-06-20
+
+**KA-4 — checkpoint-to-close enforcement (GOVERNANCE-DETERMINISM / KA-10 arc).** The kernel now *refuses* to close a started session on the CLI unless that session checkpointed first. Root cause (eBay S4): an agent ended sessions on `configure`/`audit` (or a scratch script) without ever running `checkpoint`, leaving `meta.written_by_session` stale across sessions — a silent governance freeze that recurred even after the S89 prose-only guide fix, proving enforcement must be code, not prose. `session close <id>` now evaluates a checkpoint gate (`meta.written_by_session == <id>`, the precise inverse of the freeze signature) and refuses with a non-zero exit + remediation hint when it is absent; a sanctioned `--force` override closes anyway with a loud warning, so a blocked agent does not resort to an unsanctioned scratch script (the eBay deploy accumulated ~20 such scratch scripts). The programmatic `KernelApp.close()` already force-checkpoints on close (ENH-006) — this closes the standalone-CLI hole the deploy actually froze on. A no-op close (no log file) stays a harmless no-op. CLI-only — no schema, WAL-format, or TLA+ change (drift gate `268149294421` unchanged), no new module (health 20/20). Suite 1,372 → **1,381** (+9: a 4-case gate predicate + 5 end-to-end close paths). First increment of the KA-10 GOVERNANCE-DETERMINISM initiative. (S91)
+
 ## [v0.4.12] — 2026-06-16
 
 **Release bundle — FIX-9 … FIX-12 (eBay Session-Zero deploy-audit lane, U1–U4).** Bundles the four universal kernel fixes that landed on `main` after v0.4.11 into a single runtime release. All are CLI / persistence / logger-level — no schema, WAL-format, or TLA+ change (drift gate `268149294421` unchanged), no new module (health 20/20). Suite 1,302 → **1,372** (+70).

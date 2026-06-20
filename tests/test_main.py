@@ -125,6 +125,13 @@ class TestSessionCommand:
     def test_session_close_after_start(self, tmp_path):
         # Start
         main(["session", "start", "S_TEST2", "--rag-dir", str(tmp_path)])
+        # KA-4: a started session must be checkpointed before it can close.
+        # A checkpoint stamps meta.written_by_session; emulate that here.
+        (tmp_path / "RAG_MASTER.json").write_text(
+            json.dumps({"meta": {"written_by_session": "S_TEST2",
+                                 "last_checkpoint_seq": 1}}),
+            encoding="utf-8",
+        )
         # Close
         result = main(["session", "close", "S_TEST2", "--rag-dir", str(tmp_path)])
         assert result == 0
@@ -133,6 +140,8 @@ class TestSessionCommand:
         assert "session_end" in content
 
     def test_session_close_no_log_file(self, tmp_path):
+        # No log file => nothing was started => the KA-4 gate does not apply;
+        # closing is a harmless no-op that warns rather than errors.
         result = main(["session", "close", "S_NONEXISTENT", "--rag-dir", str(tmp_path)])
         assert result == 0  # Should not error, just warn
 

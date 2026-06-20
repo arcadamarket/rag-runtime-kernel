@@ -228,6 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     session_close = session_sub.add_parser("close", help="Write session_end entry and close logger.")
     session_close.add_argument("session_id", type=str, help="Session identifier to close")
     session_close.add_argument("--rag-dir", type=Path, default=Path("."), help="Directory containing RAG files (default: .)")
+    session_close.add_argument(
+        "--force",
+        action="store_true",
+        help="Close even without a checkpoint by this session (UNSAFE — KA-4 override).",
+    )
 
     # -- checkpoint --
     ckpt_parser = subparsers.add_parser(
@@ -1246,6 +1251,41 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0 if clean else 1
 
 
+def _session_checkpoint_gate(rag_path: Path, session_id: str) -> tuple[bool, str]:
+    """KA-4 close gate: is ``session_id`` safe to close (i.e. checkpointed)?
+
+    The ``ran-but-never-checkpointed`` governance freeze (eBay S4) happened
+    because an agent ended a session on ``configure``/``audit`` (or a scratch
+    script) without ever running ``checkpoint``. A checkpoint stamps
+    ``meta.written_by_session`` with the session id (and appends a
+    ``sessions_recent`` row); the absence of that stamp is the freeze signature.
+
+    Returns ``(ok, reason)``. ``ok`` is True iff the RAG shows a checkpoint by
+    this exact session — the precise inverse of the freeze condition. The
+    programmatic ``KernelApp.close()`` already force-checkpoints on close
+    (ENH-006); this guards the standalone CLI ``session close`` path, which the
+    CLI-driven eBay deploy used to freeze on.
+    """
+    import json as _json
+
+    if not rag_path.exists():
+        return False, f"RAG_MASTER.json not found at {rag_path} — cannot confirm a checkpoint"
+    try:
+        with open(rag_path, "r", encoding="utf-8") as f:
+            rag = _json.load(f)
+    except (OSError, ValueError) as exc:
+        return False, f"RAG_MASTER.json unreadable ({exc}) — cannot confirm a checkpoint"
+
+    meta = rag.get("meta") or {}
+    written_by = meta.get("written_by_session")
+    if written_by == session_id:
+        return True, "checkpoint present (meta.written_by_session matches)"
+    return False, (
+        f"no checkpoint by this session "
+        f"(meta.written_by_session={written_by!r}, expected {session_id!r})"
+    )
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     """Start or close a session logger via CLI.
 
@@ -1280,9 +1320,48 @@ def cmd_session(args: argparse.Namespace) -> int:
             print(f"WARNING: RAG_MASTER.json not found at {rag_dir}")
         return 0
     elif action == "close":
-        # Attach to resume the sequence WITHOUT a spurious second session_start
-        # (FIX-12 / U4), then write the session_end marker.
+        # KA-4 — checkpoint-to-close enforcement. Refuse to close a *started*
+        # session (one that produced a log) unless it was checkpointed first.
+        # This is the code-level guard that the S89 prose-only guide fix could
+        # not provide and that the eBay S4 ran-but-never-checkpointed freeze
+        # proved necessary. A no-op close (no log file) stays a harmless no-op.
         if logger.log_path.exists():
+            rag_path = rag_dir / "RAG_MASTER.json"
+            gate_ok, reason = _session_checkpoint_gate(rag_path, session_id)
+            force = getattr(args, "force", False)
+            if not gate_ok and not force:
+                print(
+                    f"ERROR: refusing to close session {session_id} — {reason}",
+                    file=sys.stderr,
+                )
+                print(
+                    "  A session must be checkpointed before it can be closed "
+                    "(prevents the ran-but-never-checkpointed governance freeze, KA-4).",
+                    file=sys.stderr,
+                )
+                print(
+                    f'  Run:  rag_kernel checkpoint --rag "{rag_path}" '
+                    f'--session {session_id} --summary "..."',
+                    file=sys.stderr,
+                )
+                print(
+                    "  To close anyway (UNSAFE — leaves governance state stale), pass --force.",
+                    file=sys.stderr,
+                )
+                return 1
+            if not gate_ok and force:
+                print(
+                    f"WARNING: closing session {session_id} WITHOUT a checkpoint "
+                    f"(--force) — {reason}",
+                    file=sys.stderr,
+                )
+                print(
+                    "  Governance state (written_by_session / last_checkpoint_seq) is left "
+                    "stale. KA-4 override used; this should be rare and deliberate.",
+                    file=sys.stderr,
+                )
+            # Attach to resume the sequence WITHOUT a spurious second session_start
+            # (FIX-12 / U4), then write the session_end marker.
             logger.attach()
             logger.close()
             print(f"Session {session_id} closed.")

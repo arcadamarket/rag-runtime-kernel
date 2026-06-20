@@ -104,6 +104,11 @@ def test_cmd_session_close_no_duplicate_start(tmp_path):
     log = tmp_path / f"{LOG_FILE_PREFIX}S1{LOG_FILE_EXT}"
     assert log.exists()
 
+    # KA-4: close requires a checkpoint by this session (meta.written_by_session).
+    (tmp_path / "RAG_MASTER.json").write_text(
+        json.dumps({"meta": {"written_by_session": "S1", "last_checkpoint_seq": 1}}),
+        encoding="utf-8",
+    )
     cli.cmd_session(_ns(session_action="close", session_id="S1", rag_dir=tmp_path))
     evs = _events(log)
     starts = [e for e in evs if e["event"] == "session_start"]
