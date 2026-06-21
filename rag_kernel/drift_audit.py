@@ -155,7 +155,7 @@ from rag_kernel import persistence
 #         so the E-046 drift (docstring frozen at 0.4.7 / spec 3.2.2 while live was
 #         0.4.12 / spec 3.2.4) is now a standing regression check. Pure introspection
 #         over the package, always-on; self-skips only if rag_kernel can't import.
-DRIFT_AUDIT_VERSION = "1.8.0"
+DRIFT_AUDIT_VERSION = "1.9.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -269,6 +269,17 @@ _SEMVER_RE = re.compile(r"(\d+\.\d+\.\d+)")
 # (the negative-looking S-12488-1781260490 the eBay deploy minted, K7). A
 # canonical id is "S" + a non-negative integer (S0, S70, ...).
 _BAD_SESSION_ID_RE = re.compile(r"^S-\d")
+# A canonical session id is "S" + a non-negative integer (S0, S70, ...); KA-1
+# compares the numeric ORDINAL of a completed session log against the last
+# checkpoint's session. (S-<digit> malformed ids are check_session_id_coherence's
+# concern and parse to None here, so they are skipped — no double-report.)
+_SESSION_ID_INT_RE = re.compile(r"^S(\d+)$")
+# Conventional per-session log filename beside the RAG (RAG/session_log_<sid>.jsonl)
+# and the close-marker event written by SessionLogger.close(emit_end=True). A log
+# carrying this event ran to a CLEAN close (not still-open / detached / crashed).
+_SESSION_LOG_GLOB = "session_log_*.jsonl"
+_SESSION_LOG_PREFIX = "session_log_"
+_SESSION_END_EVENT = "session_end"
 # State in which written_by_session is legitimately not-yet-stamped: a freshly
 # init'd RAG sits BOOTING before its first checkpoint stamps the session id.
 _PRE_CHECKPOINT_STATE = "BOOTING"
@@ -1168,6 +1179,103 @@ def check_sessions_recent_coherence(hot: dict) -> list[AuditFinding]:
     return findings
 
 
+def _session_id_int(sid: object) -> Optional[int]:
+    """Numeric ordinal of a canonical ``S<int>`` session id, else ``None``.
+
+    ``"S98" -> 98``; ``"S0" -> 0``; a malformed/negative ``"S-12488-…"`` or any
+    non-``S<int>`` value -> ``None`` (left to :func:`check_session_id_coherence`).
+    """
+    if not isinstance(sid, str):
+        return None
+    m = _SESSION_ID_INT_RE.match(sid.strip())
+    return int(m.group(1)) if m else None
+
+
+def _session_log_completed(path: Path) -> bool:
+    """True iff a session log file contains a ``session_end`` marker entry.
+
+    A ``session_end`` is written only by ``SessionLogger.close(emit_end=True)``,
+    so its presence means the session ran to a CLEAN close — distinguishing a
+    finished session from a still-open / detached (``emit_end=False``) / crashed
+    one. Replay-tolerant: malformed lines are skipped, not treated as defects.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict) and entry.get("event") == _SESSION_END_EVENT:
+            return True
+    return False
+
+
+def check_uncheckpointed_session(rag_dir: Path | str, hot: dict) -> list[AuditFinding]:
+    """ERROR when a *completed* session ran but was never checkpointed (KA-1).
+
+    The eBay governance freeze (S88 headline: "deployed auditor passed clean
+    while governance frozen at S0/seq1") happened because an agent ended sessions
+    on ``configure``/``audit`` (or a scratch script) without ever running
+    ``checkpoint`` — so ``meta.written_by_session`` stayed behind while later
+    sessions ran. The KA-4 close gate (:func:`_session_checkpoint_gate`) stops the
+    LIVE session from closing un-checkpointed, but the AUDITOR itself never
+    asserted it — the exact blind spot that let an already-frozen RAG report
+    clean. This is that missing fail-loud invariant.
+
+    Signal — a session log beside the RAG (``session_log_<sid>.jsonl``) that both
+    (a) carries a ``session_end`` marker (ran to a clean close), and (b) has a
+    numeric session ordinal GREATER than ``meta.written_by_session``'s ordinal. A
+    clean close force-checkpoints (ENH-006) or is gated (KA-4), so on a healthy
+    RAG the newest *completed* log IS ``written_by_session`` (equal, never
+    greater) and the check is silent; only a session that closed without advancing
+    the checkpoint — the freeze signature — sits newer than the last checkpoint.
+
+    Deliberately NOT flagged, and why: a still-open / detached / crashed log (no
+    ``session_end``) — that is the in-flight CURRENT session, legitimately newer
+    than the last checkpoint until it closes, so keying on ``session_end`` avoids
+    false-positiving the running session; and any log with an ordinal
+    ``<= written_by_session`` (a historical session that did checkpoint, whose log
+    persists). Self-skips on a pre-checkpoint ``BOOTING`` RAG, when
+    ``written_by_session`` is missing / empty / not a canonical ``S<int>``
+    (:func:`check_written_by_session` and :func:`check_session_id_coherence` own
+    those), and when the RAG directory holds no session logs.
+    """
+    findings: list[AuditFinding] = []
+    if not isinstance(hot, dict):
+        return findings
+    if hot.get("state_machine_status") == _PRE_CHECKPOINT_STATE:
+        return findings
+    meta = hot.get("meta")
+    if not isinstance(meta, dict):
+        return findings
+    cp_ord = _session_id_int(meta.get("written_by_session"))
+    if cp_ord is None:
+        return findings
+    d = Path(rag_dir)
+    if not d.is_dir():
+        return findings
+    for log_path in sorted(d.glob(_SESSION_LOG_GLOB)):
+        sid_ord = _session_id_int(log_path.stem[len(_SESSION_LOG_PREFIX):])
+        if sid_ord is None or sid_ord <= cp_ord:
+            continue
+        if not _session_log_completed(log_path):
+            continue  # still-open / detached / crashed: the in-flight session
+        findings.append(AuditFinding(
+            check="uncheckpointed_session", severity=ERROR,
+            detail=(f"{log_path.name} ran to a clean close (session_end) as "
+                    f"session S{sid_ord}, but the last checkpoint is frozen at "
+                    f"meta.written_by_session={meta.get('written_by_session')!r} "
+                    f"(S{cp_ord}) — ran-but-never-checkpointed (KA-1); a clean "
+                    "close must checkpoint first (the eBay S0/seq1 freeze)")))
+    return findings
+
+
 def check_wal_integrity(wal_path: Path | str) -> list[AuditFinding]:
     """ERROR if the WAL sequence is not strictly monotonic by +1 (K1).
 
@@ -1434,6 +1542,10 @@ def audit_file(
     extra += check_wal_integrity(p.parent / wal_name)
     extra += check_bak_parity(p, hot)
     extra += check_cold_hot_version(p.parent / cold_name, hot)
+    # KA-1: ran-but-never-checkpointed — a completed session log (RAG/session_log_
+    # <sid>.jsonl) newer than meta.written_by_session is the governance-freeze
+    # signature the auditor previously missed. RAG dir = p.parent; self-skips clean.
+    extra += check_uncheckpointed_session(p.parent, hot)
     # FIX-5/P2: stray *_context.json beside the RAG (RAG dir = p.parent). Part of
     # the Rule 13 side-store family, so gated by the same scan_root toggle.
     if use_root is not None:
@@ -1479,6 +1591,7 @@ __all__ = [
     "check_written_by_session",
     "check_session_id_coherence",
     "check_sessions_recent_coherence",
+    "check_uncheckpointed_session",
     "check_wal_integrity",
     "check_bak_parity",
     "check_cold_hot_version",
