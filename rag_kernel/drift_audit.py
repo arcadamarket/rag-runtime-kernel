@@ -155,7 +155,19 @@ from rag_kernel import persistence
 #         so the E-046 drift (docstring frozen at 0.4.7 / spec 3.2.2 while live was
 #         0.4.12 / spec 3.2.4) is now a standing regression check. Pure introspection
 #         over the package, always-on; self-skips only if rag_kernel can't import.
-DRIFT_AUDIT_VERSION = "1.9.0"
+# 1.9.0 — KA-1 (KA-10 GOVERNANCE-DETERMINISM): check_uncheckpointed_session fails
+#         loud (at rest) when a COMPLETED session log (session_end) sits NEWER than
+#         meta.written_by_session — the ran-but-never-checkpointed governance freeze
+#         (eBay S0/seq1) the auditor previously missed; keys on session_end so the
+#         in-flight session is never false-positived.
+# 1.10.0 — KA-7 (KA-10 GOVERNANCE-DETERMINISM): check_observability_coherence fails
+#         loud when meta.written_by_session advanced PAST the newest session log that
+#         holds entries (cp_ord > max logged ordinal) — meta advanced but the
+#         observability trail did not (the eBay logs stopped at S1 while meta kept
+#         advancing, audit still clean). Complement of KA-1 (a completed log newer
+#         than the checkpoint); the two are mutually exclusive. Self-skips on BOOTING,
+#         missing/non-canonical written_by, and when NO session log carries entries.
+DRIFT_AUDIT_VERSION = "1.10.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -1216,6 +1228,31 @@ def _session_log_completed(path: Path) -> bool:
     return False
 
 
+def _session_log_has_entries(path: Path) -> bool:
+    """True iff a session log file holds at least one parseable JSON entry.
+
+    An absent, empty, whitespace-only, or wholly-unparseable file is NOT a trail.
+    Replay-tolerant: malformed lines are skipped; a single good entry suffices.
+    Distinct from :func:`_session_log_completed` (which requires a ``session_end``
+    close marker) — here ANY entry proves the logger ran for that session.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict):
+            return True
+    return False
+
+
 def check_uncheckpointed_session(rag_dir: Path | str, hot: dict) -> list[AuditFinding]:
     """ERROR when a *completed* session ran but was never checkpointed (KA-1).
 
@@ -1273,6 +1310,67 @@ def check_uncheckpointed_session(rag_dir: Path | str, hot: dict) -> list[AuditFi
                     f"meta.written_by_session={meta.get('written_by_session')!r} "
                     f"(S{cp_ord}) — ran-but-never-checkpointed (KA-1); a clean "
                     "close must checkpoint first (the eBay S0/seq1 freeze)")))
+    return findings
+
+
+def check_observability_coherence(rag_dir: Path | str, hot: dict) -> list[AuditFinding]:
+    """ERROR when meta advanced past the newest session-log trail (KA-7).
+
+    The eBay governance freeze had a second silent signature beside KA-1: the
+    per-session logs stopped at S1 while ``meta.written_by_session`` kept advancing
+    across later sessions — sessions ran and checkpointed but opened no logger, so
+    no ``session_log_S<N>.jsonl`` trail was ever written, and ``audit --strict``
+    still reported 0 findings. KA-1 catches a COMPLETED log NEWER than the
+    checkpoint (ran-but-never-checkpointed); KA-7 is its dual — the checkpoint
+    advancing NEWER than the last observability trail.
+
+    Signal — among the session logs beside the RAG that hold at least one entry,
+    the greatest ordinal is ``max_logged``; the check fires iff the checkpoint
+    ordinal ``meta.written_by_session`` is STRICTLY GREATER than ``max_logged``
+    (meta advanced beyond where logging stopped). Because KA-1 fires only when a log
+    is newer than the checkpoint and KA-7 only when the checkpoint is newer than
+    every log, the two are mutually exclusive and never double-report.
+
+    Deliberately NOT keyed on ERROR_LOG.md: a clean session legitimately records no
+    error, so a missing ERROR_LOG entry is not a defect — the session log is the
+    mandatory per-session artifact (opened at session-start). Self-skips on a
+    pre-checkpoint ``BOOTING`` RAG, when ``written_by_session`` is missing / empty /
+    not a canonical ``S<int>`` (:func:`check_written_by_session` /
+    :func:`check_session_id_coherence` own those), when the RAG directory is absent,
+    and — crucially — when NO session log carries any entry (a project not using the
+    logger, or a pure in-memory unit fixture: nothing to be coherent WITH).
+    """
+    findings: list[AuditFinding] = []
+    if not isinstance(hot, dict):
+        return findings
+    if hot.get("state_machine_status") == _PRE_CHECKPOINT_STATE:
+        return findings
+    meta = hot.get("meta")
+    if not isinstance(meta, dict):
+        return findings
+    cp_ord = _session_id_int(meta.get("written_by_session"))
+    if cp_ord is None:
+        return findings
+    d = Path(rag_dir)
+    if not d.is_dir():
+        return findings
+    logged: list[int] = []
+    for log_path in d.glob(_SESSION_LOG_GLOB):
+        o = _session_id_int(log_path.stem[len(_SESSION_LOG_PREFIX):])
+        if o is not None and _session_log_has_entries(log_path):
+            logged.append(o)
+    if not logged:
+        return findings  # no logger in use here: nothing to be coherent with
+    max_logged = max(logged)
+    if cp_ord <= max_logged:
+        return findings  # trail kept pace (equal) or a newer log exists (KA-1's lane)
+    findings.append(AuditFinding(
+        check="observability_coherence", severity=ERROR,
+        detail=(f"meta.written_by_session={meta.get('written_by_session')!r} "
+                f"(S{cp_ord}) advanced past the newest session-log trail "
+                f"(session_log_S{max_logged}.jsonl) — meta advanced but "
+                "observability did not (KA-7); the eBay logs stopped at S1 while "
+                "meta kept advancing, and audit still reported clean")))
     return findings
 
 
@@ -1546,6 +1644,10 @@ def audit_file(
     # <sid>.jsonl) newer than meta.written_by_session is the governance-freeze
     # signature the auditor previously missed. RAG dir = p.parent; self-skips clean.
     extra += check_uncheckpointed_session(p.parent, hot)
+    # KA-7: observability-coherence — the dual of KA-1. If meta.written_by_session
+    # advanced PAST the newest session log that holds entries, the per-session trail
+    # stopped while the checkpoint kept moving (the eBay logs-stopped-at-S1 freeze).
+    extra += check_observability_coherence(p.parent, hot)
     # FIX-5/P2: stray *_context.json beside the RAG (RAG dir = p.parent). Part of
     # the Rule 13 side-store family, so gated by the same scan_root toggle.
     if use_root is not None:
@@ -1592,6 +1694,7 @@ __all__ = [
     "check_session_id_coherence",
     "check_sessions_recent_coherence",
     "check_uncheckpointed_session",
+    "check_observability_coherence",
     "check_wal_integrity",
     "check_bak_parity",
     "check_cold_hot_version",
