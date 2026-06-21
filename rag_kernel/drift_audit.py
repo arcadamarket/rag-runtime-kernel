@@ -167,7 +167,14 @@ from rag_kernel import persistence
 #         advancing, audit still clean). Complement of KA-1 (a completed log newer
 #         than the checkpoint); the two are mutually exclusive. Self-skips on BOOTING,
 #         missing/non-canonical written_by, and when NO session log carries entries.
-DRIFT_AUDIT_VERSION = "1.10.0"
+# 1.11.0 — KA-11 (KA-10 GOVERNANCE-DETERMINISM): the Rule 11 published-doc
+#         reconciliation surfaces are now resolved from the per-project manifest
+#         meta.reconciliation_surfaces (TierC) via reconciliation_surfaces(), instead
+#         of the formerly hardcoded README/CHANGELOG/docs-ROADMAP doc_paths. Absent/
+#         empty/malformed manifest falls back to the universal defaults, so the
+#         auditor is no longer kernel-repo-specific yet stays byte-for-byte back-
+#         compatible for every RAG that has not declared a manifest.
+DRIFT_AUDIT_VERSION = "1.11.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -299,6 +306,12 @@ _PRE_CHECKPOINT_STATE = "BOOTING"
 # meta.rag_files) for the file-based integrity checks.
 _DEFAULT_WAL_NAME = "WAL.jsonl"
 _DEFAULT_COLD_NAME = "RAG_COLD.json"
+# KA-11 (TierC surface manifest): the file-based published surfaces the Rule 11
+# reconciliation reads, RELATIVE to docs_root. Universal default for a kernel-style
+# repo; per-project override lives in meta.reconciliation_surfaces (a list of
+# paths). Absent/empty manifest -> these defaults, so every pre-KA-11 RAG and every
+# deployment that has not declared surfaces still reconciles exactly as before.
+_DEFAULT_RECONCILIATION_SURFACES = ("README.md", "CHANGELOG.md", "docs/ROADMAP.md")
 
 
 # ---------------------------------------------------------------------------
@@ -1580,6 +1593,36 @@ def audit_hot(
     return AuditReport(tuple(findings))
 
 
+def reconciliation_surfaces(
+    hot: dict, docs_root: Path | str
+) -> list[Path]:
+    """KA-11: resolve the file-based reconciliation surfaces for a project.
+
+    Returns absolute paths (under ``docs_root``) for the published docs the Rule 11
+    reconciliation must read. The list comes from the per-project manifest at
+    ``meta.reconciliation_surfaces`` (TierC: each project declares WHICH surfaces
+    are drift-prone — kernel = README / CHANGELOG / ROADMAP); when that manifest is
+    absent, empty, or malformed, the universal :data:`_DEFAULT_RECONCILIATION_SURFACES`
+    apply. This is what replaces the formerly hardcoded ``doc_paths`` so the auditor
+    is no longer kernel-repo-specific while staying byte-for-byte back-compatible for
+    every RAG that has not (yet) declared a manifest.
+
+    Surfaces are joined relative to ``docs_root`` (the git worktree where published
+    docs live), mirroring the historical hardcoded behaviour.
+    """
+    dr = Path(docs_root)
+    meta = hot.get("meta") or {}
+    declared = meta.get("reconciliation_surfaces")
+    if not isinstance(declared, (list, tuple)) or not declared:
+        surfaces: tuple[str, ...] | list = _DEFAULT_RECONCILIATION_SURFACES
+    else:
+        # keep only non-empty string entries; an all-bad manifest falls back too
+        surfaces = [s for s in declared if isinstance(s, str) and s.strip()]
+        if not surfaces:
+            surfaces = _DEFAULT_RECONCILIATION_SURFACES
+    return [dr / s for s in surfaces]
+
+
 def audit_file(
     path: Path | str,
     *,
@@ -1598,8 +1641,10 @@ def audit_file(
     ``error_log_path`` defaults to ``ERROR_LOG.md`` beside the RAG file (so E-###
     coverage is checked by default). The Rule 11 published-doc reconciliation runs
     only when ``docs_root`` is given (the published docs live in the git worktree,
-    not next to the RAG): it reconciles ``README.md`` / ``CHANGELOG.md`` /
-    ``docs/ROADMAP.md`` under ``docs_root`` against the live canonical facts.
+    not next to the RAG): it reconciles the surfaces resolved by
+    :func:`reconciliation_surfaces` (the per-project ``meta.reconciliation_surfaces``
+    manifest, defaulting to ``README.md`` / ``CHANGELOG.md`` / ``docs/ROADMAP.md``)
+    under ``docs_root`` against the live canonical facts.
     """
     p = Path(path)
     hot = load_hot(p)
@@ -1622,8 +1667,9 @@ def audit_file(
     # the Rule 11 doc reconciliation (and ignored by audit_hot without doc_paths).
     version, module_count, drift_sha = canonical_facts()
     if docs_root is not None:
-        dr = Path(docs_root)
-        doc_paths = [dr / "README.md", dr / "CHANGELOG.md", dr / "docs" / "ROADMAP.md"]
+        # KA-11: surfaces come from the per-project manifest (meta.reconciliation_
+        # surfaces), falling back to the universal defaults — no longer hardcoded.
+        doc_paths = reconciliation_surfaces(hot, docs_root)
 
     report = audit_hot(
         hot, root=use_root, error_log_path=elp, doc_paths=doc_paths,
@@ -1685,6 +1731,7 @@ __all__ = [
     "check_ledger_consistency",
     "check_record_coverage",
     "check_repo_claim_reconciliation",
+    "reconciliation_surfaces",
     "check_current_status_freshness",
     "check_current_status_coherence",
     "check_placeholder_tokens",

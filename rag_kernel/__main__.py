@@ -436,7 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser2.add_argument(
         "--docs-root", type=Path, default=None,
         help="Enable the Rule 11 published-doc reconciliation against this docs root "
-             "(reconciles README.md / CHANGELOG.md / docs/ROADMAP.md vs the canonical facts).",
+             "(reconciles the surfaces in meta.reconciliation_surfaces — defaulting to "
+             "README.md / CHANGELOG.md / docs/ROADMAP.md — vs the canonical facts).",
     )
     audit_parser2.add_argument(
         "--error-log", type=Path, default=None,

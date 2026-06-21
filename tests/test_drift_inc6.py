@@ -371,3 +371,61 @@ def test_migration_roundtrip(tmp_path):
     # task backlog renders stayed scoped (records did not leak in)
     assert data["open_tasks"] == ["TASK-1 [OPEN · —]: TASK-1 title"]
     assert data["deferred_items"] == []
+
+
+# ---------------------------------------------------------------------------
+# KA-11: per-project reconciliation-surface manifest
+# (meta.reconciliation_surfaces replaces the formerly hardcoded doc_paths)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_SURFACES = ("README.md", "CHANGELOG.md", "docs/ROADMAP.md")
+
+
+def _expected_defaults(root):
+    return [root / "README.md", root / "CHANGELOG.md", root / "docs" / "ROADMAP.md"]
+
+
+def test_reconciliation_surfaces_default_when_absent(tmp_path):
+    # No manifest -> universal defaults, joined under docs_root (back-compat).
+    assert drift_audit.reconciliation_surfaces(_hot(), tmp_path) == _expected_defaults(tmp_path)
+
+
+def test_reconciliation_surfaces_custom_manifest(tmp_path):
+    hot = _hot()
+    hot["meta"]["reconciliation_surfaces"] = ["README.md", "listings/OFFERS.md"]
+    assert drift_audit.reconciliation_surfaces(hot, tmp_path) == [
+        tmp_path / "README.md", tmp_path / "listings" / "OFFERS.md"]
+
+
+@pytest.mark.parametrize("bad", [[], "", None, ["  ", ""], 42, {"a": 1}])
+def test_reconciliation_surfaces_malformed_falls_back(tmp_path, bad):
+    # Absent/empty/malformed manifest -> defaults; the auditor never silently
+    # reconciles zero surfaces because a project declared a bad manifest.
+    hot = _hot()
+    hot["meta"]["reconciliation_surfaces"] = bad
+    assert drift_audit.reconciliation_surfaces(hot, tmp_path) == _expected_defaults(tmp_path)
+
+
+def test_reconciliation_surfaces_drops_nonstring_entries(tmp_path):
+    hot = _hot()
+    hot["meta"]["reconciliation_surfaces"] = ["README.md", 7, None, "docs/X.md"]
+    assert drift_audit.reconciliation_surfaces(hot, tmp_path) == [
+        tmp_path / "README.md", tmp_path / "docs" / "X.md"]
+
+
+def test_audit_file_reads_manifest_surface(tmp_path):
+    # End-to-end proof the manifest (not the hardcode) drives audit_file: a
+    # NON-default surface name carrying a bogus module count must be reconciled
+    # and flagged, even though no README/CHANGELOG/ROADMAP exist in docs_root.
+    import rag_kernel
+    docs = tmp_path / "worktree"
+    docs.mkdir()
+    (docs / "PUBLIC.md").write_text(
+        f"Runtime v{rag_kernel.__version__} — 12 modules.\n", encoding="utf-8")
+    hot = _hot()
+    hot["meta"]["reconciliation_surfaces"] = ["PUBLIC.md"]
+    p = tmp_path / "RAG_MASTER.json"
+    p.write_text(json.dumps(hot), encoding="utf-8")
+    report = drift_audit.audit_file(p, scan_root=False, docs_root=docs)
+    assert any(x.check == "repo_claim_headline" and x.severity == drift_audit.ERROR
+               for x in report.findings), report.summary()
