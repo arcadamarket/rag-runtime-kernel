@@ -10,8 +10,12 @@ fresh `init --spec` SEEDS `session_start_protocol` and `session_end_protocol`
 into every RAG's `operating_protocol` deterministically (no per-project
 re-authoring).
 
-These tests dogfood the REAL v3.2.5 spec the same way test_fix2/test_fix3 do:
+These tests dogfood the REAL v3.2.6 spec the same way test_fix2/test_fix3 do:
 parse it with the production SpecParser and assert the seeded contract.
+
+v3.2.6 (KA-11 inc3) adds the claim-reconciliation pass as the FIRST session-end
+step (reconcile -> checkpoint -> close -> audit); the pre-existing
+checkpoint -> close -> audit ordering invariant is preserved.
 """
 from __future__ import annotations
 
@@ -22,22 +26,22 @@ import pytest
 from rag_kernel.spec_parser import SpecParser
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SPEC_325 = REPO_ROOT / "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.5.md"
+SPEC_326 = REPO_ROOT / "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md"
 
 
 def _parse():
-    if not SPEC_325.exists():
-        pytest.skip("v3.2.5 spec not present in repo root")
-    return SpecParser().parse_file(SPEC_325)
+    if not SPEC_326.exists():
+        pytest.skip("v3.2.6 spec not present in repo root")
+    return SpecParser().parse_file(SPEC_326)
 
 
-def test_spec_version_is_325():
+def test_spec_version_is_326():
     """The §50 bump must carry the self-version through to the parsed RAG."""
     res = _parse()
-    assert res.spec_version == "3.2.5"
+    assert res.spec_version == "3.2.6"
     meta = res.merged["meta"]
-    assert meta["policy_version"] == "3.2.5"
-    assert meta["rag_files"]["init_prompt"] == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.5.md"
+    assert meta["policy_version"] == "3.2.6"
+    assert meta["rag_files"]["init_prompt"] == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md"
 
 
 def test_both_ritual_rules_seeded_into_operating_protocol():
@@ -75,12 +79,31 @@ def test_session_end_protocol_encodes_checkpoint_close_audit_order():
     assert "KA-4" in s            # the checkpoint-to-close gate
     assert "AUDIT" in s
     assert "session-end" in s
-    # ordering: checkpoint precedes close precedes audit
+    # ordering: checkpoint precedes close precedes audit (preserved across the
+    # KA-11 inc3 insertion of the reconciliation pass ahead of checkpoint)
     assert s.index("CHECKPOINT") < s.index("CLOSE the logger") < s.index("SESSION-CLOSE AUDIT")
 
 
+def test_session_end_protocol_encodes_reconciliation_first_step():
+    """KA-11 inc3 (TierB): the claim-reconciliation pass is the FIRST session-end
+    step, parametrized by the per-project reconciliation_surfaces manifest, and
+    precedes checkpoint -> close -> audit."""
+    s = _parse().merged["operating_protocol"]["session_end_protocol"]
+    assert "CLAIM-RECONCILIATION PASS" in s
+    assert "reconciliation_surfaces" in s   # per-project TierC manifest
+    assert "Rule 11" in s                   # repo-claim<->reality<->record invariant
+    assert "release blocker" in s
+    # reconciliation is step (1): it precedes the whole checkpoint/close/audit chain
+    assert (
+        s.index("CLAIM-RECONCILIATION PASS")
+        < s.index("CHECKPOINT")
+        < s.index("CLOSE the logger")
+        < s.index("SESSION-CLOSE AUDIT")
+    )
+
+
 def test_spec_parses_clean_no_errors():
-    """v3.2.5 must be born clean: zero parse errors, no surviving version token."""
+    """v3.2.6 must be born clean: zero parse errors, no surviving version token."""
     res = _parse()
     assert res.errors == [], [repr(e) for e in res.errors]
     # validate_rag has no structural complaints
