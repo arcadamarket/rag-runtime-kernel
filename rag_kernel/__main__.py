@@ -288,6 +288,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--git-head", type=str, default=None,
         help="Expected git HEAD for the audit freshness check (default: auto-detect)",
     )
+    # KA-16 — fold the ERROR_LOG append into the governed close + attest the report.
+    send_parser.add_argument(
+        "--error-log-entry", type=str, default=None,
+        help="Markdown ERROR_LOG entry to fold into the checkpoint (idempotent).",
+    )
+    send_parser.add_argument(
+        "--error-log-id", type=str, default=None,
+        help="Unique id for the ERROR_LOG entry (idempotency marker; default: <session>-checkpoint).",
+    )
+    send_parser.add_argument(
+        "--error-log-path", type=str, default=None,
+        help="ERROR_LOG.md path (default: beside the RAG).",
+    )
+    send_parser.add_argument(
+        "--report-rendered", action="store_true",
+        help="Attest the canonical status report was rendered in chat (Rule 12).",
+    )
+
+    # -- session-resume (KA-16): detect + finish an interrupted session close. --
+    sresume_parser = subparsers.add_parser(
+        "session-resume",
+        help="Detect and resume an interrupted (transfer_ready=false) session close.",
+    )
+    sresume_parser.add_argument("--rag", type=Path, required=True, help="Path to RAG_MASTER.json")
+    sresume_parser.add_argument(
+        "--session", type=str, default=None,
+        help="Session ID to resume (default: read from the session_close marker).",
+    )
+    sresume_parser.add_argument(
+        "--summary", type=str, default=None,
+        help="Checkpoint summary (required only if the close aborted before checkpoint).",
+    )
+    sresume_parser.add_argument("--tasks", type=str, default=None, help="JSON array of open task strings (replaces existing)")
+    sresume_parser.add_argument("--status", type=str, default=None, help="New state_machine_status value")
+    sresume_parser.add_argument("--strict", action="store_true", help="Treat audit warnings as failures too")
+    sresume_parser.add_argument("--git-head", type=str, default=None, help="Expected git HEAD for the audit freshness check")
+    sresume_parser.add_argument("--error-log-entry", type=str, default=None, help="ERROR_LOG entry to fold (only used if checkpoint not yet done)")
+    sresume_parser.add_argument("--error-log-id", type=str, default=None, help="ERROR_LOG idempotency id")
+    sresume_parser.add_argument("--error-log-path", type=str, default=None, help="ERROR_LOG.md path (default: beside the RAG)")
+    sresume_parser.add_argument("--report-rendered", action="store_true", help="Attest the status report was rendered (Rule 12).")
 
     # -- checkpoint --
     ckpt_parser = subparsers.add_parser(
@@ -300,6 +340,10 @@ def build_parser() -> argparse.ArgumentParser:
     ckpt_parser.add_argument("--tasks", type=str, default=None, help="JSON array of open task strings to set (replaces existing)")
     ckpt_parser.add_argument("--status", type=str, default=None, help="New state_machine_status value")
     ckpt_parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
+    # KA-16 — optional ERROR_LOG fold (idempotent) as part of the governed checkpoint.
+    ckpt_parser.add_argument("--error-log-entry", type=str, default=None, help="Markdown ERROR_LOG entry to fold in (idempotent).")
+    ckpt_parser.add_argument("--error-log-id", type=str, default=None, help="Unique id for the ERROR_LOG entry (default: <session>-checkpoint).")
+    ckpt_parser.add_argument("--error-log-path", type=str, default=None, help="ERROR_LOG.md path (default: beside the RAG).")
 
     # -- gc --
     gc_parser = subparsers.add_parser(
@@ -1586,14 +1630,55 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
         except json.JSONDecodeError as e:
             print(f"WARNING: --tasks is not valid JSON: {e}", file=sys.stderr)
 
+    # KA-16 — fold the ERROR_LOG append INTO the governed checkpoint call. The
+    # operator/agent PROPOSES the entry text (--error-log-entry); the kernel
+    # appends it idempotently (a hidden `<!-- close-log-id: ID -->` marker makes
+    # a resumed/retried checkpoint a no-op, never a double-append). Doing it here
+    # — one atomic governed call — retires the fragile multi-Edit ERROR_LOG hand
+    # edit that stranded the eBay S4 close. The append happens BEFORE the RAG
+    # atomic write so a failed append aborts the checkpoint with the seq still
+    # un-incremented on disk (the RAG write is the atomic commit point).
+    error_log_entry = getattr(args, "error_log_entry", None)
+    error_log_id = getattr(args, "error_log_id", None)
+    error_log_path = getattr(args, "error_log_path", None)
+    el_path = (
+        Path(error_log_path).resolve()
+        if error_log_path
+        else rag_path.parent / "ERROR_LOG.md"
+    )
+
     if args.dry_run:
         print(f"\n[DRY RUN] Would update {rag_path}:")
         print(f"  Session: {session_id}")
         print(f"  Summary: {summary[:80]}...")
         print(f"  Checkpoint seq: {checkpoint_seq}")
+        if error_log_entry:
+            eid = error_log_id or f"{session_id}-checkpoint"
+            already = _error_log_has_id(el_path, eid)
+            print(
+                f"  ERROR_LOG: would {'SKIP (id already present)' if already else 'append'} "
+                f"entry id='{eid}' -> {el_path}"
+            )
         return 0
 
-    # Atomic write via persistence module.
+    # 1. ERROR_LOG fold (idempotent) — must succeed before the RAG commit.
+    if error_log_entry:
+        eid = error_log_id or f"{session_id}-checkpoint"
+        try:
+            appended = _append_error_log(el_path, error_log_entry, eid)
+        except OSError as exc:
+            print(
+                f"ERROR: ERROR_LOG append failed ({exc}) — aborting checkpoint "
+                "before the RAG write (seq left un-incremented).",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"  ERROR_LOG: {'appended' if appended else 'skipped (id already present)'} "
+            f"entry id='{eid}'"
+        )
+
+    # 2. Atomic write via persistence module.
     # mirror_bak=True refreshes RAG_MASTER.json.bak to a byte-identical copy of
     # HOT after the commit, enforcing the FIX-4 / K6 parity-mirror .bak contract
     # for this canonical session-close write — matching api.checkpoint do_full.
@@ -1673,6 +1758,24 @@ def _carry_forward_gate(
     except (DriftStoreError, OSError, ValueError, KeyError) as exc:
         findings.append(f"audit: {exc}")
 
+    # 3. KA-16 — incomplete-close detection. If the inherited RAG carries a
+    #    session_close marker that never reached transfer_ready, the prior
+    #    session banked state but its close aborted (the eBay S4 stranding).
+    #    Refuse to build forward until it is resumed (independent safe read; an
+    #    unreadable RAG is already surfaced by step 1).
+    try:
+        import json as _json_kc
+        with open(rag_path, "r", encoding="utf-8-sig") as f:
+            _marker = _json_kc.load(f).get("session_close")
+        if isinstance(_marker, dict) and not _marker.get("transfer_ready", False):
+            findings.append(
+                f"incomplete close: session {_marker.get('session')} left at phase "
+                f"{_marker.get('phase')} (transfer_ready=false) — run "
+                "`session-resume` before starting a new session"
+            )
+    except (OSError, ValueError):
+        pass
+
     return (not findings), findings
 
 
@@ -1732,59 +1835,312 @@ def cmd_session_start(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_session_end(args: argparse.Namespace) -> int:
-    """KA-6 — machine-enforced session-END ritual (one atomic, ordered command).
+# ---------------------------------------------------------------------------
+# KA-16 — atomic, resumable session close
+# ---------------------------------------------------------------------------
+#
+# The eBay S4 freeze was a NON-ATOMIC close: state was banked (seq advanced) but
+# the close ritual then aborted, so the operator was stranded — state saved, no
+# handoff, and nothing on disk said the close was unfinished. KA-16 makes the
+# close a deterministic forward-progress transaction tracked by a single
+# top-level ``session_close`` marker:
+#
+#   phase:  CHECKPOINTED -> CLOSED -> COMPLETE
+#   transfer_ready: flips True ONLY at COMPLETE — i.e. after checkpoint +
+#                   ERROR_LOG fold + logger close + audit have all passed.
+#
+# Every phase transition is an atomic, ``.bak``-mirrored write, so an interrupted
+# close leaves a resumable record. ``session-resume`` (and the session-start
+# carry-forward gate) read the one cheap ``transfer_ready`` field to tell a clean
+# handoff from a stranded one — no log re-derivation. The ERROR_LOG append is
+# folded INTO the governed checkpoint call (idempotent), retiring the fragile
+# multi-Edit that failed at eBay S4.
 
-    Performs, in order: (1) checkpoint (stamps ``meta.written_by_session`` +
-    increments ``last_checkpoint_seq`` + mirrors ``.bak``), (2) closes the session
-    logger — the KA-4 checkpoint-to-close gate now passes *because* step 1 ran,
-    (3) runs the fail-loud audit. Any step's non-zero exit aborts the rest and
-    propagates, so a session can never end half-ritualed (the eBay S4
-    ran-but-never-checkpointed freeze is structurally unreachable through this
-    path).
+CLOSE_PHASES = ("CHECKPOINTED", "CLOSED", "COMPLETE")
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _error_log_has_id(path: Path, entry_id: str) -> bool:
+    """True iff a prior close-fold for ``entry_id`` is already in ERROR_LOG.md."""
+    marker = f"<!-- close-log-id: {entry_id} -->"
+    try:
+        return marker in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def _append_error_log(path: Path, text: str, entry_id: str) -> bool:
+    """Idempotently append a close ERROR_LOG entry. Returns True if appended,
+    False if an entry with this id was already present (resume/retry no-op).
+    """
+    marker = f"<!-- close-log-id: {entry_id} -->"
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    if marker in existing:
+        return False
+    block = f"\n{text.rstrip()}\n{marker}\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(block)
+    return True
+
+
+def _build_close_marker(
+    sid: str, phase: str, steps: dict, started_utc: str,
+    completed_utc: "str | None", *, transfer_ready: bool = False,
+) -> dict:
+    return {
+        "session": sid,
+        "phase": phase,
+        "transfer_ready": transfer_ready,
+        "started_utc": started_utc,
+        "completed_utc": completed_utc,
+        "steps": {
+            "checkpoint": bool(steps.get("checkpoint")),
+            "error_log": bool(steps.get("error_log")),
+            "logger_close": bool(steps.get("logger_close")),
+            "audit": bool(steps.get("audit")),
+            "report_rendered": bool(steps.get("report_rendered")),
+        },
+    }
+
+
+def _read_close_marker(rag_path: Path) -> "dict | None":
+    import json as _json
+    try:
+        with open(rag_path, "r", encoding="utf-8-sig") as f:
+            return _json.load(f).get("session_close")
+    except (OSError, ValueError):
+        return None
+
+
+def _write_close_marker(rag_path: Path, marker: dict) -> None:
+    """Persist the ``session_close`` marker, preserving ``.bak`` byte-parity.
+
+    The marker write reuses the FIX-8 parity-mirror contract (mirror_bak=True) so
+    that every phase transition keeps HOT == ``.bak`` — otherwise the close-time
+    audit's parity check would fail on the intermediate-phase write.
+    """
+    import json as _json
+    with open(rag_path, "r", encoding="utf-8") as f:
+        rag = _json.load(f)
+    rag["session_close"] = marker
+    try:
+        from rag_kernel.persistence import atomic_write_json
+        atomic_write_json(rag_path, rag, mirror_bak=True)
+    except ImportError:
+        with open(rag_path, "w", encoding="utf-8") as f:
+            _json.dump(rag, f, indent=2, ensure_ascii=False)
+
+
+def _drive_close(
+    rag_path: Path, rag_dir: Path, sid: str, *, summary: "str | None",
+    tasks, status, strict: bool, git_head: "str | None",
+    error_log_entry: "str | None", error_log_id: "str | None",
+    error_log_path: "str | None", report_rendered: bool,
+    marker: "dict | None", resuming: bool,
+) -> int:
+    """Run the close transaction forward from whatever step is incomplete.
+
+    Shared by ``session-end`` (marker=None, fresh close) and ``session-resume``
+    (marker=the interrupted record). Each completed step is persisted to the
+    ``session_close`` marker BEFORE the next begins, so any abort is resumable.
+    ``transfer_ready`` is set only after ALL four steps pass.
+    """
+    steps = dict(marker.get("steps", {})) if marker else {}
+    started = (marker.get("started_utc") if marker else None) or _utcnow_iso()
+
+    # Step 1/4 — checkpoint (+ idempotent ERROR_LOG fold).
+    if not steps.get("checkpoint"):
+        print("[1/4] Checkpoint (+ERROR_LOG fold):")
+        rc = cmd_checkpoint(argparse.Namespace(
+            rag=rag_path, session=sid, summary=summary, tasks=tasks,
+            status=status, dry_run=False, error_log_entry=error_log_entry,
+            error_log_id=error_log_id, error_log_path=error_log_path,
+        ))
+        if rc != 0:
+            print(
+                "ERROR: checkpoint failed — aborting before close/audit "
+                "(no marker written; nothing banked).",
+                file=sys.stderr,
+            )
+            return rc
+        steps["checkpoint"] = True
+        steps["error_log"] = bool(error_log_entry)
+        if report_rendered:
+            steps["report_rendered"] = True
+        _write_close_marker(
+            rag_path, _build_close_marker(sid, "CHECKPOINTED", steps, started, None)
+        )
+    else:
+        print("[1/4] Checkpoint: already banked (resuming).")
+
+    # Step 2/4 — close the session logger (KA-4 gate satisfied by step 1).
+    if not steps.get("logger_close"):
+        print("[2/4] Close logger:")
+        rc = cmd_session(argparse.Namespace(
+            session_action="close", session_id=sid, rag_dir=rag_dir, force=False,
+        ))
+        if rc != 0:
+            print(
+                "ERROR: session close failed — marker left CHECKPOINTED "
+                "(resume with `session-resume`).",
+                file=sys.stderr,
+            )
+            return rc
+        steps["logger_close"] = True
+        _write_close_marker(
+            rag_path, _build_close_marker(sid, "CLOSED", steps, started, None)
+        )
+    else:
+        print("[2/4] Close logger: already closed (resuming).")
+
+    # Step 3/4 — fail-loud audit. transfer_ready stays False if this is red.
+    if not steps.get("audit"):
+        print("[3/4] Audit:")
+        rc = cmd_audit(argparse.Namespace(
+            rag=rag_path, strict=strict, scan_root=True, error_log=None,
+            docs_root=None, git_head=git_head, json_output=False,
+        ))
+        if rc != 0:
+            print(
+                "ERROR: post-close audit FAILED — governance state not clean; "
+                "transfer_ready NOT set, marker left CLOSED (resumable).",
+                file=sys.stderr,
+            )
+            return rc
+        steps["audit"] = True
+    else:
+        print("[3/4] Audit: already green (resuming).")
+
+    # Step 4/4 — commit completion. Marker write is pure data and touches no
+    # audited invariant, so flipping it after a green audit cannot un-clean the
+    # RAG (validate-then-commit-the-flag).
+    if report_rendered:
+        steps["report_rendered"] = True
+    _write_close_marker(
+        rag_path,
+        _build_close_marker(
+            sid, "COMPLETE", steps, started, _utcnow_iso(), transfer_ready=True
+        ),
+    )
+    print("[4/4] Transfer marker: transfer_ready=true (phase COMPLETE).")
+    if not steps.get("report_rendered"):
+        print(
+            "  NOTE: report_rendered not attested — render the canonical status "
+            "report in chat (Rule 12) and pass --report-rendered to record it.",
+            file=sys.stderr,
+        )
+    verb = "resumed and completed" if resuming else "ended cleanly"
+    print(
+        f"Session {sid} {verb}: checkpoint + ERROR_LOG + close + audit all green; "
+        "transfer_ready set."
+    )
+    return 0
+
+
+def cmd_session_end(args: argparse.Namespace) -> int:
+    """KA-16 — machine-enforced, ATOMIC, RESUMABLE session-END ritual.
+
+    Runs the close as a forward-progress transaction (checkpoint(+ERROR_LOG fold)
+    -> close logger -> audit -> commit transfer_ready) tracked by the
+    ``session_close`` marker. Any step's non-zero exit aborts the rest and leaves
+    a resumable marker — a session can never end half-ritualed AND silently
+    (the eBay S4 stranding is structurally unreachable, and what remains IS
+    resumable via ``session-resume``).
     """
     rag_path = args.rag.resolve()
     rag_dir = rag_path.parent
     sid = args.session
 
-    # 1. checkpoint.
-    print("[1/3] Checkpoint:")
-    rc = cmd_checkpoint(argparse.Namespace(
-        rag=args.rag, session=sid, summary=args.summary,
-        tasks=args.tasks, status=args.status, dry_run=False,
-    ))
-    if rc != 0:
+    marker = _read_close_marker(rag_path)
+    # A DIFFERENT prior session left an unfinished close — resume that first.
+    if (
+        isinstance(marker, dict)
+        and not marker.get("transfer_ready", False)
+        and marker.get("session") not in (None, sid)
+    ):
         print(
-            "ERROR: checkpoint failed — aborting session-end before close/audit.",
+            f"ERROR: an incomplete close for session {marker.get('session')} "
+            f"(phase {marker.get('phase')}) is pending — resume it before ending {sid}.",
             file=sys.stderr,
         )
-        return rc
+        print(f'  Run:  rag_kernel session-resume --rag "{rag_path}"', file=sys.stderr)
+        return 1
+    # Reuse the marker only if it is THIS session's own interrupted close.
+    active = (
+        marker
+        if (
+            isinstance(marker, dict)
+            and marker.get("session") == sid
+            and not marker.get("transfer_ready", False)
+        )
+        else None
+    )
+    return _drive_close(
+        rag_path, rag_dir, sid, summary=args.summary, tasks=args.tasks,
+        status=args.status, strict=args.strict,
+        git_head=getattr(args, "git_head", None),
+        error_log_entry=getattr(args, "error_log_entry", None),
+        error_log_id=getattr(args, "error_log_id", None),
+        error_log_path=getattr(args, "error_log_path", None),
+        report_rendered=getattr(args, "report_rendered", False),
+        marker=active, resuming=False,
+    )
 
-    # 2. close logger (KA-4 gate now satisfied by step 1).
-    print("[2/3] Close logger:")
-    rc = cmd_session(argparse.Namespace(
-        session_action="close", session_id=sid, rag_dir=rag_dir, force=False,
-    ))
-    if rc != 0:
-        print("ERROR: session close failed — see above.", file=sys.stderr)
-        return rc
 
-    # 3. audit (fail-loud).
-    print("[3/3] Audit:")
-    rc = cmd_audit(argparse.Namespace(
-        rag=args.rag, strict=args.strict, scan_root=True,
-        error_log=None, docs_root=None,
-        git_head=getattr(args, "git_head", None), json_output=False,
-    ))
-    if rc != 0:
+def cmd_session_resume(args: argparse.Namespace) -> int:
+    """KA-16 — detect and RESUME an interrupted session close.
+
+    Reads the ``session_close`` marker; if it is incomplete (transfer_ready
+    False) it drives the remaining steps to COMPLETE. A no-op (exit 0) when there
+    is nothing to resume. If the close was interrupted before the checkpoint ever
+    landed, ``--summary`` is required to bank the session.
+    """
+    rag_path = args.rag.resolve()
+    rag_dir = rag_path.parent
+    marker = _read_close_marker(rag_path)
+
+    if not isinstance(marker, dict) or marker.get("transfer_ready", False):
+        why = "no session_close marker" if not isinstance(marker, dict) else (
+            "last close is COMPLETE (transfer_ready=true)"
+        )
+        print(f"No incomplete close to resume — {why}.")
+        return 0
+
+    sid = args.session or marker.get("session")
+    if not sid:
         print(
-            "ERROR: post-close audit FAILED — governance state is not clean.",
+            "ERROR: marker carries no session id and --session was not given.",
             file=sys.stderr,
         )
-        return rc
+        return 1
 
-    print(f"Session {sid} ended cleanly: checkpoint + close + audit all green.")
-    return 0
+    steps = marker.get("steps", {})
+    if not steps.get("checkpoint") and not args.summary:
+        print(
+            f"ERROR: the close for {sid} was interrupted BEFORE checkpoint; "
+            "re-run `session-resume` with --summary to bank it.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        f"Resuming incomplete close for {sid} "
+        f"(phase {marker.get('phase')}, transfer_ready=false)."
+    )
+    return _drive_close(
+        rag_path, rag_dir, sid, summary=args.summary,
+        tasks=getattr(args, "tasks", None), status=getattr(args, "status", None),
+        strict=args.strict, git_head=getattr(args, "git_head", None),
+        error_log_entry=getattr(args, "error_log_entry", None),
+        error_log_id=getattr(args, "error_log_id", None),
+        error_log_path=getattr(args, "error_log_path", None),
+        report_rendered=getattr(args, "report_rendered", False),
+        marker=marker, resuming=True,
+    )
 
 
 def cmd_gc(args: argparse.Namespace) -> int:
@@ -2720,7 +3076,7 @@ def cmd_context(args: argparse.Namespace) -> int:
 #   session-start / session-end — KA-6 rituals that themselves open/close the
 #                                 logger; the wrapper must not touch it mid-ritual
 _NO_BOOTSTRAP_LOG = frozenset(
-    {"session", "session-start", "session-end", "serve", "mcp"}
+    {"session", "session-start", "session-end", "session-resume", "serve", "mcp"}
 )
 
 
@@ -2839,6 +3195,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "configure": cmd_configure, "health": cmd_health,
         "serve": cmd_serve, "mcp": cmd_mcp, "session": cmd_session,
         "session-start": cmd_session_start, "session-end": cmd_session_end,
+        "session-resume": cmd_session_resume,
         "checkpoint": cmd_checkpoint, "gc": cmd_gc, "audit-env": cmd_audit_env,
         "graph": cmd_graph,
         "resolve": cmd_item_transition, "defer": cmd_item_transition,
