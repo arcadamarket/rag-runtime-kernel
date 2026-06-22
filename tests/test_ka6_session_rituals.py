@@ -83,18 +83,34 @@ def test_session_start_refuses_on_failed_gate_and_opens_no_log(tmp_path, monkeyp
     assert not _log_path(tmp_path, "S1").exists()  # no session opened on a red gate
 
 
-def test_session_start_force_opens_despite_failed_gate(tmp_path, monkeypatch):
+def test_session_start_force_bypasses_failed_gate(tmp_path, monkeypatch):
+    # --force gets past a red gate; the legacy one-shot open (--no-attest-gate)
+    # then opens the logger without the KA-14 attestation handshake.
     rag = _write_rag(tmp_path, "S0")
     monkeypatch.setattr(m, "_carry_forward_gate", lambda *a, **k: (False, ["boom"]))
-    rc = main(["session-start", "S1", "--rag", str(rag), "--no-gc", "--force"])
+    rc = main(["session-start", "S1", "--rag", str(rag), "--no-gc",
+               "--force", "--no-attest-gate"])
     assert rc == 0
     assert _log_path(tmp_path, "S1").exists()
 
 
-def test_session_start_opens_logger_on_clean_gate(tmp_path, monkeypatch):
+def test_session_start_clean_gate_requires_attestation_not_logger(tmp_path, monkeypatch, capsys):
+    # KA-14: a clean gate no longer opens the logger in one shot. Phase 1 renders
+    # the rule digest and demands attestation; the session is NOT yet READY.
     rag = _write_rag(tmp_path, "S0")
     monkeypatch.setattr(m, "_carry_forward_gate", lambda *a, **k: (True, []))
     rc = main(["session-start", "S1", "--rag", str(rag), "--no-gc"])
+    assert rc == 0
+    assert not _log_path(tmp_path, "S1").exists()  # logger NOT opened in phase 1
+    out = capsys.readouterr().out
+    assert "Attestation REQUIRED" in out and "--attest" in out
+
+
+def test_session_start_no_attest_gate_opens_one_shot(tmp_path, monkeypatch):
+    # The escape hatch still opens the logger in one shot on a clean gate.
+    rag = _write_rag(tmp_path, "S0")
+    monkeypatch.setattr(m, "_carry_forward_gate", lambda *a, **k: (True, []))
+    rc = main(["session-start", "S1", "--rag", str(rag), "--no-gc", "--no-attest-gate"])
     assert rc == 0
     evs = _events(_log_path(tmp_path, "S1"))
     assert any(e["event"] == "session_start" for e in evs)

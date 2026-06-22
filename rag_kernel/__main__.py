@@ -269,6 +269,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true",
         help="Open the session even if the carry-forward gate fails (UNSAFE).",
     )
+    # KA-14 — session-start rule-load attestation gate (BOOT -> RULES_LOADED(attested)
+    # -> READY). Phase 1 (no --attest) renders the operating_protocol rule digest into
+    # context and prints an attestation token; the logger is NOT opened. Phase 2
+    # (--attest <token>) verifies the token against the live digest, then opens the
+    # logger. This makes "the agent loaded the HOT rules" structurally unforgeable —
+    # the fresh-deploy root cause (rule bodies sat on disk, never ingested).
+    sstart_parser.add_argument(
+        "--attest", type=str, default=None, metavar="TOKEN",
+        help="Phase 2: attest the rule digest was loaded by echoing the token printed "
+             "by phase 1; on a match the logger opens (READY).",
+    )
+    sstart_parser.add_argument(
+        "--no-attest-gate", action="store_true",
+        help="Open the logger in one shot WITHOUT the rule-load attestation gate "
+             "(UNSAFE — re-creates the fresh-deploy unloaded-rules risk; tests/CI only).",
+    )
 
     # -- session-end (KA-6 / KA-10: machine-enforced session-END ritual). One
     #    command performs the whole closing ritual atomically, in order, so the
@@ -1779,23 +1795,174 @@ def _carry_forward_gate(
     return (not findings), findings
 
 
-def cmd_session_start(args: argparse.Namespace) -> int:
-    """KA-6 — machine-enforced session-START ritual (one atomic command).
+# ---------------------------------------------------------------------------
+# KA-14 — session-start rule-load attestation gate
+# ---------------------------------------------------------------------------
+#
+# The fresh-deploy root cause (eBay S0/S105 field audit): the HOT operating_protocol
+# rule bodies live on disk in the RAG, but a fresh agent never actually loaded them
+# into working cognition — it ran the ritual and proceeded blind to its own rules.
+# A gate that merely PRINTS the rules cannot prove they were ingested. KA-14 makes
+# rule-load a two-phase, token-attested handshake:
+#
+#   BOOT -> RULES_LOADED(attested) -> READY
+#
+#   phase 1  session-start <sid>           : carry-forward gate -> gc -> RENDER the
+#                                            compact rule digest into context, write
+#                                            a rule_load marker (attested=false) and a
+#                                            digest token; the logger is NOT opened.
+#   phase 2  session-start <sid> --attest T: verify T == the LIVE digest token, flip
+#                                            attested=true, open the logger (READY).
+#
+# The token is the digest's fingerprint: an agent cannot produce it without having
+# received the rendered digest, so READY is unreachable without the rules in context.
+# ML lens: a compact digest (rule key + one-line summary), not the full bodies, keeps
+# the token cost low. CS lens: no new TLA+ state (RULES_LOADED is a runtime marker
+# phase, like KA-16's session_close) so the drift gate is unchanged; the token check
+# is deterministic and fail-loud. LLM proposes the attestation; the system decides on
+# a byte-exact token match; the marker persists the decision.
 
-    Performs, in order: (1) the carry-forward gate (fail-loud — refuses to start
-    on an incoherent/unbanked inherited RAG unless ``--force``), (2) a gc dry-run
-    (report-before-delete, garbage_collector rule), (3) opens the session logger.
-    Collapsing the three steps into one command removes the hand-scripted-ritual
-    surface where a step gets skipped (eBay S2/S4).
+_RULE_SUMMARY_LIMIT = 110
+
+
+def _rule_summary(value, limit: int = _RULE_SUMMARY_LIMIT) -> str:
+    """One-line summary of an operating_protocol rule value (str or dict)."""
+    if isinstance(value, dict):
+        keys = list(value.keys())
+        shown = ", ".join(keys[:4])
+        more = "…" if len(keys) > 4 else ""
+        return f"[{len(keys)} sub-rules: {shown}{more}]"
+    s = " ".join(str(value).split())
+    dot = s.find(". ")
+    if 0 < dot <= limit:
+        return s[: dot + 1]
+    return (s[:limit] + "…") if len(s) > limit else s
+
+
+def _compute_rule_digest(rag: dict) -> "tuple[list[tuple[str, str]], str]":
+    """Project operating_protocol into (lines, token).
+
+    ``lines`` is an ordered [(rule_key, one_line_summary)] list; ``token`` is the
+    first 12 hex of sha256 over the canonical ``key|summary`` serialization — a
+    deterministic fingerprint of the exact digest the agent is shown.
+    """
+    import hashlib
+
+    op = rag.get("operating_protocol", {})
+    lines: list[tuple[str, str]] = (
+        [(k, _rule_summary(v)) for k, v in op.items()] if isinstance(op, dict) else []
+    )
+    canon = "\n".join(f"{k}|{summ}" for k, summ in lines)
+    token = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
+    return lines, token
+
+
+def _render_rule_digest(lines: "list[tuple[str, str]]") -> str:
+    if not lines:
+        return "  (no operating_protocol rules in this RAG)"
+    return "\n".join(f"  - {k}: {summ}" for k, summ in lines)
+
+
+def _read_top_level_field(rag_path: Path, key: str):
+    try:
+        with open(rag_path, "r", encoding="utf-8-sig") as f:
+            return json.load(f).get(key)
+    except (OSError, ValueError):
+        return None
+
+
+def _write_top_level_field(rag_path: Path, key: str, value) -> None:
+    """Persist a top-level RAG field, preserving ``.bak`` byte-parity (FIX-8)."""
+    with open(rag_path, "r", encoding="utf-8") as f:
+        rag = json.load(f)
+    rag[key] = value
+    try:
+        from rag_kernel.persistence import atomic_write_json
+        atomic_write_json(rag_path, rag, mirror_bak=True)
+    except ImportError:
+        with open(rag_path, "w", encoding="utf-8") as f:
+            json.dump(rag, f, indent=2, ensure_ascii=False)
+
+
+def _session_start_attest(
+    rag_path: Path, rag_dir: Path, sid: str, token: str
+) -> int:
+    """KA-14 phase 2 — verify the digest token, then open the logger (READY)."""
+    marker = _read_top_level_field(rag_path, "rule_load")
+    if not isinstance(marker, dict):
+        print(
+            "ERROR: no rule_load marker — run `session-start <sid>` (phase 1) first "
+            "to render the rule digest.",
+            file=sys.stderr,
+        )
+        return 1
+    if marker.get("session") != sid:
+        print(
+            f"ERROR: rule_load marker is for session {marker.get('session')!r}, "
+            f"not {sid!r} — run phase 1 for {sid!r} first.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        with open(rag_path, "r", encoding="utf-8-sig") as f:
+            rag = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: RAG unreadable ({exc}).", file=sys.stderr)
+        return 1
+    _, current_token = _compute_rule_digest(rag)
+    if token != current_token:
+        print(
+            "ERROR: attestation token mismatch — the rule digest changed or the token "
+            "is wrong. Re-run `session-start` (phase 1) to load the CURRENT digest, "
+            "then attest the freshly-printed token.",
+            file=sys.stderr,
+        )
+        return 1
+
+    attested = dict(marker)
+    attested["attested"] = True
+    attested["attested_utc"] = _utcnow_iso()
+    _write_top_level_field(rag_path, "rule_load", attested)
+
+    from rag_kernel.session_logger import SessionLogger
+
+    logger = SessionLogger(sid, log_dir=rag_dir)
+    logger.open()
+    print("Rule-load attested: token matches the live operating_protocol digest.")
+    print(f"  Session {sid} READY. Log file: {logger.log_path}")
+    return 0
+
+
+def cmd_session_start(args: argparse.Namespace) -> int:
+    """KA-6 + KA-14 — machine-enforced, rule-load-attested session-START ritual.
+
+    Phase 1 (no ``--attest``): carry-forward gate (fail-loud unless ``--force``) ->
+    gc dry-run (report-before-delete) -> render the operating_protocol rule digest
+    into context + write a ``rule_load`` marker (attested=false) + print a digest
+    token. The logger is NOT opened — the session is not yet READY.
+
+    Phase 2 (``--attest <token>``): verify the token against the live digest, flip
+    the marker to attested=true, and open the logger (READY).
+
+    ``--no-attest-gate`` restores the legacy one-shot open (UNSAFE; CI/tests only).
+    Collapsing the steps into one command removes the hand-scripted-ritual surface
+    where a step gets skipped (eBay S2/S4); the attestation gate closes the
+    fresh-deploy unloaded-rules hole (eBay S0/S105).
     """
     rag_path = args.rag.resolve()
     rag_dir = rag_path.parent
+    sid = args.session_id
+
+    # Phase 2 — attestation handshake (no gate/gc/render; the session was already
+    # vetted in phase 1, this only verifies the token and opens the logger).
+    if getattr(args, "attest", None) is not None:
+        return _session_start_attest(rag_path, rag_dir, sid, args.attest)
 
     # 1. Carry-forward gate (fail-loud).
     ok, findings = _carry_forward_gate(
         rag_path, strict=args.strict, git_head=getattr(args, "git_head", None)
     )
-    print("[1/3] Carry-forward gate:")
+    print("[1/4] Carry-forward gate:")
     if ok:
         print("  OK — inherited RAG coherent (verify + audit clean).")
     else:
@@ -1803,7 +1970,7 @@ def cmd_session_start(args: argparse.Namespace) -> int:
             print(f"  FAIL — {fnd}", file=sys.stderr)
         if not getattr(args, "force", False):
             print(
-                f"ERROR: refusing to start session {args.session_id} — "
+                f"ERROR: refusing to start session {sid} — "
                 "inherited state is not carry-forward clean.",
                 file=sys.stderr,
             )
@@ -1819,19 +1986,53 @@ def cmd_session_start(args: argparse.Namespace) -> int:
 
     # 2. gc dry-run (report-before-delete).
     if not getattr(args, "no_gc", False):
-        print("[2/3] GC (dry-run):")
+        print("[2/4] GC (dry-run):")
         cmd_gc(argparse.Namespace(path=args.gc_path, dry_run=True))
     else:
-        print("[2/3] GC: skipped (--no-gc).")
+        print("[2/4] GC: skipped (--no-gc).")
 
-    # 3. Open the session logger.
-    from rag_kernel.session_logger import SessionLogger
+    # 3a. Legacy one-shot bypass (UNSAFE) — kept for CI and emergencies.
+    if getattr(args, "no_attest_gate", False):
+        from rag_kernel.session_logger import SessionLogger
 
-    print("[3/3] Open logger:")
-    logger = SessionLogger(args.session_id, log_dir=rag_dir)
-    logger.open()
-    print(f"  Session {args.session_id} started.")
-    print(f"  Log file: {logger.log_path}")
+        print("[3/4] Rule-load gate: SKIPPED (--no-attest-gate, UNSAFE).")
+        print("[4/4] Open logger:")
+        logger = SessionLogger(sid, log_dir=rag_dir)
+        logger.open()
+        print(f"  Session {sid} started (UNGATED — rules not attested).")
+        print(f"  Log file: {logger.log_path}")
+        return 0
+
+    # 3b. Render the rule digest into context + record the rule_load marker.
+    try:
+        with open(rag_path, "r", encoding="utf-8-sig") as f:
+            rag = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: RAG unreadable for the rule digest ({exc}).", file=sys.stderr)
+        return 1
+    lines, token = _compute_rule_digest(rag)
+    print(
+        f"[3/4] Rule digest ({len(lines)} operating_protocol rules) — "
+        "LOAD these into working context:"
+    )
+    print(_render_rule_digest(lines))
+    _write_top_level_field(
+        rag_path,
+        "rule_load",
+        {
+            "session": sid,
+            "attested": False,
+            "token": token,
+            "rule_count": len(lines),
+            "started_utc": _utcnow_iso(),
+            "attested_utc": None,
+        },
+    )
+
+    # 4. Attestation required — the logger is deliberately NOT opened here.
+    print("[4/4] Attestation REQUIRED (logger NOT opened — session not yet READY):")
+    print(f"  Confirm you loaded the {len(lines)} rules above by re-running:")
+    print(f"    session-start {sid} --attest {token}")
     return 0
 
 
