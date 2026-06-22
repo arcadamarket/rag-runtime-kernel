@@ -20,9 +20,21 @@
 
 ---
 
+## spec v3.2.6 — Released (2026-06-21)
+
+KA-11 inc3 — session-end claim-reconciliation pass baked into the universal spec (GOVERNANCE-DETERMINISM / KA-10 arc, TierB). §50's session-end ritual gains a generic claim-reconciliation pass as its FIRST step (reconcile → checkpoint → close → audit): before checkpoint, reconcile every published status-claim declared on the per-project `meta.reconciliation_surfaces` (TierC) against the tracked records — universalizing the formerly project-specific Rule 11 / INS-018 recurring reconcile so every fresh `init --spec` inherits it (no per-project re-authoring, KA-10 TierB). Self-version 3.2.5 → 3.2.6; `session_end_protocol` rag-config updated + renumbered; `test_ka8` repointed to the v3.2.6 spec plus a new reconciliation-step test. Spec-only — no schema, WAL-format, TLA+, or runtime change (runtime stays v0.4.21, drift gate `268149294421` unchanged). Regression `init --spec v3.2.6` seeds the reconciliation step + `reconciliation_surfaces` + Rule 11, order reconcile<checkpoint<close<audit, `policy_version` 3.2.6, `verify` OK + `audit --strict` clean, full suite 1,534 → 1,535 green (+1).
+
+---
+
 ## spec v3.2.5 — Released (2026-06-20)
 
 KA-8 — bake the GC-first carry-forward gate + session-end ritual into the universal spec (GOVERNANCE-DETERMINISM / KA-10 arc, TierB). KA-6 shipped the runtime commands (`session-start` / `session-end`); KA-8 makes the spec tell every deploy to run them. The session-boundary steps already existed but lived scattered across §17 (close audit), §19 (boot sequence), §20 (recovery) and §45 (garbage collector), so a deploying agent had to hand-assemble the ritual — exactly how the first external deploy skipped its checkpoint and froze its governance lineage. New §50 — Session-Start & Session-End Rituals (governed) — assembles both into explicit, ordered, fail-loud sequences and adds `operating_protocol.session_start_protocol` + `session_end_protocol` rag-config blocks so a fresh `init --spec` seeds them into every RAG deterministically (no per-project re-authoring, KA-10 TierB). Session-start = carry-forward gate (integrity `verify` + drift `audit`, fail-loud → RECOVERY) → gc dry-run over `root_project` → open logger; session-end = checkpoint → close (KA-4 checkpoint-gate) → audit, any step's failure aborting the rest. Runtime wrapper present (v0.4.14+): each ritual is one governed command; autonomous mode performs the steps manually, in order, halting on failure. Spec-only — no schema, WAL-format, TLA+, or runtime change (runtime stays v0.4.14, drift gate `268149294421` unchanged). Regression `init --spec v3.2.5` seeds both ritual rules (plus the pre-existing `garbage_collector` + `strict_obey`), `policy_version` 3.2.5, COLD ref v3.2.5, no residual `<SPEC_VERSION>`, `verify` OK + `audit --strict` clean, full suite 1,398 green (+6). 53 sections.
+
+---
+
+## v0.4.22 — Released (2026-06-21)
+
+KA-11 inc4 — TierC kernel reconciliation-surface manifest population + docs reconcile; the runtime release that bundles KA-11 inc1–4 (GOVERNANCE-DETERMINISM / KA-10 arc). Closes KA-11 (universalize the repo-claim↔reality↔record reconciliation pass) and completes the Track A kernel-hardening arc the eBay Session-Zero audit surfaced. inc1–2 added the per-project `meta.reconciliation_surfaces` manifest — schema + reader (`drift_audit.reconciliation_surfaces`) wired through `audit_file` / `audit --docs-root`, replacing the hardcoded kernel-specific doc list with a per-project declaration (universal default README / CHANGELOG / docs/ROADMAP) so the Rule 11 auditor is no longer kernel-repo-specific, byte-for-byte back-compatible for any RAG that has not declared a manifest. inc3 added the TierB INIT-spec session-end claim-reconciliation pass (spec v3.2.5 → v3.2.6). inc4 populates the kernel's own TierC manifest (`meta.reconciliation_surfaces` = README / CHANGELOG / docs/ROADMAP) and reconciles the published docs against the live canonical facts (`rag_kernel.__version__`, capability-module count, drift-gate sha). Runtime `__version__` 0.4.21 → 0.4.22, `__spec_version__` 3.2.5 → 3.2.6. No new module (19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change), full suite 1,535 green. Eleventh runtime increment of the KA-10 GOVERNANCE-DETERMINISM initiative; unblocks the eBay re-init (INS-047).
 
 ---
 
