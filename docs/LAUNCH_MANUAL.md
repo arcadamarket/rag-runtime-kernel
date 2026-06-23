@@ -46,7 +46,7 @@ Two operating modes:
 **AUTONOMOUS mode:** No installation. You need only the init prompt file and a `RAG_MASTER.json`.
 
 **ENFORCED mode:**
-- Python 3.10 or later
+- Python 3.12-3.14 (tested matrix)
 - The `rag-runtime-kernel` repository cloned locally
 - A RAG project directory containing `RAG_MASTER.json`
 - Zero external dependencies (stdlib only)
@@ -121,7 +121,7 @@ The Python kernel runs as an HTTP server or MCP server. The LLM calls the kernel
    cd rag-runtime-kernel
    ```
 
-2. Verify Python 3.10+:
+2. Verify Python 3.12-3.14:
    ```bash
    python --version
    ```

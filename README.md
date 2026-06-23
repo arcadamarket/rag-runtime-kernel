@@ -238,7 +238,7 @@ Phase 2 verification found and fixed two genuine liveness bugs: a BOOTING↔RECO
 
 **Tier 1 minimum:** an LLM that supports file uploads or long-form input, plus a project folder.
 
-**Tier 2:** Python 3.10+. [Filesystem MCP](https://github.com/modelcontextprotocol/servers) recommended for direct file read/write; a shell/PowerShell MCP is optional.
+**Tier 2:** Python 3.12-3.14 (tested matrix; 3.12 is the canonical test runner). [Filesystem MCP](https://github.com/modelcontextprotocol/servers) recommended for direct file read/write; a shell/PowerShell MCP is optional.
 
 ## Repository Structure
 

@@ -2852,6 +2852,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     """
     import json as json_mod
     import time
+    import rag_kernel
 
     project_root = args.path.resolve()
 
@@ -2878,6 +2879,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "tooling_present": [n for n, p in tools_present.items() if p],
         "tooling_missing": [n for n, p in tools_present.items() if not p],
     }
+    # KA-17: classify the running interpreter against the supported window.
+    py_status, py_running = rag_kernel.python_support_status()
+    report["env"]["running_python"] = py_running
+    report["env"]["python_support"] = py_status
+    report["env"]["supported_python"] = list(rag_kernel.SUPPORTED_PYTHON)
+    if py_status == "below_floor":
+        report["blocking"].append(
+            f"running Python {py_running} is below the supported floor "
+            f"{'.'.join(map(str, rag_kernel.SUPPORTED_PYTHON_MIN))}")
     if not working:
         report["blocking"].append("no Python with a working pip")
     if not tools_present.get("git", False):
@@ -2932,6 +2942,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print("=" * 50)
     e = report["env"]
     print(f"ENV   best python : {e['best_python'] or 'NONE (blocking)'}")
+    _sup = {"ok": "ok", "below_floor": "BELOW FLOOR (blocking)",
+            "above_ceiling": "above tested ceiling (warn)"}.get(
+        e.get("python_support", "ok"), e.get("python_support", "ok"))
+    print(f"      running py  : {e.get('running_python', '?')} "
+          f"[{_sup}] | supported {'/'.join(e.get('supported_python', []))}")
     if e["broken_pip"]:
         print(f"      broken pip  : {', '.join(e['broken_pip'])}")
     print(f"      tooling     : present={','.join(e['tooling_present']) or '-'} "

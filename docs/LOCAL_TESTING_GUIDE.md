@@ -6,7 +6,7 @@ How to run the kernel on your machine and connect it to GPT Chat (or any LLM) vi
 
 ## Prerequisites
 
-- Python 3.10+ installed
+- Python 3.12-3.14 installed
 - The `rag-runtime-kernel` repo cloned locally
 - A RAG project directory with `RAG_MASTER.json` (your existing `RAG/` folder works)
 - For GPT Chat: a free [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/) (`cloudflared`) to expose localhost

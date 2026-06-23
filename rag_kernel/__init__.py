@@ -1,12 +1,12 @@
 """RAG Runtime Kernel — OS-level runtime bridge for LLM memory persistence.
 
-Zero external dependencies. Python 3.10+ standard library only.
+Zero external dependencies. Python 3.12-3.14, standard library only.
 
 @rag-kernel-manifest
 {
   "package": "rag_kernel",
   "description": "OS-level runtime bridge for LLM memory persistence",
-  "python_requires": ">=3.10",
+  "python_requires": ">=3.12",
   "dependencies": "stdlib-only",
   "modules": {
     "state_machine": "Deterministic FSM: BOOTING→READY→WORKING→CHECKPOINTING→CLOSING",
@@ -67,6 +67,41 @@ Zero external dependencies. Python 3.10+ standard library only.
 # or if the injected manifest disagrees with these constants.
 __version__ = "0.4.22"
 __spec_version__ = "3.2.6"
+
+# ── Supported Python matrix (KA-17) ───────────────────────────
+# The declared, tested CPython window — single-sourced here (like __version__)
+# and injected into the package manifest by discover() so the published claim
+# can never drift from this authority. Validation discipline: the full test
+# suite runs under 3.12 (the canonical runner); 3.13 (miniconda) and 3.14 are
+# import/discovery-smoke verified — sound because the kernel is stdlib-only.
+# Reconciles the former unsubstantiated ">=3.10 / 3.10+" claim (Rule 11): the
+# kernel was never tested below 3.12.
+SUPPORTED_PYTHON_MIN = (3, 12)
+SUPPORTED_PYTHON_MAX = (3, 14)
+SUPPORTED_PYTHON = ("3.12", "3.13", "3.14")
+
+
+def python_support_status(version_info: tuple[int, int] | None = None) -> tuple[str, str]:
+    """Classify an interpreter against the declared SUPPORTED_PYTHON window.
+
+    Pure and fail-loud-friendly. Returns ``(status, "<major>.<minor>")`` where
+    status is one of:
+      * ``"ok"``            — within [SUPPORTED_PYTHON_MIN, SUPPORTED_PYTHON_MAX]
+      * ``"below_floor"``   — older than the supported floor (doctor: blocking)
+      * ``"above_ceiling"`` — newer than the tested ceiling (doctor: forward-
+                              compat warning, non-blocking)
+
+    ``version_info`` defaults to the running interpreter's ``(major, minor)``.
+    """
+    import sys as _sys
+    vi = tuple(version_info) if version_info is not None else (
+        _sys.version_info.major, _sys.version_info.minor)
+    running = f"{vi[0]}.{vi[1]}"
+    if vi < SUPPORTED_PYTHON_MIN:
+        return ("below_floor", running)
+    if vi > SUPPORTED_PYTHON_MAX:
+        return ("above_ceiling", running)
+    return ("ok", running)
 
 
 # ── Capability Discovery ──────────────────────────────────────
@@ -171,6 +206,10 @@ def discover() -> dict[str, Any]:
     # both that no literal is re-introduced and that this injection matches.
     pkg_manifest["version"] = __version__
     pkg_manifest["spec_version"] = __spec_version__
+    # KA-17: single-source the supported-Python declaration into the manifest
+    # so the published claim is always the live authority (same anti-drift
+    # pattern as version/spec_version above).
+    pkg_manifest["supported_python"] = list(SUPPORTED_PYTHON)
 
     modules: dict[str, dict] = {}
     capabilities: list[str] = []
