@@ -6,6 +6,18 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.23] — 2026-06-23
+
+**KA-14 + KA-16 + KA-17 — the session-resilience arc (bundled runtime release).** Packages the three runtime increments merged to `main` since v0.4.22, hardening the session boundary against the fresh-deploy and interrupted-close failure modes the eBay Session-Zero audit surfaced.
+
+- **KA-16** (`aa34e97`, S106) — **atomic, resumable session close.** A `session_close` marker tracks the close as a forward-progress transaction and sets `transfer_ready` only after checkpoint + idempotent ERROR_LOG fold + logger close + audit all pass; `session-resume` finishes an interrupted close, and the carry-forward gate fails loud on a stranded `transfer_ready=false` prior close. +12 tests.
+- **KA-14** (`e34691b`, S107) — **session-start rule-load attestation gate.** Two-phase token-attested start (`BOOT → RULES_LOADED(attested) → READY`): phase 1 renders the `operating_protocol` rule digest, writes a `rule_load` marker (`attested=false`) and a sha256 token without opening the logger; phase 2 `--attest <token>` verifies the token against the live digest before opening the logger. Closes the fresh-deploy unloaded-rules root cause. `--no-attest-gate` retains the one-shot path for CI. +15 tests.
+- **KA-17** (`dc5f0c0`, S109) — **declared, single-sourced supported-Python matrix (3.12–3.14).** `SUPPORTED_PYTHON` single-sourced in `__init__` and manifest-injected, a pure `python_support_status()` classifier, and a `doctor` ENV check that blocks below-floor interpreters. Reconciles the former unsubstantiated `>=3.10` claim across the manifest + README + 4 docs (Rule 11). Validated: full suite under 3.12, import/discovery smoke under 3.13 + 3.14. +7 tests.
+
+The companion **KA-15** token-economy / context-emission doctrine (bounded tool-output, malformed-emission as a circuit-breaker strike) is live in the project `operating_protocol`; its INIT-spec seeding (v3.2.7) and the `python314_pip` known-issue correction are tracked for the next spec bump.
+
+Runtime `__version__` `0.4.22 → 0.4.23`, `__spec_version__` unchanged (`3.2.6`). No new module (19), health 20/20, drift gate `268149294421` unchanged (no schema, WAL-format, or TLA+ change), **1,569 tests**. Bundled release of the KA-14..17 session-resilience arc; the eBay deploy inherits via an `init --spec` upgrade. (S110)
+
 ## [v0.4.22] — 2026-06-21
 
 **KA-11 inc4 — TierC kernel reconciliation-surface manifest population + docs reconcile; the runtime release that bundles KA-11 inc1–4.** This release closes **KA-11** (universalize the repo-claim↔reality↔record reconciliation pass) and completes the Track A kernel-hardening arc the eBay Session-Zero audit surfaced.
