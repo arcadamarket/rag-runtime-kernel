@@ -6,6 +6,14 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.24] — 2026-06-30
+
+**UPDATE-RULE-VERB — governed re-set of an existing `operating_protocol` rule through the guarded atomic store.** The counterpart to `add-rule`, with the inverse default and two capabilities `add-rule` lacks. Until now the kernel could *append* a new `operating_protocol` rule (`add-rule`, fail-loud on an existing key) but had no governed way to *re-set* one — and a hand-edit of `RAG_MASTER.json` is exactly the drift the project forbids — so trimming a structured rule like `tool_hierarchy` one entry at a time was blocked.
+
+- **`update-rule`** (`71befae`, S116) — re-sets a rule that **must already exist** (UPDATE default; `--create` to add instead, the mirror of `add-rule`'s default). Two new capabilities over `add-rule`: **`--json`**, so a structured rule (e.g. `tool_hierarchy`) can be re-set with a dict/list value wholesale rather than only a string; and **`--subkey`**, to trim or re-set one sub-entry of a dict rule at a time. Backed by new `drift_store.set_operating_protocol_rule` (pure) / `set_operating_protocol_rule_file` (atomic), which reuse the FIX-4 atomic `tmp → verify → .bak → rename` byte-parity `.bak`-mirror write path, so an `operating_protocol` mutation keeps HOT↔.bak parity by construction. **+34 tests.**
+
+Unblocks the `tool_hierarchy` dict-trim — the last remaining piece of **RAG-LEAN-PROSE**. Runtime `__version__` `0.4.23 → 0.4.24`, `__spec_version__` unchanged (`3.2.6`). CLI/store-only — no new module (19), health 20/20, drift gate `268149294421` unchanged (no schema, WAL-format, or TLA+ change), `DRIFT_STORE_VERSION` unchanged (`1.2.0`), **1,569 → 1,603 tests** (+34). Released S117.
+
 ## [v0.4.23] — 2026-06-23
 
 **KA-14 + KA-16 + KA-17 — the session-resilience arc (bundled runtime release).** Packages the three runtime increments merged to `main` since v0.4.22, hardening the session boundary against the fresh-deploy and interrupted-close failure modes the eBay Session-Zero audit surfaced.
