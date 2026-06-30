@@ -62,6 +62,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5",
     "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
     "add-rule": "Append a NEW operating_protocol rule through the guarded atomic store (FIX-5/P3, fail-loud on existing key)",
+    "update-rule": "Re-set an EXISTING operating_protocol rule (string or dict/JSON value) or one sub-key of a dict rule through the guarded atomic store (UPDATE-RULE-VERB, fail-loud on a missing target unless --create)",
     "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)",
     "context": "Read/write the sanctioned, non-loaded RAG_CONTEXT.json project-context store (set|get|list) — FIX-11 inc2 / U3"
   },
@@ -552,6 +553,26 @@ def build_parser() -> argparse.ArgumentParser:
     add_rule_parser.add_argument("--allow-overwrite", dest="allow_overwrite", action="store_true",
                                  help="replace an existing rule of the same key (default: fail loud)")
     add_rule_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
+
+    # -- update-rule (UPDATE-RULE-VERB: governed re-set of dict/string operating_protocol rules) --
+    update_rule_parser = subparsers.add_parser(
+        "update-rule",
+        help="Re-set an EXISTING operating_protocol rule (string or JSON/dict value), or one sub-key of a dict rule, through the guarded atomic store (fail-loud on a missing target unless --create).",
+    )
+    update_rule_parser.add_argument("key", type=str, help="operating_protocol rule key (e.g. tool_hierarchy)")
+    update_rule_parser.add_argument("value", type=str, nargs="?", default=None,
+                                    help="rule value (string, or JSON with --json). Omit and use --value-file for long values.")
+    update_rule_parser.add_argument("--value-file", dest="value_file", type=Path, default=None,
+                                    help="read the value from this file instead of the positional arg")
+    update_rule_parser.add_argument("--subkey", type=str, default=None,
+                                    help="set this sub-key of a dict-valued rule (e.g. file_read_write_list)")
+    update_rule_parser.add_argument("--json", dest="as_json", action="store_true",
+                                    help="parse the value as JSON (object/array/scalar) instead of a string")
+    update_rule_parser.add_argument("--create", action="store_true",
+                                    help="allow creating the key/sub-key if absent (default: fail loud — update requires an existing target)")
+    update_rule_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    update_rule_parser.add_argument("--session", type=str, required=True, help="session id (audit trail; stamps meta.last_updated_utc)")
+    update_rule_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
 
     # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
     verify_parser = subparsers.add_parser(
@@ -3116,6 +3137,112 @@ def cmd_add_rule(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_update_rule(args: argparse.Namespace) -> int:
+    """Re-set an EXISTING operating_protocol rule — string OR structured (dict/JSON) —
+    or a single sub-key of a dict-valued rule, through the guarded atomic store
+    (UPDATE-RULE-VERB).
+
+    Closes the gap left by ``add-rule``, whose value is string-only and whose default
+    is ADD: this verb's default is UPDATE (the target must already exist; pass
+    ``--create`` to add). With ``--json`` the value is parsed as JSON, so structured
+    rules like ``tool_hierarchy`` can be re-set wholesale or — with ``--subkey`` —
+    trimmed one sub-entry at a time. Same write contract as add-rule: validate ->
+    ``set_operating_protocol_rule_file`` -> atomic write (tmp -> verify -> .bak
+    parity -> rename).
+    """
+    import json as _json
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        OPERATING_PROTOCOL_KEY,
+        load_hot,
+        set_operating_protocol_rule_file,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    # Raw value: --value-file takes precedence over the positional.
+    if args.value_file is not None:
+        if not args.value_file.exists():
+            print(f"Error: value file not found: {args.value_file}", file=sys.stderr)
+            return 1
+        raw = args.value_file.read_text(encoding="utf-8")
+    elif args.value is not None:
+        raw = args.value
+    else:
+        print("Error: provide the value as the positional arg or via --value-file",
+              file=sys.stderr)
+        return 1
+
+    # Parse: JSON when --json, else a stripped string.
+    if args.as_json:
+        try:
+            value = _json.loads(raw)
+        except _json.JSONDecodeError as ex:
+            print(f"Error: --json given but value is not valid JSON: {ex}", file=sys.stderr)
+            return 1
+    else:
+        value = raw.strip()
+        if not value:
+            print("Error: rule value is empty", file=sys.stderr)
+            return 1
+
+    # Pre-flight existence/type checks for clear messaging + an accurate dry-run.
+    try:
+        hot = load_hot(rag_path)
+    except DriftStoreError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+    op = hot.get(OPERATING_PROTOCOL_KEY)
+    if not isinstance(op, dict):
+        print(f"Error: {OPERATING_PROTOCOL_KEY!r} is not a JSON object", file=sys.stderr)
+        return 1
+
+    key_exists = args.key in op
+    if args.subkey is None:
+        if not key_exists and not args.create:
+            print(f"Error: operating_protocol has no rule {args.key!r} to update "
+                  f"(pass --create to add, or use add-rule)", file=sys.stderr)
+            return 1
+        target_desc = f"rule {args.key!r}"
+        action = "update" if key_exists else "create"
+    else:
+        if not key_exists:
+            print(f"Error: operating_protocol has no rule {args.key!r}; "
+                  f"cannot set sub-key {args.subkey!r}", file=sys.stderr)
+            return 1
+        if not isinstance(op[args.key], dict):
+            print(f"Error: rule {args.key!r} is {type(op[args.key]).__name__}, not a JSON "
+                  f"object; --subkey requires a dict-valued rule", file=sys.stderr)
+            return 1
+        sub_exists = args.subkey in op[args.key]
+        if not sub_exists and not args.create:
+            print(f"Error: rule {args.key!r} has no sub-key {args.subkey!r} "
+                  f"(pass --create to add)", file=sys.stderr)
+            return 1
+        target_desc = f"rule {args.key!r} sub-key {args.subkey!r}"
+        action = "update" if sub_exists else "create"
+
+    kind = "json" if args.as_json else "string"
+    if args.dry_run:
+        print(f"[DRY RUN] would {action} operating_protocol {target_desc} "
+              f"({kind} value) (no write)")
+        return 0
+
+    try:
+        set_operating_protocol_rule_file(
+            rag_path, args.key, value, subkey=args.subkey, create=args.create)
+    except DriftStoreError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    print(f"{action}d operating_protocol {target_desc} ({kind} value) "
+          f"[session {args.session}]")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Deterministic post-init coherence gate (FIX-2, K4/K8).
 
@@ -3425,6 +3552,7 @@ def main(argv: list[str] | None = None) -> int:
         "doctor": cmd_doctor,
         "add": cmd_add,
         "add-rule": cmd_add_rule,
+        "update-rule": cmd_update_rule,
         "verify": cmd_verify,
         "context": cmd_context,
     }

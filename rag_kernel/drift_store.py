@@ -59,6 +59,7 @@ project's own bookkeeping.
               "add_items", "add_items_file",
               "OPERATING_PROTOCOL_KEY", "add_operating_protocol_rule",
               "add_operating_protocol_rule_file",
+              "set_operating_protocol_rule", "set_operating_protocol_rule_file",
               "SESSIONS_RECENT_KEY", "sessions_recent_duplicate_pairs",
               "dedup_sessions_recent", "dedup_sessions_recent_file"],
   "use_when": "Reading, transitioning, or persisting the canonical status of tracked project items in RAG_MASTER.json",
@@ -641,6 +642,115 @@ def add_operating_protocol_rule_file(
     p = Path(path)
     hot = load_hot(p)
     add_operating_protocol_rule(hot, key, value, allow_overwrite=allow_overwrite)
+    if touch_meta:
+        _touch_meta(hot, now)
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
+    return hot
+
+
+def set_operating_protocol_rule(
+    hot: dict,
+    key: str,
+    value,
+    *,
+    subkey: Optional[str] = None,
+    create: bool = False,
+) -> dict:
+    """Re-set an EXISTING ``operating_protocol`` rule (UPDATE-RULE-VERB; pure on dict).
+
+    The UPDATE counterpart to :func:`add_operating_protocol_rule`, with two
+    deliberate differences that close the dict-trim gap (add-rule is string-only and
+    its default is ADD):
+
+      * ``value`` may be a string OR a JSON object/array/scalar — so structured
+        rules (e.g. ``tool_hierarchy``) can be re-set wholesale, not only strings;
+      * the default contract is the inverse of add: the target MUST already exist
+        (fail-loud) unless ``create=True``. This makes ``update-rule`` safe to run
+        against a typo'd key (it refuses) rather than silently minting a new rule.
+
+    With ``subkey`` the verb sets a single sub-key of a dict-valued rule (e.g.
+    ``tool_hierarchy.file_read_write_list``), which is how a dict rule is trimmed
+    one sub-entry at a time without re-sending the whole object.
+
+    Fail-loud guards (nothing is mutated unless all pass):
+      * ``operating_protocol`` exists and is a JSON object;
+      * ``key`` is a non-empty string; ``value`` is not ``None`` and (if a string)
+        non-empty;
+      * without ``subkey``: ``key`` must already exist unless ``create=True``;
+      * with ``subkey``: ``key`` must exist AND be a JSON object, ``subkey`` is a
+        non-empty string, and ``subkey`` must already exist unless ``create=True``.
+
+    Mutates and returns ``hot``.
+    """
+    op = hot.get(OPERATING_PROTOCOL_KEY)
+    if op is None:
+        raise DriftStoreError(
+            f"{OPERATING_PROTOCOL_KEY!r} is absent; cannot update a rule in a RAG without one"
+        )
+    if not isinstance(op, dict):
+        raise DriftStoreError(
+            f"{OPERATING_PROTOCOL_KEY!r} must be a JSON object, got {type(op).__name__}"
+        )
+    if not isinstance(key, str) or not key.strip():
+        raise DriftStoreError("operating_protocol rule key must be a non-empty string")
+    if value is None:
+        raise DriftStoreError("operating_protocol rule value must not be null")
+    if isinstance(value, str) and not value.strip():
+        raise DriftStoreError("operating_protocol rule value must be a non-empty string")
+
+    if subkey is None:
+        if key not in op and not create:
+            raise DriftStoreError(
+                f"operating_protocol has no rule {key!r} to update; "
+                "pass create=True to add it (or use add_operating_protocol_rule)"
+            )
+        op[key] = value
+        return hot
+
+    # Sub-key update of a dict-valued rule (e.g. tool_hierarchy.file_read_write_list).
+    if not isinstance(subkey, str) or not subkey.strip():
+        raise DriftStoreError("operating_protocol rule subkey must be a non-empty string")
+    if key not in op:
+        raise DriftStoreError(
+            f"operating_protocol has no rule {key!r}; cannot set sub-key {subkey!r}"
+        )
+    target = op[key]
+    if not isinstance(target, dict):
+        raise DriftStoreError(
+            f"operating_protocol rule {key!r} is {type(target).__name__}, not a JSON object; "
+            "sub-key update requires a dict-valued rule"
+        )
+    if subkey not in target and not create:
+        raise DriftStoreError(
+            f"operating_protocol rule {key!r} has no sub-key {subkey!r}; "
+            "pass create=True to add it"
+        )
+    target[subkey] = value
+    return hot
+
+
+def set_operating_protocol_rule_file(
+    path: Path | str,
+    key: str,
+    value,
+    *,
+    subkey: Optional[str] = None,
+    create: bool = False,
+    now: Optional[str] = None,
+    touch_meta: bool = True,
+) -> dict:
+    """Atomically update an ``operating_protocol`` rule (or one sub-key) in a RAG file.
+
+    The guarded, atomic counterpart to :func:`set_operating_protocol_rule`: load ->
+    set (existence + type invariants) -> ``atomic_write_json`` (tmp -> verify ->
+    .bak parity -> rename). On any guard failure nothing is written and the prior
+    file + its ``.bak`` are intact (refreshes ``.bak`` on success).
+    """
+    p = Path(path)
+    hot = load_hot(p)
+    set_operating_protocol_rule(hot, key, value, subkey=subkey, create=create)
     if touch_meta:
         _touch_meta(hot, now)
     atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
