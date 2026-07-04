@@ -56,7 +56,7 @@ project's own bookkeeping.
               "seed_items", "migrate_backlog", "migrate_backlog_file",
               "LEDGER_DISPOSITION_TO_STATUS", "INFERENCE_LEDGER_KEY",
               "ledger_disposition_to_status", "inference_specs_from_hot",
-              "add_items", "add_items_file",
+              "add_items", "add_items_file", "remove_item_file",
               "OPERATING_PROTOCOL_KEY", "add_operating_protocol_rule",
               "add_operating_protocol_rule_file",
               "set_operating_protocol_rule", "set_operating_protocol_rule_file",
@@ -89,7 +89,12 @@ from rag_kernel.persistence import atomic_write_json
 # KA-2 auditor (increment A) detects, plus the single-source detection predicate
 # (sessions_recent_duplicate_pairs / _sessions_recent_key) the auditor now consumes
 # instead of its own inline copy — one predicate for detect AND repair.
-DRIFT_STORE_VERSION = "1.2.0"
+# 1.3.0 (KA-CUTOVER-GATE): added the governed un-add path (store.remove +
+# remove_item_file) — the exact inverse of add, permitted ONLY on a pristine
+# (empty-history) item, so a mis-``add`` (wrong id/kind/status) is recoverable
+# without hand-editing JSON. Pairs with the record-coverage gate now counting
+# only NON-retired members (drift_control.RETIRED_STATUSES).
+DRIFT_STORE_VERSION = "1.3.0"
 
 # The single canonical array key inside RAG_MASTER.json (HOT). Everything else
 # that mentions item status is, or will become, a render of this array.
@@ -252,6 +257,33 @@ class TrackedItemStore:
         self._items[item_id] = updated
         return updated
 
+    def remove(self, item_id: str) -> TrackedItem:
+        """Un-add a PRISTINE item — the exact inverse of :meth:`add`.
+
+        Removal deletes the record from the canonical array entirely; it is NOT a
+        lifecycle transition. To keep un-add from erasing real project history it
+        is permitted ONLY while the item is still in its as-added state: an EMPTY
+        status ``history`` (never routed through a guarded transition). A mis-
+        ``add`` (wrong id / kind / status) is caught in exactly this state, so
+        un-add cleanly retracts it and lets the record-coverage cutover gate fall
+        back to its correct pre-migration state. Any item that has since moved
+        through the lifecycle has a non-empty history and is protected — use
+        ``discard`` / ``supersede`` for those.
+
+        Unknown id -> :class:`UnknownItemError`; a transitioned (non-pristine)
+        item -> :class:`DriftStoreError`. Nothing is mutated on either failure.
+        Returns the removed item.
+        """
+        item = self.get(item_id)  # UnknownItemError if absent — no mutation
+        if item.history:
+            raise DriftStoreError(
+                f"cannot un-add {item_id!r}: it carries {len(item.history)} "
+                f"lifecycle event(s) and is a real tracked item — un-add is only "
+                f"for a pristine mis-add (empty history). Use discard/supersede."
+            )
+        del self._items[item_id]
+        return item
+
     # -- serialization ------------------------------------------------------
 
     def to_list(self) -> list[dict]:
@@ -349,6 +381,28 @@ def set_note_in_file(
     return mutate_hot(
         path,
         lambda store: store.set_note(item_id, note, session=session),
+        now=now,
+    )
+
+
+def remove_item_file(
+    path: Path | str,
+    item_id: str,
+    *,
+    now: Optional[str] = None,
+) -> dict:
+    """Atomically un-add a pristine item from a RAG file's tracked_items array.
+
+    The guarded, atomic counterpart to :func:`add_items_file` (its inverse): load
+    -> ``store.remove`` (pristine-only guard) -> ``atomic_write_json`` (tmp ->
+    verify -> .bak -> rename). If the guard trips (unknown id, or a transitioned
+    item with lifecycle history) nothing is written and the prior file + ``.bak``
+    stay intact. KA-CUTOVER-GATE: makes a mis-``add`` recoverable without a
+    hand-edit — the exact manual-JSON drift the project forbids (E-037/E-040).
+    """
+    return mutate_hot(
+        path,
+        lambda store: store.remove(item_id),
         now=now,
     )
 

@@ -538,6 +538,16 @@ def build_parser() -> argparse.ArgumentParser:
     add_item_parser.add_argument("--by", type=str, default=None, help="superseding item id (required if --status SUPERSEDED)")
     add_item_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
 
+    # -- un-add (KA-CUTOVER-GATE: guarded, atomic INVERSE of add for a pristine mis-add) --
+    unadd_parser = subparsers.add_parser(
+        "un-add",
+        help="Un-add (remove) a PRISTINE mis-added tracked item — the guarded, atomic inverse of add; refuses any item that carries lifecycle history.",
+    )
+    unadd_parser.add_argument("item_id", type=str, help="id of the mis-added item to remove")
+    unadd_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    unadd_parser.add_argument("--session", type=str, required=True, help="session id (audit trail; stamps meta.last_updated_utc)")
+    unadd_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
+
     # -- add-rule (FIX-5/P3: guarded ADD verb for operating_protocol rules) --
     add_rule_parser = subparsers.add_parser(
         "add-rule",
@@ -3066,6 +3076,62 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_unadd(args: argparse.Namespace) -> int:
+    """Un-add a PRISTINE mis-added tracked item — the guarded, atomic inverse of add.
+
+    Closes the KA-CUTOVER-GATE recovery gap: before this, a mis-``add`` (wrong
+    id / kind / status) could only be discarded or superseded, never removed — so
+    a mis-kinded ERROR/INFERENCE item latched the record-coverage cutover gate ON
+    with no way to clear it. This wires ``drift_store.remove_item_file``: load ->
+    pristine-only guard (empty history) -> atomic write (tmp -> verify -> .bak ->
+    rename). An unknown id, or a transitioned (real, historied) item, fails LOUD
+    and writes nothing.
+    """
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        TrackedItemStore,
+        UnknownItemError,
+        load_hot,
+        remove_item_file,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    try:
+        store = TrackedItemStore.from_hot(load_hot(rag_path))
+    except DriftStoreError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+    if args.item_id not in store:
+        print(f"Error: no tracked item with id {args.item_id!r}", file=sys.stderr)
+        return 1
+    item = store.get(args.item_id)
+    if item.history:
+        print(f"Error: cannot un-add {args.item_id!r}: it carries "
+              f"{len(item.history)} lifecycle event(s) and is a real tracked item "
+              f"— un-add is only for a pristine mis-add. Use discard/supersede.",
+              file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        print(f"[DRY RUN] would un-add {args.item_id} "
+              f"[{item.status.value}/{item.kind.value}] (no write)")
+        return 0
+
+    try:
+        remove_item_file(rag_path, args.item_id)
+    except (UnknownItemError, DriftStoreError) as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    print(f"un-added {args.item_id}: was {item.status.value} {item.kind.value}  "
+          f"{item.title!r}  [session {args.session}]")
+    return 0
+
+
 def cmd_add_rule(args: argparse.Namespace) -> int:
     """Append a NEW operating_protocol rule through the guarded, atomic store (FIX-5/P3).
 
@@ -3551,6 +3617,7 @@ def main(argv: list[str] | None = None) -> int:
         "audit": cmd_audit,
         "doctor": cmd_doctor,
         "add": cmd_add,
+        "un-add": cmd_unadd,
         "add-rule": cmd_add_rule,
         "update-rule": cmd_update_rule,
         "verify": cmd_verify,

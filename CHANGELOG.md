@@ -6,6 +6,15 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.25] — 2026-07-04
+
+**KA-CUTOVER-GATE — the record-coverage cutover gate now counts only non-retired records, plus a governed `un-add` verb that makes a mis-`add` recoverable.** Two coupled defects made a mis-kinded forensic item (`kind=ERROR` / `INFERENCE`) unrecoverable: `check_record_coverage` treated a kind as "migrated" (gate ON) by ANY item of that kind regardless of status, so a single mis-`add` latched the per-kind cutover gate ON and demanded full ERROR_LOG / ledger coverage; and the store had no un-add path, so the mis-kinded item could be discarded or superseded but never removed — and since discard/supersede leave `kind` intact, the status-blind gate stayed latched. A mis-kind became a deadlock.
+
+- **Gate fix** (`drift_control` / `drift_audit`) — new `drift_control.RETIRED_STATUSES` = `{SUPERSEDED, DISCARDED}` (a strict subset of `TERMINAL_STATUSES`; `RESOLVED` deliberately stays counted, since a completed record is still a real canonical fact). `check_record_coverage` now counts only NON-retired `INFERENCE` / `ERROR` members, so retiring a mis-kinded item lets the per-kind gate fall back to its correct pre-migration (empty) state instead of latching ON forever.
+- **`un-add` verb** (`drift_store` / CLI) — new `TrackedItemStore.remove` + atomic `drift_store.remove_item_file` + the `un-add` CLI verb: the guarded, atomic inverse of `add`, permitted ONLY on a PRISTINE (empty-history) item, so a real, transitioned item is protected (use discard/supersede for those). An unknown id or a historied item fails LOUD and writes nothing. Recovers a mis-`add` without a hand-edit — the exact manual-JSON drift the project forbids (E-037 / E-040). Either fix alone breaks the deadlock; together they give clean recovery.
+
+Runtime `__version__` 0.4.24 → 0.4.25, `__spec_version__` unchanged (3.2.6). CLI/store/audit-only — no new module (19), health 20/20, drift gate `268149294421` unchanged (no schema, WAL-format, or TLA+ change), `DRIFT_STORE_VERSION` `1.2.0 → 1.3.0`, **1,606 → 1,623 tests** (+17). Released S123.
+
 ## [v0.4.24] — 2026-06-30
 
 **UPDATE-RULE-VERB — governed re-set of an existing `operating_protocol` rule through the guarded atomic store.** The counterpart to `add-rule`, with the inverse default and two capabilities `add-rule` lacks. Until now the kernel could *append* a new `operating_protocol` rule (`add-rule`, fail-loud on an existing key) but had no governed way to *re-set* one — and a hand-edit of `RAG_MASTER.json` is exactly the drift the project forbids — so trimming a structured rule like `tool_hierarchy` one entry at a time was blocked.

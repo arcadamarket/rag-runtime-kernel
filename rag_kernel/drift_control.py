@@ -50,7 +50,8 @@ invariant the whole kernel is built on, now applied to project bookkeeping.
   "capability": "item_lifecycle",
   "description": "Canonical project-state status enum + lifecycle state machine (DRIFT-ELIM increment 1: pure core, unregistered)",
   "exports": ["ItemStatus", "ItemKind", "TrackedItem", "StatusEvent",
-              "LIFECYCLE", "TERMINAL_STATUSES", "legal_status_transition",
+              "LIFECYCLE", "TERMINAL_STATUSES", "RETIRED_STATUSES",
+              "legal_status_transition",
               "assert_status_transition", "ItemStateError", "ItemValidationError"],
   "use_when": "Recording or transitioning the canonical status of a tracked project item",
   "never_bypass": true
@@ -157,6 +158,17 @@ LIFECYCLE: dict[ItemStatus, frozenset[ItemStatus]] = {
 # Statuses with no outgoing transitions.
 TERMINAL_STATUSES: frozenset[ItemStatus] = frozenset(
     s for s, targets in LIFECYCLE.items() if not targets
+)
+
+# RETIRED = the terminal statuses that *withdraw* an item from the live canonical
+# set: a SUPERSEDED item was replaced, a DISCARDED item was dropped. RESOLVED is
+# deliberately NOT retired — a completed record is a real, still-canonical fact.
+# The record-coverage cutover gate (drift_audit.check_record_coverage) counts a
+# forensic kind (INFERENCE/ERROR) as "migrated" only by its NON-retired members,
+# so retiring a mis-kinded item lets the per-kind gate fall back to its correct
+# pre-migration (empty) state instead of latching ON forever (KA-CUTOVER-GATE).
+RETIRED_STATUSES: frozenset[ItemStatus] = frozenset(
+    {ItemStatus.SUPERSEDED, ItemStatus.DISCARDED}
 )
 
 # A transition into one of these statuses requires a superseding/justifying ref.

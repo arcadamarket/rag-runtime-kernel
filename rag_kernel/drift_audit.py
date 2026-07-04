@@ -85,7 +85,12 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from rag_kernel.drift_control import ItemKind, ItemStatus, TERMINAL_STATUSES
+from rag_kernel.drift_control import (
+    ItemKind,
+    ItemStatus,
+    RETIRED_STATUSES,
+    TERMINAL_STATUSES,
+)
 from rag_kernel.drift_store import (
     INFERENCE_LEDGER_KEY,
     TRACKED_ITEMS_KEY,
@@ -608,13 +613,22 @@ def check_record_coverage(
     """
     findings: list[AuditFinding] = []
     store = TrackedItemStore.from_hot(hot)
-    inf_ids = {it.id for it in store if it.kind == ItemKind.INFERENCE}
-    err_ids = {it.id for it in store if it.kind == ItemKind.ERROR}
+    # Count only NON-RETIRED members of each forensic kind. A SUPERSEDED/DISCARDED
+    # item has been withdrawn from the live canonical set, so it must NOT keep the
+    # per-kind cutover gate latched ON: a mis-kinded item that is discarded (or an
+    # un-add) has to let the gate fall back to its pre-migration (empty) state, or
+    # the mis-kind is unrecoverable — every un-migrated E-###/ledger record would
+    # fail loud with no way to clear it (KA-CUTOVER-GATE). RESOLVED stays counted
+    # (a completed record is still a real canonical fact that needs coverage).
+    inf_ids = {it.id for it in store
+               if it.kind == ItemKind.INFERENCE and it.status not in RETIRED_STATUSES}
+    err_ids = {it.id for it in store
+               if it.kind == ItemKind.ERROR and it.status not in RETIRED_STATUSES}
 
     # Pre-cutover gate (per kind): coverage is enforced only once that record kind
-    # has been migrated (any item of the kind exists). Before the deliberate
-    # increment-6 cutover the legacy stores remain authoritative, so an empty
-    # canonical set is the correct pre-migration state, not a coverage gap.
+    # has been migrated (any NON-retired item of the kind exists). Before the
+    # deliberate increment-6 cutover the legacy stores remain authoritative, so an
+    # empty canonical set is the correct pre-migration state, not a coverage gap.
     led = hot.get(INFERENCE_LEDGER_KEY, []) if isinstance(hot, dict) else []
     if inf_ids:
         for e in led or []:
