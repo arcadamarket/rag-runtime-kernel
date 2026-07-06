@@ -65,7 +65,7 @@ def _write_hot(path: Path, hot: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 def test_version_and_key_constants():
-    assert DRIFT_STORE_VERSION == "1.3.0"  # KA-CUTOVER-GATE: added the un-add path
+    assert DRIFT_STORE_VERSION == "1.4.0"  # KA-CS-REFRESH: added the current_status refresh path
     assert TRACKED_ITEMS_KEY == "tracked_items"
 
 

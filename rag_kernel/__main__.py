@@ -63,6 +63,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
     "add-rule": "Append a NEW operating_protocol rule through the guarded atomic store (FIX-5/P3, fail-loud on existing key)",
     "update-rule": "Re-set an EXISTING operating_protocol rule (string or dict/JSON value) or one sub-key of a dict rule through the guarded atomic store (UPDATE-RULE-VERB, fail-loud on a missing target unless --create)",
+    "refresh-current-status": "Re-stamp current_status machine-facts (runtime version + git HEAD, optional --tests count) through the guarded atomic store — the governed repair for the E-043 freshness guard (KA-CS-REFRESH)",
     "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)",
     "context": "Read/write the sanctioned, non-loaded RAG_CONTEXT.json project-context store (set|get|list) — FIX-11 inc2 / U3"
   },
@@ -594,6 +595,24 @@ def build_parser() -> argparse.ArgumentParser:
     update_rule_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
     update_rule_parser.add_argument("--session", type=str, required=True, help="session id (audit trail; stamps meta.last_updated_utc)")
     update_rule_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
+
+    # -- refresh-current-status (KA-CS-REFRESH: governed repair of the E-043 freshness guard) --
+    refresh_cs_parser = subparsers.add_parser(
+        "refresh-current-status",
+        help="Re-stamp current_status machine-facts (runtime version + git HEAD, optional test count) through the guarded atomic store — the governed repair for the E-043 freshness guard (KA-CS-REFRESH).",
+    )
+    refresh_cs_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    refresh_cs_parser.add_argument("--session", type=str, required=True, help="session id (audit trail; stamps meta.last_updated_utc)")
+    refresh_cs_parser.add_argument("--version", type=str, default=None,
+                                   help="runtime version to stamp (default: live rag_kernel.__version__)")
+    refresh_cs_parser.add_argument("--git-head", dest="git_head", type=str, default=None,
+                                   help="git HEAD sha to stamp (default: auto-resolve the worktree HEAD, like audit --git-head)")
+    refresh_cs_parser.add_argument("--tests", type=int, default=None,
+                                   help="also refresh the unit_tests count to this integer (comma-formatted)")
+    refresh_cs_parser.add_argument("--strict", action="store_true",
+                                   help="fail loud if a targeted field/token is missing instead of skipping it")
+    refresh_cs_parser.add_argument("--dry-run", action="store_true",
+                                   help="show the planned old->new token changes without writing")
 
     # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
     verify_parser = subparsers.add_parser(
@@ -3426,6 +3445,83 @@ def cmd_update_rule(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_refresh_current_status(args: argparse.Namespace) -> int:
+    """Re-stamp the denormalized machine-facts in ``current_status`` (KA-CS-REFRESH).
+
+    The governed, atomic REPAIR half of the E-043 freshness guard. A mid-session dev
+    commit bumps ``rag_kernel.__version__`` / moves git HEAD, leaving the
+    ``current_status`` narrative stale with no reconciliation path — so the
+    session-end freshness audit fails and the only prior fix was a forbidden hand-edit
+    (the S116 + S127 incidents). This verb refreshes the runtime-version token
+    (``current_status.rag_kernel_version`` <- live ``rag_kernel.__version__``) and the
+    published git HEAD (``current_status.github_repo``'s "LATEST COMMIT <sha>" <- the
+    live worktree HEAD), and OPTIONALLY the ``unit_tests`` count (``--tests``, never
+    fabricated). Same write contract as update-rule: load -> plan via the shared guard
+    regexes -> atomic write (tmp -> verify -> .bak parity -> rename). Idempotent — a
+    no-op (no write, .bak untouched) when already fresh. Exit 0 on success/no-op, 1 on
+    error (incl. a --strict missing-token failure).
+    """
+    from rag_kernel.drift_store import (
+        CurrentStatusRefreshError,
+        DriftStoreError,
+        refresh_current_status_file,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    # Live authorities: version from the imported runtime, HEAD from the worktree
+    # (reusing the auditor's own resolver so detect and repair agree on the source).
+    version = args.version
+    if version is None:
+        try:
+            import rag_kernel
+            version = getattr(rag_kernel, "__version__", None)
+        except Exception:
+            version = None
+    git_head = args.git_head or _resolve_git_head(rag_path)
+    tests = f"{args.tests:,}" if args.tests is not None else None
+
+    if not any([version, git_head, tests]):
+        print("Error: nothing to refresh — could not resolve a live version, git "
+              "HEAD, or --tests count", file=sys.stderr)
+        return 1
+
+    try:
+        changes, wrote = refresh_current_status_file(
+            rag_path,
+            version=version,
+            git_head=git_head,
+            tests=tests,
+            strict=args.strict,
+            dry_run=args.dry_run,
+        )
+    except (CurrentStatusRefreshError, DriftStoreError) as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    # Line-by-line render of every planned token (STRICT-OBEY rendering discipline —
+    # never collapse to a bare count).
+    header = (
+        "[DRY RUN] current_status would refresh" if args.dry_run
+        else ("current_status refreshed" if wrote else "current_status already fresh")
+    )
+    print(f"{header} [session {args.session}]:")
+    for c in changes:
+        if c["action"] == "updated":
+            print(f"  {c['field']} ({c['kind']}): {c['old']} -> {c['new']}")
+        elif c["action"] == "unchanged":
+            print(f"  {c['field']} ({c['kind']}): {c['new']} (already fresh)")
+        else:  # skipped
+            print(f"  {c['field']} ({c['kind']}): skipped (no target token; pass "
+                  f"--strict to fail loud)")
+    if wrote:
+        print("  .bak refreshed to byte-parity (HOT == BAK).")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Deterministic post-init coherence gate (FIX-2, K4/K8).
 
@@ -3750,6 +3846,7 @@ def main(argv: list[str] | None = None) -> int:
         "un-add": cmd_unadd,
         "add-rule": cmd_add_rule,
         "update-rule": cmd_update_rule,
+        "refresh-current-status": cmd_refresh_current_status,
         "verify": cmd_verify,
         "context": cmd_context,
     }

@@ -61,7 +61,9 @@ project's own bookkeeping.
               "add_operating_protocol_rule_file",
               "set_operating_protocol_rule", "set_operating_protocol_rule_file",
               "SESSIONS_RECENT_KEY", "sessions_recent_duplicate_pairs",
-              "dedup_sessions_recent", "dedup_sessions_recent_file"],
+              "dedup_sessions_recent", "dedup_sessions_recent_file",
+              "CURRENT_STATUS_KEY", "CurrentStatusRefreshError",
+              "compute_current_status_refresh", "refresh_current_status_file"],
   "use_when": "Reading, transitioning, or persisting the canonical status of tracked project items in RAG_MASTER.json",
   "never_bypass": true
 }
@@ -70,6 +72,7 @@ project's own bookkeeping.
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional, Sequence
@@ -94,7 +97,15 @@ from rag_kernel.persistence import atomic_write_json
 # (empty-history) item, so a mis-``add`` (wrong id/kind/status) is recoverable
 # without hand-editing JSON. Pairs with the record-coverage gate now counting
 # only NON-retired members (drift_control.RETIRED_STATUSES).
-DRIFT_STORE_VERSION = "1.3.0"
+# 1.4.0 (KA-CS-REFRESH): added the governed current_status refresh path
+# (compute_current_status_refresh / refresh_current_status_file) — the atomic
+# REPAIR half of the E-043 freshness guard, re-stamping the denormalized runtime
+# version + git HEAD (+ optional test count) tokens a mid-session dev commit
+# leaves stale. The leading-token constants/regexes it shares with
+# drift_audit.check_current_status_freshness now live HERE (the lower module) as
+# the single source of truth; drift_audit imports + re-exports them, so detection
+# and repair can never disagree (same DRY pattern as the shared date coercers).
+DRIFT_STORE_VERSION = "1.4.0"
 
 # The single canonical array key inside RAG_MASTER.json (HOT). Everything else
 # that mentions item status is, or will become, a render of this array.
@@ -811,6 +822,183 @@ def set_operating_protocol_rule_file(
         p, hot, mirror_bak=True, guard_side_stores=True
     )
     return hot
+
+
+# ---------------------------------------------------------------------------
+# current_status freshness refresh (KA-CS-REFRESH) — the governed REPAIR half of
+# the E-043 freshness guard.
+# ---------------------------------------------------------------------------
+# current_status DENORMALIZES two machine-facts whose authority lives OUTSIDE the
+# RAG — the deployed ``rag_kernel.__version__`` and the published git HEAD.
+# ``drift_audit.check_current_status_freshness`` FAILS LOUD when the narrative's
+# stated fact drifts from the live authority (E-043). Until now there was no
+# governed way to REPAIR that drift: a mid-session dev commit bumped the version /
+# moved HEAD, current_status went stale, and the only fix was a hand-edit of the
+# RAG (exactly the drift the project forbids) — the S116 + S127 field incidents.
+#
+# This is the repair half. The leading-token field-names + regexes BELOW are the
+# single source of truth: ``drift_audit`` imports and re-exports them, so the guard
+# that DETECTS staleness and this verb that REPAIRS it read the IDENTICAL token
+# definitions and can never disagree — the same DRY discipline that keeps the
+# ``open_tasks`` render tied to ``tracked_items`` and the date coercers shared. The
+# refresh is deterministic and zero-LLM: it re-stamps ONLY the machine-fact token
+# in place, leaving all surrounding narrative untouched (a narrative claim is the
+# agent's to rewrite at checkpoint — increment_status_honesty).
+
+CURRENT_STATUS_KEY = "current_status"
+# current_status.rag_kernel_version LEADS with the live "vX.Y.Z" runtime token.
+_CS_VERSION_FIELD = "rag_kernel_version"
+# current_status.github_repo carries the "LATEST COMMIT <sha>" published pointer.
+_CS_HEAD_FIELDS: tuple[str, ...] = ("github_repo",)
+# current_status.unit_tests LEADS with the passing-test count ("1,639 tests ...").
+_CS_TESTS_FIELD = "unit_tests"
+# Leading semver token, tolerant of an optional 'v' prefix (v0.4.2 or 0.4.2).
+_CS_VERSION_TOKEN_RE = re.compile(r"\bv?(\d+\.\d+\.\d+)\b")
+# A 7–40 hex git sha introduced by COMMIT / HEAD (e.g. "LATEST COMMIT e109794").
+_CS_HEAD_RE = re.compile(
+    r"\b(?:latest\s+commit|head|commit)[`'\s:=]{1,6}([0-9a-f]{7,40})\b", re.IGNORECASE
+)
+# Leading integer count, comma-grouped ("1,639") or bare ("1639").
+_CS_TESTS_COUNT_RE = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d+)\b")
+
+
+class CurrentStatusRefreshError(DriftStoreError):
+    """Raised when current_status is absent, or a --strict-required token is missing."""
+
+
+def _refresh_token(pattern: "re.Pattern[str]", want: str, text: str):
+    """Replace ONLY group(1) of the FIRST match, preserving all surrounding text.
+
+    Returns ``(new_text, old_token)``; ``old_token`` is ``None`` when the pattern
+    does not match (nothing replaced). Mirrors the guard, which reads only the
+    first token of each field.
+    """
+    m = pattern.search(text)
+    if not m:
+        return text, None
+    old = m.group(1)
+    s, e = m.span(1)
+    return text[:s] + want + text[e:], old
+
+
+def compute_current_status_refresh(
+    hot: dict,
+    *,
+    version: Optional[str] = None,
+    git_head: Optional[str] = None,
+    tests: Optional[str] = None,
+    strict: bool = False,
+) -> "tuple[dict, list[dict]]":
+    """Pure planner: compute the refreshed ``current_status`` + a per-token change list.
+
+    Does NOT write. Returns ``(new_current_status, changes)`` where each change is
+    ``{field, kind, old, new, action}`` and ``action`` ∈ {``updated``, ``unchanged``,
+    ``skipped``}. Each fact is planned only when its live authority is supplied
+    (``None`` = not reconciled → not planned), mirroring the guard's self-skip. With
+    ``strict`` a supplied authority whose target field/token is missing raises
+    :class:`CurrentStatusRefreshError` instead of recording a ``skipped`` change.
+    """
+    cs = hot.get(CURRENT_STATUS_KEY)
+    if not isinstance(cs, dict):
+        raise CurrentStatusRefreshError(
+            f"{CURRENT_STATUS_KEY!r} is absent or not a JSON object — nothing to refresh"
+        )
+    new_cs = dict(cs)
+    changes: "list[dict]" = []
+
+    def _plan(field: str, kind: str, pattern: "re.Pattern[str]", want: str) -> None:
+        raw = cs.get(field)
+        if isinstance(raw, str):
+            new_text, old = _refresh_token(pattern, want, raw)
+            if old is not None:
+                new_cs[field] = new_text
+                changes.append({
+                    "field": field, "kind": kind, "old": old, "new": want,
+                    "action": "unchanged" if old == want else "updated",
+                })
+                return
+        if strict:
+            raise CurrentStatusRefreshError(
+                f"current_status.{field} is missing or has no {kind} token to refresh"
+            )
+        changes.append({"field": field, "kind": kind, "old": None,
+                        "new": want, "action": "skipped"})
+
+    # 1. runtime version — the leading vX.Y.Z token must equal rag_kernel.__version__.
+    if version:
+        _plan(_CS_VERSION_FIELD, "version", _CS_VERSION_TOKEN_RE, version.lstrip("v"))
+
+    # 2. git HEAD — the FIRST head-bearing field's "LATEST COMMIT <sha>" pointer.
+    if git_head:
+        want_head = git_head.lower()
+        planned = False
+        for fld in _CS_HEAD_FIELDS:
+            raw = cs.get(fld)
+            if isinstance(raw, str) and _CS_HEAD_RE.search(raw):
+                new_text, old = _refresh_token(_CS_HEAD_RE, want_head, raw)
+                new_cs[fld] = new_text
+                # Prefix-equal (short vs long sha) counts as already-fresh, matching
+                # the guard's prefix comparison — no needless rewrite.
+                fresh = old.lower().startswith(want_head) or want_head.startswith(old.lower())
+                changes.append({
+                    "field": fld, "kind": "head", "old": old, "new": want_head,
+                    "action": "unchanged" if fresh else "updated",
+                })
+                if fresh:
+                    new_cs[fld] = raw  # leave the existing (possibly longer) sha as-is
+                planned = True
+                break
+        if not planned:
+            if strict:
+                raise CurrentStatusRefreshError(
+                    "current_status has no COMMIT/HEAD sha field to refresh"
+                )
+            changes.append({"field": _CS_HEAD_FIELDS[0], "kind": "head",
+                            "old": None, "new": want_head, "action": "skipped"})
+
+    # 3. unit_tests count — OPTIONAL; only when an explicit count is supplied (the
+    #    auditor does not guard it, and a count must never be fabricated).
+    if tests:
+        _plan(_CS_TESTS_FIELD, "tests", _CS_TESTS_COUNT_RE, tests)
+
+    return new_cs, changes
+
+
+def refresh_current_status_file(
+    path: Path | str,
+    *,
+    version: Optional[str] = None,
+    git_head: Optional[str] = None,
+    tests: Optional[str] = None,
+    strict: bool = False,
+    now: Optional[str] = None,
+    touch_meta: bool = True,
+    dry_run: bool = False,
+) -> "tuple[list[dict], bool]":
+    """Atomically re-stamp ``current_status`` machine-facts (KA-CS-REFRESH).
+
+    Load -> plan the token refresh (shared guard regexes) -> on a real change:
+    write ``current_status`` back, ``_touch_meta``, ``atomic_write_json`` (tmp ->
+    verify -> .bak parity -> rename). Returns ``(changes, wrote)``. Nothing is
+    written on ``dry_run`` or when no token actually changed (idempotent no-op), so
+    HOT == ``.bak`` is preserved either way. On any guard failure nothing is written
+    and the prior file + its ``.bak`` are intact.
+    """
+    p = Path(path)
+    hot = load_hot(p)
+    new_cs, changes = compute_current_status_refresh(
+        hot, version=version, git_head=git_head, tests=tests, strict=strict
+    )
+    changed = any(c["action"] == "updated" for c in changes)
+    if dry_run or not changed:
+        return changes, False
+    hot[CURRENT_STATUS_KEY] = new_cs
+    if touch_meta:
+        _touch_meta(hot, now)
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
+    return changes, True
 
 
 # ---------------------------------------------------------------------------

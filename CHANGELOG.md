@@ -6,6 +6,15 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.27] — 2026-07-06
+
+**KA-CS-REFRESH — a governed `refresh-current-status` verb that re-stamps the `current_status` machine-facts, closing the last hand-edit path the freshness guard left open.** `current_status` denormalizes two facts whose authority lives OUTSIDE the RAG — the runtime `rag_kernel.__version__` and the published git HEAD — and the E-043 freshness guard (`drift_audit.check_current_status_freshness`) fails loud when the narrative drifts from the live authority. But there was no governed way to *repair* that drift: a mid-session dev commit bumped the version / moved HEAD, `current_status` went stale, and the only fix was a hand-edit of `RAG_MASTER.json` — exactly the drift the project forbids. It cost a manual atomic-writer reconcile two sessions running (S116, S127).
+
+- **`refresh-current-status`** (`drift_store` / CLI) — the governed, atomic **repair half** of the E-043 guard. Re-stamps the runtime-version token (`current_status.rag_kernel_version` ← live `rag_kernel.__version__`) and the published git HEAD (`current_status.github_repo`'s "LATEST COMMIT &lt;sha&gt;" ← the auto-resolved worktree HEAD, reusing the auditor's own `_resolve_git_head`), plus optionally the `unit_tests` count (`--tests`, never fabricated). Backed by new `drift_store.compute_current_status_refresh` (pure planner) / `refresh_current_status_file` (atomic), reusing the FIX-4 `tmp → verify → .bak → rename` byte-parity write path so a `current_status` mutation keeps HOT↔.bak parity by construction. Deterministic and **idempotent** — a no-op (no write, `.bak` untouched) when already fresh; `--dry-run` prints the planned old→new token diff; `--strict` fails loud on a missing target token. It re-stamps only the machine-fact token in place, leaving surrounding narrative to the agent (increment_status_honesty).
+- **DRY invariant** — the leading-token field-names + regexes the guard uses to *detect* staleness (`_CS_VERSION_FIELD`, `_CS_HEAD_FIELDS`, `_CS_VERSION_TOKEN_RE`, `_CS_HEAD_RE`) moved **down** into `drift_store` (the lower module) as the single source of truth; `drift_audit` imports and re-exports them. Detection and repair now read the IDENTICAL token definitions and can never disagree — the same pattern as the shared date coercers.
+
+Runtime `__version__` 0.4.26 → 0.4.27, `__spec_version__` unchanged (3.2.6). CLI/store/audit-only — no new module (19), health 20/20, drift gate `268149294421` unchanged (no schema, WAL-format, or TLA+ change), `DRIFT_STORE_VERSION` `1.3.0 → 1.4.0`, **1,639 → 1,664 tests** (+25). Released S128.
+
 ## [v0.4.26] — 2026-07-06
 
 **T1 GATE — three governance-hardening fixes that close the last self-hosting gate items (KA-CTX-RAGFLAG + KA-CKPT-PARITY-GATE + KA-18).** A bundled runtime release of the T1 kernel-fix gate cleared in S126; all three land as CLI/checkpoint/context hardening with no schema, WAL-format, or TLA+ change.

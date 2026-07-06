@@ -98,6 +98,10 @@ from rag_kernel.drift_store import (
     TrackedItemStore,
     _coerce_utc_date,
     _coerce_utc_instant,
+    _CS_HEAD_FIELDS,
+    _CS_HEAD_RE,
+    _CS_VERSION_FIELD,
+    _CS_VERSION_TOKEN_RE,
     ledger_disposition_to_status,
     load_hot,
     sessions_recent_duplicate_pairs,
@@ -257,14 +261,13 @@ _ERROR_HEADING_RE = re.compile(r"^#+\s*(E-\d+)\b", re.MULTILINE)
 # state, so they cannot be *rendered* from the RAG — the discipline is to GUARD
 # them: extract the stated fact from the narrative and assert it still equals the
 # live authority. The fields below are the conventional carriers of each fact.
-_CS_VERSION_FIELD = "rag_kernel_version"   # leads with the current vX.Y.Z token
-_CS_HEAD_FIELDS: tuple[str, ...] = ("github_repo",)  # carries "LATEST COMMIT <sha>"
-# Leading semver token, tolerant of an optional 'v' prefix (v0.4.2 or 0.4.2).
-_CS_VERSION_TOKEN_RE = re.compile(r"\bv?(\d+\.\d+\.\d+)\b")
-# A 7–40 hex git sha introduced by COMMIT / HEAD (e.g. "LATEST COMMIT e109794").
-_CS_HEAD_RE = re.compile(
-    r"\b(?:latest\s+commit|head|commit)[`'\s:=]{1,6}([0-9a-f]{7,40})\b", re.IGNORECASE
-)
+# The field-names + leading-token regexes (``_CS_VERSION_FIELD``, ``_CS_HEAD_FIELDS``,
+# ``_CS_VERSION_TOKEN_RE``, ``_CS_HEAD_RE``) now live in ``drift_store`` (the lower
+# module) and are imported above. This makes the guard that DETECTS a stale
+# current_status here and the ``refresh_current_status_file`` verb that REPAIRS it
+# there read the IDENTICAL token definitions — one source of truth, so detection and
+# repair can never disagree (KA-CS-REFRESH; same pattern as the shared date coercers).
+# They are re-exported below for backward-compatible ``drift_audit._CS_*`` access.
 
 # --- integrity invariants (FIX-1 / K1+K2) ----------------------------------
 # An unresolved build-time placeholder: a value that IS *exactly* an
