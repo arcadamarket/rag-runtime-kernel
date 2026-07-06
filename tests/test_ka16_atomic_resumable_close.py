@@ -102,7 +102,8 @@ def test_checkpoint_error_log_fold_is_idempotent(tmp_path):
     el = tmp_path / "ERROR_LOG.md"
     for _ in range(2):
         rc = main(["checkpoint", "--rag", str(rag), "--session", "S1", "--summary", "x",
-                   "--error-log-entry", "### E-1 dup-guard", "--error-log-id", "E-1"])
+                   "--error-log-entry", "### E-1 dup-guard", "--error-log-id", "E-1",
+                   "--no-require-session-log"])  # KA-18 guard orthogonal to fold-idempotency
         assert rc == 0
     text = el.read_text(encoding="utf-8")
     assert text.count("<!-- close-log-id: E-1 -->") == 1   # appended exactly once

@@ -176,11 +176,17 @@ class TestCheckpointCommand:
         path.write_text(json.dumps(rag, indent=2), encoding="utf-8")
         return path
 
+    # NOTE: these tests exercise checkpoint MECHANICS (seq bump, session trim,
+    # status/tasks) in isolation, not the KA-18 session-start ordering guard —
+    # so they pass --no-require-session-log to bypass that orthogonal gate
+    # (which defaults ON at the CLI). KA-18 enforcement itself is covered in
+    # tests/test_ka18_session_start_ordering_guard.py.
     def test_checkpoint_basic(self, tmp_path):
         rag_path = self._make_rag(tmp_path)
         result = main([
             "checkpoint", "--rag", str(rag_path),
             "--session", "S1", "--summary", "Test session summary",
+            "--no-require-session-log",
         ])
         assert result == 0
         updated = json.loads(rag_path.read_text(encoding="utf-8"))
@@ -195,7 +201,7 @@ class TestCheckpointCommand:
         result = main([
             "checkpoint", "--rag", str(rag_path),
             "--session", "S1", "--summary", "Done",
-            "--status", "READY",
+            "--status", "READY", "--no-require-session-log",
         ])
         assert result == 0
         updated = json.loads(rag_path.read_text(encoding="utf-8"))
@@ -207,7 +213,7 @@ class TestCheckpointCommand:
         result = main([
             "checkpoint", "--rag", str(rag_path),
             "--session", "S1", "--summary", "Done",
-            "--tasks", tasks,
+            "--tasks", tasks, "--no-require-session-log",
         ])
         assert result == 0
         updated = json.loads(rag_path.read_text(encoding="utf-8"))
@@ -233,8 +239,8 @@ class TestCheckpointCommand:
 
     def test_checkpoint_increments_seq(self, tmp_path):
         rag_path = self._make_rag(tmp_path)
-        main(["checkpoint", "--rag", str(rag_path), "--session", "S1", "--summary", "First"])
-        main(["checkpoint", "--rag", str(rag_path), "--session", "S2", "--summary", "Second"])
+        main(["checkpoint", "--rag", str(rag_path), "--session", "S1", "--summary", "First", "--no-require-session-log"])
+        main(["checkpoint", "--rag", str(rag_path), "--session", "S2", "--summary", "Second", "--no-require-session-log"])
         updated = json.loads(rag_path.read_text(encoding="utf-8"))
         assert updated["meta"]["last_checkpoint_seq"] == 2
         assert len(updated["sessions_recent"]) == 2
@@ -242,7 +248,7 @@ class TestCheckpointCommand:
     def test_checkpoint_trims_sessions_to_five(self, tmp_path):
         rag_path = self._make_rag(tmp_path)
         for i in range(7):
-            main(["checkpoint", "--rag", str(rag_path), "--session", f"S{i}", "--summary", f"Session {i}"])
+            main(["checkpoint", "--rag", str(rag_path), "--session", f"S{i}", "--summary", f"Session {i}", "--no-require-session-log"])
         updated = json.loads(rag_path.read_text(encoding="utf-8"))
         assert len(updated["sessions_recent"]) == 5
         assert updated["sessions_recent"][0]["id"] == "S2"  # Oldest trimmed

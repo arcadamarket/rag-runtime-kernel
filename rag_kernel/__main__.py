@@ -361,6 +361,17 @@ def build_parser() -> argparse.ArgumentParser:
     ckpt_parser.add_argument("--error-log-entry", type=str, default=None, help="Markdown ERROR_LOG entry to fold in (idempotent).")
     ckpt_parser.add_argument("--error-log-id", type=str, default=None, help="Unique id for the ERROR_LOG entry (default: <session>-checkpoint).")
     ckpt_parser.add_argument("--error-log-path", type=str, default=None, help="ERROR_LOG.md path (default: beside the RAG).")
+    # KA-18 (E-044/E-045) — session-start ordering guard. ON by default at the
+    # CLI so a bare `checkpoint` refuses to seal before the mechanized
+    # `session-start` has opened this session's log (the recurring slip that
+    # banked state with no observability record). Explicit bypass for the rare
+    # intentional case.
+    ckpt_parser.add_argument(
+        "--no-require-session-log", dest="require_session_log",
+        action="store_false", default=True,
+        help="Bypass the KA-18 guard that refuses a checkpoint when no session "
+             "log is open for --session (default: guard ON).",
+    )
 
     # -- gc --
     gc_parser = subparsers.add_parser(
@@ -1617,6 +1628,47 @@ def cmd_session(args: argparse.Namespace) -> int:
         return 1
 
 
+def _reconcile_checkpoint_render_parity(rag: dict, *, apply: bool) -> list[str]:
+    """KA-CKPT-PARITY-GATE (E-049): reconcile the legacy ``open_tasks`` /
+    ``deferred_items`` renders against the canonical ``tracked_items`` at seal.
+
+    ``tracked_items`` is the sole status authority (inc4); the legacy arrays are
+    a pure render of it. Any tracked_item-mutating verb (note/resolve/defer/…)
+    run between the last ``render --apply`` and a ``checkpoint`` would otherwise
+    seal a STALE render, which post-seal ``audit --strict`` flags as an
+    E-040-family ``render_parity`` ERROR — this is exactly E-049. Re-rendering
+    here makes render-parity hold BY CONSTRUCTION at every seal, collapsing the
+    fragile verb→render→checkpoint sequence to verb→checkpoint.
+
+    Guards on the migrated architecture: acts ONLY when ``tracked_items`` is
+    present, so an un-migrated/legacy RAG (whose legacy arrays are authored, not
+    rendered) is never silently wiped. Returns the list of arrays that were (or,
+    when ``apply=False``, would be) corrected, so the caller can surface a
+    visible note — the seal is never a silent mutation. With ``apply=True`` the
+    ``rag`` dict is updated in place.
+    """
+    if "tracked_items" not in rag:
+        return []  # un-migrated/legacy RAG: nothing canonical to render from
+    from rag_kernel import drift_render
+    from rag_kernel.drift_store import TrackedItemStore
+
+    store = TrackedItemStore.from_hot(rag)
+    corrected: list[str] = []
+    if "open_tasks" in rag:
+        expected = drift_render.render_open_tasks(store)
+        if rag["open_tasks"] != expected:
+            corrected.append(f"open_tasks ({len(expected)})")
+            if apply:
+                rag["open_tasks"] = expected
+    if "deferred_items" in rag:
+        expected_d = drift_render.render_deferred_items(store)
+        if rag["deferred_items"] != expected_d:
+            corrected.append(f"deferred_items ({len(expected_d)})")
+            if apply:
+                rag["deferred_items"] = expected_d
+    return corrected
+
+
 def cmd_checkpoint(args: argparse.Namespace) -> int:
     """Merge a session summary into RAG_MASTER.json atomically.
 
@@ -1642,6 +1694,29 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
     session_id = args.session
     summary = args.summary
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # KA-18 (E-044/E-045) — session-start ORDERING GUARD. A checkpoint must not
+    # seal before the mechanized `session-start` has opened this session's log:
+    # sealing first is the recurring slip that banked state with NO observability
+    # record (tripping the KA-7 observability-coherence auditor) and left
+    # current_status stale post-commit. When enforcement is on — the CLI default;
+    # programmatic callers (the session-end ritual, unit tests) opt in — refuse
+    # fail-loud unless the session log exists, pointing the operator at the
+    # mechanized session-start. Bypass explicitly with --no-require-session-log.
+    if getattr(args, "require_session_log", False):
+        from rag_kernel.session_logger import SessionLogger
+        _log_path = SessionLogger(session_id, log_dir=rag_path.parent).log_path
+        if not _log_path.exists():
+            msg = (
+                f"no open session log for {session_id} at {_log_path.name} — run "
+                "mechanized `session-start` FIRST (KA-18 ordering guard, "
+                "E-044/E-045). Bypass with --no-require-session-log if intentional."
+            )
+            if getattr(args, "dry_run", False):
+                print(f"  [DRY RUN] would refuse: {msg}")
+            else:
+                print(f"ERROR: {msg}", file=sys.stderr)
+                return 1
 
     # Update sessions_recent
     sessions = rag.get("sessions_recent", [])
@@ -1699,6 +1774,13 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
         print(f"  Session: {session_id}")
         print(f"  Summary: {summary[:80]}...")
         print(f"  Checkpoint seq: {checkpoint_seq}")
+        stale_preview = _reconcile_checkpoint_render_parity(rag, apply=False)
+        if stale_preview:
+            print(
+                "  render-parity: would re-render stale "
+                f"{', '.join(stale_preview)} from tracked_items before seal "
+                "(KA-CKPT-PARITY-GATE / E-049)"
+            )
         if error_log_entry:
             eid = error_log_id or f"{session_id}-checkpoint"
             already = _error_log_has_id(el_path, eid)
@@ -1724,6 +1806,41 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
             f"  ERROR_LOG: {'appended' if appended else 'skipped (id already present)'} "
             f"entry id='{eid}'"
         )
+
+    # 1b. KA-CKPT-PARITY-GATE (E-049) — re-render the legacy open_tasks /
+    # deferred_items from canonical tracked_items so this seal is render-parity
+    # clean BY CONSTRUCTION. Without it, a tracked_item-mutating verb
+    # (note/resolve/defer/…) run before this checkpoint would seal a stale render
+    # that post-seal `audit --strict` flags as a render_parity ERROR.
+    #
+    # Scoped to the MIGRATED architecture (tracked_items present). An un-migrated
+    # RAG carries authored, non-rendered legacy arrays: it is out of scope for
+    # E-049 and must be neither wiped by the reconcile nor tripped by the
+    # defensive assertion below (whose parity check would otherwise read an
+    # authored open_tasks against an empty render). Both are gated together so
+    # they can never disagree.
+    if "tracked_items" in rag:
+        corrected = _reconcile_checkpoint_render_parity(rag, apply=True)
+        if corrected:
+            print(
+                "  render-parity: re-rendered stale "
+                f"{', '.join(corrected)} from tracked_items before seal "
+                "(KA-CKPT-PARITY-GATE / E-049)"
+            )
+        # Defensive fail-loud: after reconcile the sealed dict MUST be
+        # parity-clean. A non-empty result here means a render-logic bug, not
+        # stale operator state — abort BEFORE the atomic write rather than seal
+        # a divergent RAG.
+        from rag_kernel.drift_audit import check_render_parity
+        residual = check_render_parity(rag)
+        if residual:
+            print(
+                "ERROR: checkpoint render-parity still stale after reconcile — "
+                "aborting seal (no write): "
+                + "; ".join(f.detail for f in residual),
+                file=sys.stderr,
+            )
+            return 1
 
     # 2. Atomic write via persistence module.
     # mirror_bak=True refreshes RAG_MASTER.json.bak to a byte-identical copy of
@@ -3398,6 +3515,19 @@ def cmd_context(args: argparse.Namespace) -> int:
         return 1
 
     rag_dir = args.rag_dir.resolve()
+    # KA-CTX-RAGFLAG: operators habitually pass `--rag <RAG_MASTER.json>` (a FILE),
+    # as every other verb takes. argparse prefix-matches `--rag` -> `--rag-dir`
+    # (the only `--rag*` option here), so rag_dir can land on the RAG file itself;
+    # building `<file>/RAG_CONTEXT.json` then crashes FileExistsError at mkdir.
+    # Robustness (Rule 15 lane A): when the path is — or clearly names — a file,
+    # use its containing directory instead of crashing.
+    if rag_dir.is_file() or rag_dir.suffix.lower() == ".json":
+        print(
+            f"note: context store lives in a directory, but --rag-dir named a file "
+            f"({rag_dir.name}); using its directory {rag_dir.parent} instead.",
+            file=sys.stderr,
+        )
+        rag_dir = rag_dir.parent
     mgr = ProjectContextManager.default(rag_dir)
 
     if action == "set":

@@ -208,3 +208,45 @@ def test_transient_context_json_still_flagged_beside_cli_store(tmp_path):
     (tmp_path / "ebay_context.json").write_text("{}", encoding="utf-8")
     hits = {p.name for p in find_context_side_stores(tmp_path)}
     assert hits == {"ebay_context.json"}
+
+
+# ---------------------------------------------------------------------------
+# KA-CTX-RAGFLAG: `--rag <FILE>` must not crash the context verb
+# ---------------------------------------------------------------------------
+# Every other verb takes `--rag <RAG_MASTER.json>` (a FILE). The context verb
+# takes `--rag-dir <DIR>`, but argparse prefix-matches the operator's habitual
+# `--rag` to `--rag-dir` (the only `--rag*` option in this subparser). Before
+# the fix, a file-valued rag_dir made the manager build `<file>/RAG_CONTEXT.json`
+# and crash FileExistsError at mkdir. The verb must instead fall back to the
+# file's containing directory (robustness, Rule 15 lane A).
+
+def test_ka_ctx_ragflag_abbrev_rag_flag_on_existing_file_routes_to_parent(tmp_path, capsys):
+    # Authentic reproduction: operator types the abbreviated `--rag` (prefix of
+    # `--rag-dir`) pointing at a real RAG file. Must succeed, storing beside it.
+    rag_file = tmp_path / "RAG_MASTER.json"
+    rag_file.write_text("{}", encoding="utf-8")
+    rc = main(["context", "set", "comps", '{"a": 1}', "--rag", str(rag_file)])
+    assert rc == 0
+    # The store lands in the parent dir, NOT at <file>/RAG_CONTEXT.json.
+    assert _read(tmp_path)["comps"]["a"] == 1
+    assert not (rag_file / CONTEXT_FILENAME).exists()
+    assert "using its directory" in capsys.readouterr().err
+
+
+def test_ka_ctx_ragflag_json_suffix_path_routes_to_parent(tmp_path, capsys):
+    # The `.json` suffix branch: even a not-yet-existing file path that names a
+    # .json file routes to its parent rather than being treated as a directory.
+    rag_file = tmp_path / "RAG_MASTER.json"  # note: never created on disk
+    rc = main(["context", "set", "comps", '{"a": 1}', "--rag-dir", str(rag_file)])
+    assert rc == 0
+    assert _read(tmp_path)["comps"]["a"] == 1
+    assert "using its directory" in capsys.readouterr().err
+
+
+def test_ka_ctx_ragflag_real_directory_still_works_silently(tmp_path, capsys):
+    # Guard against over-eager redirection: a genuine directory must be used
+    # as-is, with no redirect note.
+    rc = main(["context", "set", "comps", '{"a": 1}', "--rag-dir", str(tmp_path)])
+    assert rc == 0
+    assert _read(tmp_path)["comps"]["a"] == 1
+    assert "using its directory" not in capsys.readouterr().err
