@@ -6,6 +6,16 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.26] — 2026-07-06
+
+**T1 GATE — three governance-hardening fixes that close the last self-hosting gate items (KA-CTX-RAGFLAG + KA-CKPT-PARITY-GATE + KA-18).** A bundled runtime release of the T1 kernel-fix gate cleared in S126; all three land as CLI/checkpoint/context hardening with no schema, WAL-format, or TLA+ change.
+
+- **KA-CTX-RAGFLAG** (`context`) — `context set/get/list` mis-routed when handed a `--rag <file>` path (it expected a directory), so a caller passing the RAG file — the natural invocation — silently wrote to the wrong location. The `context` verb now tolerates a `--rag <file>` and routes the partition to the file's parent directory, matching every other verb's `--rag` semantics.
+- **KA-CKPT-PARITY-GATE** (`checkpoint`, E-049) — a mid-session dev commit could leave the legacy `open_tasks` / `deferred_items` renders stale relative to the canonical `tracked_items`, and `checkpoint` sealed anyway. `checkpoint` now **auto-renders** the legacy arrays from `tracked_items` at seal, so render-parity holds by construction, plus a defensive fail-loud if a stale render is ever detected at the gate (`audit`'s render==canonical invariant enforced at the checkpoint boundary, not only at session-end).
+- **KA-18** (`checkpoint`, E-044/E-045) — a permanent guard against the recurring session-start ordering slip: `checkpoint` now refuses to run without an open session log (the mechanized `session-start` must precede it). CLI default is ON; `--no-require-session-log` is the explicit, audited bypass.
+
+Runtime `__version__` 0.4.25 → 0.4.26, `__spec_version__` unchanged (3.2.6). CLI/checkpoint/context-only — no new module (19), health 20/20, drift gate `268149294421` unchanged (no schema, WAL-format, or TLA+ change), `DRIFT_STORE_VERSION` unchanged (1.3.0), **1,623 → 1,639 tests** (+16). Released S127.
+
 ## [v0.4.25] — 2026-07-04
 
 **KA-CUTOVER-GATE — the record-coverage cutover gate now counts only non-retired records, plus a governed `un-add` verb that makes a mis-`add` recoverable.** Two coupled defects made a mis-kinded forensic item (`kind=ERROR` / `INFERENCE`) unrecoverable: `check_record_coverage` treated a kind as "migrated" (gate ON) by ANY item of that kind regardless of status, so a single mis-`add` latched the per-kind cutover gate ON and demanded full ERROR_LOG / ledger coverage; and the store had no un-add path, so the mis-kinded item could be discarded or superseded but never removed — and since discard/supersede leave `kind` intact, the status-blind gate stayed latched. A mis-kind became a deadlock.
