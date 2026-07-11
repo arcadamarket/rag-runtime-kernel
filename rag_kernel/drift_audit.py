@@ -697,7 +697,18 @@ def check_repo_claim_reconciliation(
     findings: list[AuditFinding] = []
     store = _as_store(source)
     resolved_ids = sorted((it.id for it in store if it.status == ItemStatus.RESOLVED),
-                          key=len, reverse=True)  # longest-first: avoid id-substring overlap
+                          key=len, reverse=True)  # longest-first: stable, deterministic order
+    # KA-19: match a tracked id only at its token boundaries, never as a bare
+    # substring. IDs are ``[A-Za-z0-9-]`` tokens, so "FIX-1" must NOT match inside
+    # "FIX-12" (the prior ``rid in ln`` substring test flagged a RESOLVED FIX-1 as
+    # "still pending" whenever a longer FIX-1x id appeared on a pending-claim line).
+    # A boundary = start/end-of-line or any char that is neither a word char nor a
+    # hyphen, so neither a digit/letter suffix (FIX-12) nor a hyphen extension
+    # (FIX-1-alpha) can spuriously match.
+    resolved_id_res = [
+        (rid, re.compile(r"(?<![\w-])" + re.escape(rid) + r"(?![\w-])"))
+        for rid in resolved_ids
+    ]
     ver_re = None
     if version:
         ver_re = re.compile(r"v?" + re.escape(version.lstrip("v")) + r"\b")
@@ -741,8 +752,8 @@ def check_repo_claim_reconciliation(
                                     f"{drift_sha}: {ln.strip()[:90]}")))
             # 2. id-anchored pending-status contradiction (README + ROADMAP only)
             if not is_changelog and not historical and _PENDING_CLAIM_RE.search(ln):
-                for rid in resolved_ids:
-                    if rid in ln:
+                for rid, rid_re in resolved_id_res:
+                    if rid_re.search(ln):
                         findings.append(AuditFinding(
                             check="repo_claim_status", severity=ERROR,
                             detail=(f"{p.name}: claims RESOLVED record {rid} is still pending: "

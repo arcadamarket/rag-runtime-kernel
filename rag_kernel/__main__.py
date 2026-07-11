@@ -323,6 +323,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--report-rendered", action="store_true",
         help="Attest the canonical status report was rendered in chat (Rule 12).",
     )
+    # KA-13 — wire the Rule 11 published-doc reconciliation into the close audit.
+    send_parser.add_argument(
+        "--docs-root", type=str, default=None,
+        help="Root of the published docs to reconcile at close (overrides "
+             "meta.reconciliation_docs_root). Absolute, or relative to the project root.",
+    )
+    send_parser.add_argument(
+        "--no-reconcile", action="store_true",
+        help="Skip the close-time published-doc reconciliation even if "
+             "meta.reconciliation_docs_root is declared.",
+    )
 
     # -- session-resume (KA-16): detect + finish an interrupted session close. --
     sresume_parser = subparsers.add_parser(
@@ -346,6 +357,16 @@ def build_parser() -> argparse.ArgumentParser:
     sresume_parser.add_argument("--error-log-id", type=str, default=None, help="ERROR_LOG idempotency id")
     sresume_parser.add_argument("--error-log-path", type=str, default=None, help="ERROR_LOG.md path (default: beside the RAG)")
     sresume_parser.add_argument("--report-rendered", action="store_true", help="Attest the status report was rendered (Rule 12).")
+    sresume_parser.add_argument(
+        "--docs-root", type=str, default=None,
+        help="Root of the published docs to reconcile at close (overrides "
+             "meta.reconciliation_docs_root). Absolute, or relative to the project root.",
+    )
+    sresume_parser.add_argument(
+        "--no-reconcile", action="store_true",
+        help="Skip the close-time published-doc reconciliation even if "
+             "meta.reconciliation_docs_root is declared.",
+    )
 
     # -- checkpoint --
     ckpt_parser = subparsers.add_parser(
@@ -2303,12 +2324,52 @@ def _write_close_marker(rag_path: Path, marker: dict) -> None:
             _json.dump(rag, f, indent=2, ensure_ascii=False)
 
 
+def _resolve_close_docs_root(
+    rag_path: Path, args: argparse.Namespace
+) -> "str | None":
+    """KA-13: resolve the docs_root for the close-time Rule 11 reconciliation.
+
+    Precedence (highest first), with a back-compatible skip when nothing is
+    declared so an un-migrated RAG closes byte-for-byte as it does today:
+
+      1. ``--no-reconcile``          -> None (explicit opt-out; skip the pass).
+      2. ``--docs-root PATH``        -> that path (per-invocation override).
+      3. ``meta.reconciliation_docs_root`` -> the project's declared surface root.
+      4. (undeclared)                -> None (skip; identical to prior behaviour).
+
+    A declared/override path may be absolute or relative; a relative path is
+    resolved against the project root (``RAG/RAG_MASTER.json`` -> its grandparent,
+    where ``RAG/`` and the published docs live), and ``~`` is expanded. The path
+    is NOT required to exist here — :func:`reconciliation_surfaces` /
+    :func:`audit_hot` already emit a WARNING for a missing surface, so a stale
+    declaration fails loud through the audit rather than silently here.
+    """
+    if getattr(args, "no_reconcile", False):
+        return None
+    declared = getattr(args, "docs_root", None)
+    if not declared:
+        try:
+            with open(rag_path, "r", encoding="utf-8") as f:
+                meta = (json.load(f).get("meta") or {})
+            candidate = meta.get("reconciliation_docs_root")
+            if isinstance(candidate, str) and candidate.strip():
+                declared = candidate.strip()
+        except (OSError, ValueError):
+            declared = None
+    if not declared:
+        return None
+    dr = Path(declared).expanduser()
+    if not dr.is_absolute():
+        dr = (rag_path.resolve().parent.parent / dr)
+    return str(dr)
+
+
 def _drive_close(
     rag_path: Path, rag_dir: Path, sid: str, *, summary: "str | None",
     tasks, status, strict: bool, git_head: "str | None",
     error_log_entry: "str | None", error_log_id: "str | None",
     error_log_path: "str | None", report_rendered: bool,
-    marker: "dict | None", resuming: bool,
+    marker: "dict | None", resuming: bool, docs_root: "str | None" = None,
 ) -> int:
     """Run the close transaction forward from whatever step is incomplete.
 
@@ -2366,11 +2427,17 @@ def _drive_close(
         print("[2/4] Close logger: already closed (resuming).")
 
     # Step 3/4 — fail-loud audit. transfer_ready stays False if this is red.
+    # KA-13: the Rule 11 published-doc reconciliation now runs at close when a
+    # docs_root is resolved (declared meta.reconciliation_docs_root / --docs-root),
+    # and stays skipped (docs_root=None) for an un-migrated RAG (back-compat).
     if not steps.get("audit"):
-        print("[3/4] Audit:")
+        if docs_root:
+            print(f"[3/4] Audit (reconciling published docs under {docs_root}):")
+        else:
+            print("[3/4] Audit:")
         rc = cmd_audit(argparse.Namespace(
             rag=rag_path, strict=strict, scan_root=True, error_log=None,
-            docs_root=None, git_head=git_head, json_output=False,
+            docs_root=docs_root, git_head=git_head, json_output=False,
         ))
         if rc != 0:
             print(
@@ -2456,6 +2523,7 @@ def cmd_session_end(args: argparse.Namespace) -> int:
         error_log_path=getattr(args, "error_log_path", None),
         report_rendered=getattr(args, "report_rendered", False),
         marker=active, resuming=False,
+        docs_root=_resolve_close_docs_root(rag_path, args),
     )
 
 
@@ -2508,6 +2576,7 @@ def cmd_session_resume(args: argparse.Namespace) -> int:
         error_log_path=getattr(args, "error_log_path", None),
         report_rendered=getattr(args, "report_rendered", False),
         marker=marker, resuming=True,
+        docs_root=_resolve_close_docs_root(rag_path, args),
     )
 
 
