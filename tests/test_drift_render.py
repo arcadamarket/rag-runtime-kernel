@@ -63,7 +63,7 @@ def _hot_from(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_active_statuses():
-    assert DRIFT_RENDER_VERSION == "1.0.0"
+    assert DRIFT_RENDER_VERSION == "1.1.0"
     assert ACTIVE_STATUSES == frozenset({ItemStatus.OPEN, ItemStatus.IN_PROGRESS})
 
 

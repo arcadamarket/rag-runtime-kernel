@@ -6,6 +6,14 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.30] — 2026-07-11
+
+**REPORT-VERB — the closing/transfer status report is now a deterministic kernel render, not a hand-authored prose block.** Rule 12 (`report_before_transfer`) has always required the 7-section canonical status report to be a *deterministic render of the RAG canonical fields* ("the report equals the RAG by construction"), but until now the render existed only as a discipline the agent performed by hand — so a hand-assembled report could drift from the RAG even when the RAG itself was clean (the exact transfer-drift gap behind the operator's manual report-paste cross-check).
+
+- **`report` verb** (`drift_render.render_status_report` + `__main__.cmd_report`) — renders the full 7 sections (At-a-glance R/A/G table + verdict, Build milestones/releases, This session, Backlog, Risks & deviations, Ledger & errors, Verification & handoff) as a pure, deterministic projection. Sourcing discipline (operator decision S136): every fact is **structured** (read from `meta` / `tracked_items` / `inference_ledger`), **live-computed** by the caller (health, drift-gate sha, git HEAD, `.bak` parity, bytes), or a genuinely **external** scalar passed as an explicit arg (`--context-pct`, `--tests`, `--released`, `--claims-ok`). It NEVER scrapes `current_status` prose and NEVER invents a value: an unknown fact renders `n/a` and can only pull the verdict toward AMBER, never to a false GREEN (Rule 14 increment-status-honesty). R/A/G thresholds are objective (RED = any hard gate failing; AMBER = unreleased or any gate unknown; GREEN = released AND tests/health/drift green AND repo-claims reconciled). The backlog is fully enumerated line-by-line, never a bare count (STRICT-OBEY / Rule 16). The renderer reuses `render_backlog_section` — no duplicate backlog logic.
+
+Runtime `__version__` 0.4.29 → 0.4.30; `__spec_version__` unchanged (3.2.6). The renderer lives in the existing `drift_render` module — **no new capability module** (still 19), health 20/20, drift gate `268149294421` unchanged (no schema, WAL-format, or TLA+ change). `DRIFT_RENDER_VERSION` 1.0.0 → 1.1.0. Full suite 1,693 → 1,719 green (+26).
+
 ## [v0.4.29] — 2026-07-11
 
 **KA-RECON-PROXIMITY + KA-RECON-DECLARE — the two gaps that blocked dogfooding the close-time reconciliation (KA-13) on this project, now both closed.** v0.4.28 wired the Rule 11 published-doc reconciliation into the session close, but two follow-on gaps kept it from being turned on here: it false-fired on long paragraph lines, and there was no governed way to declare where the published docs live.

@@ -480,6 +480,68 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
+    # -- report (REPORT-VERB S136: deterministic 7-section canonical status render) --
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Render the 7-section canonical status report deterministically from the RAG (Rule 12).",
+    )
+    report_parser.add_argument(
+        "--rag", type=Path, default=_default_rag_path(),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    report_parser.add_argument(
+        "--session", type=str, required=True,
+        help="Session id for the report heading (e.g. S136)",
+    )
+    report_parser.add_argument(
+        "--context-pct", type=str, default=None,
+        help="LLM context-window usage (external scalar the runtime cannot know), e.g. '42%%'",
+    )
+    report_parser.add_argument(
+        "--tests", type=str, default=None,
+        help="Test result summary (external — needs a suite run), e.g. '1,693 green'",
+    )
+    report_parser.add_argument(
+        "--tests-failing", action="store_true",
+        help="Mark the test gate as FAILING (else --tests, if given, is treated as passing).",
+    )
+    report_parser.add_argument(
+        "--released", dest="released", action="store_true", default=None,
+        help="Assert the current build is released/deployable (drives the release-ready + GREEN gate).",
+    )
+    report_parser.add_argument(
+        "--unreleased", dest="released", action="store_false",
+        help="Assert the current build is UNRELEASED / not deployable (forces AMBER).",
+    )
+    report_parser.add_argument(
+        "--release-ref", type=str, default=None,
+        help="Release tag/ref to show in the release-ready cell (e.g. runtime-v0.4.30).",
+    )
+    report_parser.add_argument(
+        "--claims-ok", dest="claims_ok", action="store_true", default=None,
+        help="Assert published repo-claims are reconciled with reality (Rule 11).",
+    )
+    report_parser.add_argument(
+        "--claims-broken", dest="claims_ok", action="store_false",
+        help="Assert a published repo-claim contradicts reality (forces RED).",
+    )
+    report_parser.add_argument(
+        "--milestone", type=str, default=None,
+        help="Override the milestone cell (default: newest active MILESTONE item).",
+    )
+    report_parser.add_argument(
+        "--handoff", type=str, default=None,
+        help="One-line handoff / next-step note for section 7.",
+    )
+    report_parser.add_argument(
+        "--git-head", type=str, default=None,
+        help="Override git HEAD (default: resolved live, best-effort).",
+    )
+    report_parser.add_argument(
+        "--no-live", action="store_true",
+        help="Skip live health/drift/git resolution (render purely from RAG + args).",
+    )
+
     # -- note (DRIFT-ELIM increment 5: guarded note-update verb, INS-038) --
     note_parser = subparsers.add_parser(
         "note",
@@ -1401,6 +1463,138 @@ def cmd_render(args: argparse.Namespace) -> int:
         print()
     if what == "error_log":
         print(drift_render.render_error_log_backlog(store))
+    return 0
+
+
+def _drift_gate_ok(rag_path: Path) -> "bool | None":
+    """Best-effort live drift-gate check for the report verb.
+
+    Recomputes the SHA-256 of the formal ``.tla`` source and compares it to the
+    ``SOURCE_SHA256`` baked into ``generated_guards``. True iff they match, False
+    iff they differ, None if the source can't be located (deployed package with
+    no ``formal/`` dir) — mirroring ``_resolve_git_head``'s self-skipping so a
+    deploy without the source audits cleanly rather than breaking.
+    """
+    import hashlib
+
+    try:
+        from rag_kernel import generated_guards
+    except Exception:
+        return None
+    baseline = getattr(generated_guards, "SOURCE_SHA256", None)
+    if not baseline:
+        return None
+    project_root = rag_path.parent.parent
+    for cand in (
+        project_root / "formal" / "RAGKernel.tla",
+        rag_path.parent / "formal" / "RAGKernel.tla",
+        Path(__file__).resolve().parent.parent / "formal" / "RAGKernel.tla",
+    ):
+        try:
+            if cand.exists():
+                sha = hashlib.sha256(cand.read_bytes()).hexdigest()
+                return sha == baseline
+        except OSError:
+            continue
+    return None
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """Render the 7-section canonical status report deterministically (REPORT-VERB).
+
+    Rule 12 requires the transfer/close status report to be a DETERMINISTIC RENDER
+    of the RAG canonical fields, never hand-authored. This gathers the facts under
+    the S136 sourcing discipline — STRUCTURED (meta / tracked_items / ledger),
+    LIVE-COMPUTED (health, drift gate, git HEAD, .bak parity, bytes), and EXPLICIT
+    external args (context %, tests, released?, claims?) — then calls the pure
+    ``drift_render.render_status_report`` projector. Nothing is scraped from
+    ``current_status`` prose; an unknown fact renders ``n/a`` and can only pull the
+    verdict toward AMBER, never to a false GREEN (Rule 14).
+    """
+    import importlib
+
+    import rag_kernel
+    from rag_kernel.drift_store import DriftStoreError, TrackedItemStore, load_hot
+    from rag_kernel import drift_render, generated_guards
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    try:
+        hot = load_hot(rag_path)
+        store = TrackedItemStore.from_hot(hot)
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    meta = hot.get("meta", {}) if isinstance(hot, dict) else {}
+    ledger = hot.get("inference_ledger", []) if isinstance(hot, dict) else []
+    version = getattr(rag_kernel, "__version__", None)
+
+    # -- live-computed facts (self-skipping under --no-live) --
+    health = None
+    health_ok = None
+    drift_ok = None
+    git_head = args.git_head
+    if not args.no_live:
+        modules = list(rag_kernel._KERNEL_MODULES)
+        passed = 0
+        for mod_name in modules:
+            try:
+                importlib.import_module(mod_name)
+                passed += 1
+            except Exception:
+                pass
+        health = f"{passed}/{len(modules)}"
+        health_ok = passed == len(modules)
+        drift_ok = _drift_gate_ok(rag_path)
+        if git_head is None:
+            git_head = _resolve_git_head(rag_path)
+
+    drift_sha = getattr(generated_guards, "SOURCE_SHA256", None)
+    if drift_sha:
+        drift_sha = drift_sha[:12]  # short form for the glance table
+
+    # -- .bak parity + bytes (structured, from disk) --
+    bak_path = rag_path.with_name(rag_path.name + ".bak")
+    bak_parity = None
+    try:
+        if bak_path.exists():
+            bak_parity = bak_path.read_bytes() == rag_path.read_bytes()
+    except OSError:
+        bak_parity = None
+    try:
+        rag_bytes = rag_path.stat().st_size
+    except OSError:
+        rag_bytes = None
+
+    # -- explicit external args --
+    tests_ok = None if args.tests is None else (not args.tests_failing)
+
+    report = drift_render.render_status_report(
+        store,
+        session=args.session,
+        meta=meta,
+        ledger=ledger,
+        version=version,
+        milestone=args.milestone,
+        tests=args.tests,
+        tests_ok=tests_ok,
+        health=health,
+        health_ok=health_ok,
+        drift_sha=drift_sha,
+        drift_ok=drift_ok,
+        released=args.released,
+        release_ref=args.release_ref,
+        claims_ok=args.claims_ok,
+        context_pct=args.context_pct,
+        git_head=git_head,
+        rag_bytes=rag_bytes,
+        bak_parity=bak_parity,
+        handoff=args.handoff,
+    )
+    print(report)
     return 0
 
 
@@ -3939,6 +4133,7 @@ def main(argv: list[str] | None = None) -> int:
         "discard": cmd_item_transition, "supersede": cmd_item_transition,
         "items": cmd_items,
         "render": cmd_render,
+        "report": cmd_report,
         "note": cmd_note,
         "dedup-sessions": cmd_dedup_sessions,
         "audit": cmd_audit,

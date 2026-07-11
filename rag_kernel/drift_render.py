@@ -71,7 +71,8 @@ state, never re-authors it.
   "exports": ["ACTIVE_STATUSES", "BACKLOG_KINDS", "render_open_tasks",
               "render_deferred_items", "render_backlog_section",
               "render_backlog_markdown", "render_error_log_backlog",
-              "render_records_by_kind", "render_all", "apply_renders",
+              "render_records_by_kind", "render_status_report",
+              "render_all", "apply_renders",
               "apply_renders_file", "default_gated", "DRIFT_RENDER_VERSION"],
   "use_when": "Projecting canonical tracked_items status into any legacy array, status report, or doc surface (never hand-author these)",
   "never_bypass": true
@@ -92,7 +93,7 @@ from rag_kernel.drift_store import (
 from rag_kernel.persistence import atomic_write_json
 
 # Bump when a rendered layout changes in a way a consumer / regression test pins.
-DRIFT_RENDER_VERSION = "1.0.0"
+DRIFT_RENDER_VERSION = "1.1.0"
 
 # The non-terminal, actionable statuses — the "open backlog".
 ACTIVE_STATUSES: frozenset[ItemStatus] = frozenset(
@@ -400,3 +401,318 @@ def apply_renders_file(
         p, hot, mirror_bak=True, guard_side_stores=True
     )
     return hot
+
+
+# ---------------------------------------------------------------------------
+# Canonical status report render (Rule 12 report_before_transfer — 7 sections)
+# ---------------------------------------------------------------------------
+#
+# REPORT-VERB (S136). Rule 12 mandates that the closing/transfer status report be
+# a DETERMINISTIC RENDER of the RAG canonical fields, never hand-authored — "the
+# report equals the RAG by construction". This function is that render.
+#
+# Sourcing discipline (operator decision S136, "structured + live-computed +
+# explicit args"): every fact is either (a) read from a STRUCTURED canonical
+# source (``meta`` scalars, the ``tracked_items`` store, ``inference_ledger``),
+# (b) COMPUTED LIVE by the caller and passed in (health, drift-gate sha, git
+# HEAD, released?), or (c) a genuinely EXTERNAL scalar the runtime cannot know
+# (the LLM's ``context_pct``; the ``tests`` result, which needs a suite run) and
+# is therefore an EXPLICIT argument. The renderer NEVER scrapes ``current_status``
+# prose and NEVER invents a value: an unknown fact renders as ``n/a`` and can only
+# pull the overall verdict toward AMBER, never toward a false GREEN
+# (increment-status-honesty, Rule 14).
+
+_RAG_GLYPH = {"GREEN": "🟢 GREEN", "AMBER": "🟡 AMBER", "RED": "🔴 RED"}
+
+
+def _overall_rag(
+    *,
+    tests_ok: Optional[bool],
+    health_ok: Optional[bool],
+    drift_ok: Optional[bool],
+    claims_ok: Optional[bool],
+    released: Optional[bool],
+) -> str:
+    """Objective R/A/G per the Rule 12 thresholds (never subjective).
+
+    RED  = any hard gate failing (tests / health / drift / a published repo-claim
+           contradicting reality).
+    AMBER= feature-complete but UNRELEASED/not-deployable, OR any gate UNKNOWN
+           (we refuse to assert GREEN without evidence).
+    GREEN= released AND tests+health+drift all green AND repo-claims reconciled.
+    """
+    if False in (tests_ok, health_ok, drift_ok, claims_ok):
+        return "RED"
+    if released is False:
+        return "AMBER"
+    if None in (tests_ok, health_ok, drift_ok, released):
+        return "AMBER"
+    return "GREEN"
+
+
+def _cell(value: Optional[str]) -> str:
+    """A table cell: the value, or ``n/a`` when the fact is unknown (never blank)."""
+    v = (value or "").strip()
+    return v if v else "n/a"
+
+
+def render_status_report(
+    source: TrackedItemStore | dict | Iterable[TrackedItem],
+    *,
+    session: str,
+    meta: Optional[dict] = None,
+    ledger: Optional[Iterable[dict]] = None,
+    version: Optional[str] = None,
+    milestone: Optional[str] = None,
+    tests: Optional[str] = None,
+    tests_ok: Optional[bool] = None,
+    health: Optional[str] = None,
+    health_ok: Optional[bool] = None,
+    drift_sha: Optional[str] = None,
+    drift_ok: Optional[bool] = None,
+    released: Optional[bool] = None,
+    release_ref: Optional[str] = None,
+    claims_ok: Optional[bool] = None,
+    context_pct: Optional[str] = None,
+    git_head: Optional[str] = None,
+    rag_bytes: Optional[int] = None,
+    bak_parity: Optional[bool] = None,
+    handoff: Optional[str] = None,
+    gated: Optional[Callable[[TrackedItem], bool]] = None,
+) -> str:
+    """Render the full 7-section canonical status report as a markdown string.
+
+    Pure: no I/O, no clock, no model — a total function of the arguments, so a
+    regression test can pin it byte-for-byte. The caller (``cmd_report``) gathers
+    the live-computed / external facts and passes them in; here we only project.
+    """
+    store = _as_store(source)
+    meta = meta or {}
+    ledger = list(ledger or [])
+
+    seq = meta.get("last_checkpoint_seq")
+    written_by = meta.get("written_by_session")
+    rag_version = meta.get("rag_version")
+
+    # ---- derive counts + buckets from the canonical array (id-sorted) ----
+    backlog = render_backlog_section(store, gated=gated)
+    n_open = len(backlog["open"]) + len(backlog["blocked_or_user_gated"])
+    n_def = len(backlog["deferred"])
+    n_resolved = sum(
+        1
+        for it in store
+        if it.kind in BACKLOG_KINDS and it.status == ItemStatus.RESOLVED
+    )
+    build_rows = [
+        it for it in store
+        if it.kind in (ItemKind.MILESTONE, ItemKind.RELEASE)
+    ]
+    touched = [
+        it for it in store
+        if it.session == session
+        or any(getattr(ev, "session", None) == session for ev in it.history)
+    ]
+
+    # ---- overall verdict ----
+    overall = _overall_rag(
+        tests_ok=tests_ok,
+        health_ok=health_ok,
+        drift_ok=drift_ok,
+        claims_ok=claims_ok,
+        released=released,
+    )
+    if milestone is None:
+        # honest default: name the newest non-terminal milestone, else the newest
+        # release row, else a plain phrase — never a fabricated claim.
+        active_ms = [it for it in build_rows
+                     if it.kind == ItemKind.MILESTONE and not it.is_terminal]
+        if active_ms:
+            milestone = f"{active_ms[-1].id} — {active_ms[-1].title}"
+        else:
+            milestone = "(no active milestone)"
+
+    release_cell = (
+        "n/a" if released is None
+        else (f"released {release_ref}" if released and release_ref else
+              "released" if released else "UNRELEASED / not deployable")
+    )
+    tests_health = f"{_cell(tests)} · health {_cell(health)}"
+
+    verdict = _verdict_line(
+        overall,
+        released=released,
+        tests_ok=tests_ok,
+        health_ok=health_ok,
+        drift_ok=drift_ok,
+        claims_ok=claims_ok,
+    )
+
+    L: list[str] = []
+    ap = L.append
+    ap(f"## RAG Runtime Kernel — Status Report ({session} close)")
+    ap("")
+
+    # (1) AT-A-GLANCE ------------------------------------------------------
+    ap("### 1 · At a glance")
+    ap("")
+    ap("| Overall | Milestone | Release-ready | Tests / Health | Drift gate | Context % | RAG seq |")
+    ap("| --- | --- | --- | --- | --- | --- | --- |")
+    ap(
+        f"| {_RAG_GLYPH.get(overall, overall)} | {milestone} | {release_cell} "
+        f"| {tests_health} | {_cell(drift_sha)} | {_cell(context_pct)} "
+        f"| {_cell(str(seq) if seq is not None else None)} · {_cell(written_by)} |"
+    )
+    ap("")
+    ap(f"**Verdict:** {verdict}")
+    ap("")
+
+    # (2) BUILD (planned vs actual) ---------------------------------------
+    ap("### 2 · Build (milestones & releases)")
+    ap("")
+    if build_rows:
+        ap("| # | Item | Kind | Status | Session |")
+        ap("| --- | --- | --- | --- | --- |")
+        for i, it in enumerate(build_rows, 1):
+            ap(
+                f"| {i} | {it.id} — {it.title} | {it.kind.value} "
+                f"| {it.status.value} | {it.session or '—'} |"
+            )
+    else:
+        ap("_(no milestone / release items in the canonical array)_")
+    ap("")
+
+    # (3) THIS SESSION -----------------------------------------------------
+    ap(f"### 3 · This session ({session})")
+    ap("")
+    if touched:
+        for it in touched[:5]:
+            ap(f"- {it.id} [{it.status.value}] — {it.title}")
+        if len(touched) > 5:
+            ap(f"- …and {len(touched) - 5} more (see `items`)")
+    else:
+        ap("- (no canonical `tracked_items` changed this session)")
+    ap("")
+
+    # (4) BACKLOG (rendered from RAG — full enumeration, never bare counts) -
+    ap("### 4 · Backlog (rendered from `tracked_items`)")
+    ap("")
+    ap(f"**Open ({len(backlog['open'])}):**")
+    for ln in backlog["open"] or ["(none)"]:
+        ap(f"- {ln}")
+    ap("")
+    ap(f"**Blocked / user-gated ({len(backlog['blocked_or_user_gated'])}):**")
+    for ln in backlog["blocked_or_user_gated"] or ["(none)"]:
+        ap(f"- {ln}")
+    ap("")
+    ap(f"**Deferred ({n_def}):**")
+    for ln in backlog["deferred"] or ["(none)"]:
+        ap(f"- {ln}")
+    ap("")
+
+    # (5) RISKS & DEVIATIONS (only amber/red) ------------------------------
+    ap("### 5 · Risks & deviations (Road-to-Green)")
+    ap("")
+    risks = _risk_lines(
+        released=released, tests_ok=tests_ok, health_ok=health_ok,
+        drift_ok=drift_ok, claims_ok=claims_ok,
+    )
+    if risks:
+        for r in risks:
+            ap(f"- {r}")
+    else:
+        ap("- (none — all gates green)")
+    ap("")
+
+    # (6) LEDGER & ERRORS --------------------------------------------------
+    ledger_open = [e for e in ledger
+                   if str(e.get("disposition", "")).upper() == "OPEN"]
+    error_items = [
+        it for it in store
+        if it.kind == ItemKind.ERROR and it.status in ACTIVE_STATUSES
+    ]
+    ap("### 6 · Ledger & errors")
+    ap("")
+    ap(
+        f"- Inference ledger: {len(ledger)} entries · {len(ledger_open)} OPEN"
+    )
+    if ledger_open:
+        for e in ledger_open:
+            ap(f"  - {e.get('id', '?')}: {e.get('summary', '')}")
+    ap(f"- Open error items: {len(error_items)}")
+    for it in error_items:
+        ap(f"  - {it.id}: {it.title}")
+    ap("")
+
+    # (7) VERIFICATION & HANDOFF ------------------------------------------
+    ap("### 7 · Verification & handoff")
+    ap("")
+    ap(f"- Runtime version: {_cell(version)}")
+    ap(f"- Git HEAD: {_cell(git_head)}")
+    ap(f"- Tests: {_cell(tests)} · Health: {_cell(health)}")
+    ap(f"- Drift gate (source sha256): {_cell(drift_sha)}")
+    parity = (
+        "n/a" if bak_parity is None
+        else ("HOT == .bak (identical)" if bak_parity else "HOT != .bak (DIVERGED)")
+    )
+    ap(
+        f"- RAG: seq {_cell(str(seq) if seq is not None else None)} · "
+        f"written_by {_cell(written_by)} · rag_version {_cell(rag_version)} · "
+        f"{_cell(str(rag_bytes) + ' bytes' if rag_bytes is not None else None)} · {parity}"
+    )
+    ap(f"- Backlog: {n_open} open · {n_def} deferred · {n_resolved} resolved")
+    ap(f"- Handoff: {_cell(handoff)}")
+
+    return "\n".join(L)
+
+
+def _verdict_line(
+    overall: str,
+    *,
+    released: Optional[bool],
+    tests_ok: Optional[bool],
+    health_ok: Optional[bool],
+    drift_ok: Optional[bool],
+    claims_ok: Optional[bool],
+) -> str:
+    """One honest sentence — states UNRELEASED/not-deployable when true (Rule 14)."""
+    if overall == "RED":
+        fails = []
+        if tests_ok is False:
+            fails.append("tests failing")
+        if health_ok is False:
+            fails.append("health below full")
+        if drift_ok is False:
+            fails.append("drift gate red")
+        if claims_ok is False:
+            fails.append("a published repo-claim contradicts reality")
+        return "RED — " + (", ".join(fails) or "a hard gate is failing") + "."
+    if overall == "AMBER":
+        if released is False:
+            return "AMBER — feature-complete but UNRELEASED / not deployable yet."
+        return "AMBER — within tolerance, but one or more gates are unverified this session."
+    return "GREEN — released, tests/health/drift all green, repo-claims reconciled."
+
+
+def _risk_lines(
+    *,
+    released: Optional[bool],
+    tests_ok: Optional[bool],
+    health_ok: Optional[bool],
+    drift_ok: Optional[bool],
+    claims_ok: Optional[bool],
+) -> list[str]:
+    """Only amber/red items, each ``risk -> impact -> corrective action``."""
+    out: list[str] = []
+    if tests_ok is False:
+        out.append("Tests failing -> build not shippable -> fix + rerun the full suite before release.")
+    if health_ok is False:
+        out.append("Health below full -> a capability module fails to import -> repair the module + re-run health.")
+    if drift_ok is False:
+        out.append("Drift gate red -> generated guards diverge from the .tla source -> regenerate guards + guardgen --check.")
+    if claims_ok is False:
+        out.append("A published repo-claim contradicts reality (Rule 11) -> public status is wrong -> reconcile the surface + re-audit.")
+    if released is False:
+        out.append("Unreleased -> capability not usable by deployments -> cut the release + redeploy the pinned package.")
+    if tests_ok is None or health_ok is None or drift_ok is None or released is None:
+        out.append("One or more gates unverified this session -> cannot assert GREEN -> run the verification suite before transfer.")
+    return out
