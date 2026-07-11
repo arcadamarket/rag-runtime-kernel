@@ -239,6 +239,18 @@ _PENDING_CLAIM_WORDS: tuple[str, ...] = (
 _PENDING_CLAIM_RE = re.compile(
     r"\b(" + "|".join(re.escape(w) for w in _PENDING_CLAIM_WORDS) + r")\b", re.IGNORECASE
 )
+# KA-RECON-PROXIMITY: the §2 id-anchored check pairs a PENDING word with a RESOLVED
+# id only when they share a SENTENCE, not merely the same (often long, multi-clause)
+# line. A pending word describing one feature must not be read as the status of an
+# unrelated id elsewhere on the line — e.g. ROADMAP "`--dry-run` prints the planned
+# old->new token diff" sits three sentences away from the RESOLVED KA-CS-REFRESH /
+# FIX-4 ids on the same paragraph line. Splitting on sentence / semicolon boundaries
+# ONLY (never dashes or table pipes) preserves the genuine single-line "ID — planned"
+# / "ID: deferred" contradiction while dropping the cross-sentence false positive.
+# Sentence dots always take a following space, so version dots (0.4.27,
+# rag_kernel.__version__) never split. The change can only make §2 MORE conservative,
+# so docs that already reconcile clean stay clean.
+_SENTENCE_SPLIT_RE = re.compile(r"(?:\.\s+|;\s+)")
 # A line naming a SUPERSEDED/past runtime version is a historical record that
 # legitimately describes a past state — exempt it from the current-state checks
 # (the headline-fact check still reconciles current-version numbers elsewhere).
@@ -750,15 +762,26 @@ def check_repo_claim_reconciliation(
                             check="repo_claim_headline", severity=ERROR,
                             detail=(f"{p.name}: drift-gate sha {got[:12]} != canonical "
                                     f"{drift_sha}: {ln.strip()[:90]}")))
-            # 2. id-anchored pending-status contradiction (README + ROADMAP only)
+            # 2. id-anchored pending-status contradiction (README + ROADMAP only).
+            # KA-RECON-PROXIMITY: require the PENDING word and the RESOLVED id to
+            # co-occur in the SAME sentence, not merely the same line. The outer
+            # line-level search is a cheap fast-path; the per-sentence loop is the
+            # actual association test (see _SENTENCE_SPLIT_RE).
             if not is_changelog and not historical and _PENDING_CLAIM_RE.search(ln):
-                for rid, rid_re in resolved_id_res:
-                    if rid_re.search(ln):
-                        findings.append(AuditFinding(
-                            check="repo_claim_status", severity=ERROR,
-                            detail=(f"{p.name}: claims RESOLVED record {rid} is still pending: "
-                                    f"{ln.strip()[:110]}"),
-                            item_id=rid))
+                flagged = False
+                for seg in _SENTENCE_SPLIT_RE.split(ln):
+                    if not _PENDING_CLAIM_RE.search(seg):
+                        continue
+                    for rid, rid_re in resolved_id_res:
+                        if rid_re.search(seg):
+                            findings.append(AuditFinding(
+                                check="repo_claim_status", severity=ERROR,
+                                detail=(f"{p.name}: claims RESOLVED record {rid} is still pending: "
+                                        f"{seg.strip()[:110]}"),
+                                item_id=rid))
+                            flagged = True
+                            break
+                    if flagged:
                         break  # one finding per line is enough
     return findings
 

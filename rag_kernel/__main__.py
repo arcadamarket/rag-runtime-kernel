@@ -205,8 +205,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to existing RAG_MASTER.json to update",
     )
     config_parser.add_argument(
-        "--context", type=Path, required=True,
-        help="Path to context file (JSON or structured MD with rag-config blocks)",
+        "--context", type=Path, required=False, default=None,
+        help="Path to context file (JSON or structured MD with rag-config blocks). "
+             "Optional when --reconciliation-docs-root is given.",
+    )
+    config_parser.add_argument(
+        "--reconciliation-docs-root", type=str, default=None, metavar="PATH",
+        help="KA-RECON-DECLARE: governed declaration of meta.reconciliation_docs_root — "
+             "the published-doc surface root the close-time Rule 11 reconciliation "
+             "(KA-13, session-end/session-resume) resolves against. Merged through the "
+             "same atomic mirror_bak writer as --context, so it never requires a "
+             "hand-edit of RAG_MASTER.json. May be used alone or alongside --context.",
     )
     config_parser.add_argument(
         "--dry-run", action="store_true",
@@ -943,9 +952,18 @@ def cmd_configure(args: argparse.Namespace) -> int:
     print(f"  Schema: {existing_rag.get('meta', {}).get('schema_version', '?')}")
     print(f"  Policy: {existing_rag.get('meta', {}).get('policy_version', '?')}")
 
-    # Load context
-    context_path = args.context.resolve()
-    if not context_path.exists():
+    # KA-RECON-DECLARE: at least one input source is required. --context supplies a
+    # full overlay; --reconciliation-docs-root is a single governed meta declaration.
+    # Either or both may be given.
+    recon_root = getattr(args, "reconciliation_docs_root", None)
+    if args.context is None and recon_root is None:
+        print("Error: configure needs --context and/or --reconciliation-docs-root",
+              file=sys.stderr)
+        return 1
+
+    # Load context (optional)
+    context_path = args.context.resolve() if args.context is not None else None
+    if context_path is not None and not context_path.exists():
         print(f"Error: Context file not found: {context_path}", file=sys.stderr)
         return 1
 
@@ -955,6 +973,10 @@ def cmd_configure(args: argparse.Namespace) -> int:
     # RAG itself, its .bak, the COLD archive, or the sanctioned RAG_CONTEXT.json
     # store would destroy real state.
     if getattr(args, "consume", False):
+        if context_path is None:
+            print("Error: --consume requires a --context file to consume",
+                  file=sys.stderr)
+            return 1
         from rag_kernel.cold_manager import CONTEXT_FILENAME
         _protected = {
             "rag_master.json", "rag_master.json.bak", "rag_cold.json",
@@ -969,37 +991,47 @@ def cmd_configure(args: argparse.Namespace) -> int:
             return 1
 
     context_data: dict = {}
-    suffix = context_path.suffix.lower()
+    if context_path is not None:
+        suffix = context_path.suffix.lower()
 
-    if suffix == ".json":
-        # Direct JSON merge
-        with open(context_path, "r", encoding="utf-8") as f:
-            context_data = json.load(f)
-        if not isinstance(context_data, dict):
-            print(f"Error: Context JSON must be an object, got {type(context_data).__name__}", file=sys.stderr)
+        if suffix == ".json":
+            # Direct JSON merge
+            with open(context_path, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+            if not isinstance(context_data, dict):
+                print(f"Error: Context JSON must be an object, got {type(context_data).__name__}", file=sys.stderr)
+                return 1
+            print(f"Context (JSON): {context_path}")
+            print(f"  Keys: {list(context_data.keys())}")
+        elif suffix == ".md":
+            # Parse MD for rag-config blocks
+            result = sp.parse_file(context_path)
+            if result.errors:
+                print(f"WARNING: {len(result.errors)} parse errors in context MD:")
+                for e in result.errors:
+                    print(f"  {e}")
+            if not result.blocks:
+                print(f"Error: No rag-config blocks found in {context_path}", file=sys.stderr)
+                return 1
+            # Merge all config blocks in order
+            for block in result.blocks:
+                if block.block_type == "config":
+                    context_data = deep_merge(context_data, block.data)
+            print(f"Context (MD): {context_path}")
+            print(f"  Blocks: {len(result.blocks)}, Sections: {len(result.sections_found)}")
+            print(f"  Merged keys: {list(context_data.keys())}")
+        else:
+            print(f"Error: Unsupported context format: {suffix} (expected .json or .md)", file=sys.stderr)
             return 1
-        print(f"Context (JSON): {context_path}")
-        print(f"  Keys: {list(context_data.keys())}")
-    elif suffix == ".md":
-        # Parse MD for rag-config blocks
-        result = sp.parse_file(context_path)
-        if result.errors:
-            print(f"WARNING: {len(result.errors)} parse errors in context MD:")
-            for e in result.errors:
-                print(f"  {e}")
-        if not result.blocks:
-            print(f"Error: No rag-config blocks found in {context_path}", file=sys.stderr)
-            return 1
-        # Merge all config blocks in order
-        for block in result.blocks:
-            if block.block_type == "config":
-                context_data = deep_merge(context_data, block.data)
-        print(f"Context (MD): {context_path}")
-        print(f"  Blocks: {len(result.blocks)}, Sections: {len(result.sections_found)}")
-        print(f"  Merged keys: {list(context_data.keys())}")
-    else:
-        print(f"Error: Unsupported context format: {suffix} (expected .json or .md)", file=sys.stderr)
-        return 1
+
+    # KA-RECON-DECLARE: overlay the single governed meta declaration LAST, so an
+    # explicit --reconciliation-docs-root wins over any value a context file also
+    # carries. It rides the same deep_merge + atomic mirror_bak writer below — no
+    # hand-edit of RAG_MASTER.json.
+    if recon_root is not None:
+        context_data = deep_merge(
+            context_data, {"meta": {"reconciliation_docs_root": recon_root}})
+        print(f"Declaring meta.reconciliation_docs_root = {recon_root!r}")
 
     # Deep merge context into existing RAG
     updated_rag = deep_merge(existing_rag, context_data)

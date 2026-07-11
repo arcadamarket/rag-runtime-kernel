@@ -6,6 +6,15 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.29] — 2026-07-11
+
+**KA-RECON-PROXIMITY + KA-RECON-DECLARE — the two gaps that blocked dogfooding the close-time reconciliation (KA-13) on this project, now both closed.** v0.4.28 wired the Rule 11 published-doc reconciliation into the session close, but two follow-on gaps kept it from being turned on here: it false-fired on long paragraph lines, and there was no governed way to declare where the published docs live.
+
+- **KA-RECON-PROXIMITY** (`drift_audit.check_repo_claim_reconciliation`) — the id-anchored §2 check paired a PENDING word with a RESOLVED id at *line* granularity: any pending word anywhere on a long, multi-clause paragraph line was read as the status of any RESOLVED id elsewhere on that same line. The live false positive was ROADMAP's v0.4.27 entry, whose "`--dry-run` prints the planned old→new token diff" clause sits three sentences away from the RESOLVED `KA-CS-REFRESH` / `FIX-4` ids named earlier on the line. The check now segments the line on sentence / semicolon boundaries (`. ` / `; ` — never dashes or table pipes, so version dots and single-line "`ID — planned`" claims are untouched) and requires the pending word and the id to co-occur in the **same sentence**. It can only make §2 more conservative, so docs that already reconcile clean stay clean. New `_SENTENCE_SPLIT_RE`.
+- **KA-RECON-DECLARE** (`__main__` — `configure`) — KA-13 resolves its published-doc surface root from `meta.reconciliation_docs_root`, but no governed verb *set* that key, so declaring it meant a hand-edit of `RAG_MASTER.json` — exactly the drift the project forbids. `configure` gains a `--reconciliation-docs-root PATH` flag that rides the existing `deep_merge` + `atomic_write_json(mirror_bak=True)` path, so the declaration is atomic and keeps HOT↔.bak parity by construction. `--context` is now optional (the flag may be used alone or alongside a context overlay; an explicit flag wins over any value a context file carries). `--consume` without a `--context` fails loud rather than reaching an unlink on a `None` path.
+
+Runtime `__version__` 0.4.28 → 0.4.29; `__spec_version__` unchanged (3.2.6). CLI / audit-only — no new module (19), health 20/20, drift gate `268149294421` unchanged (no schema, WAL-format, or TLA+ change), `DRIFT_STORE_VERSION` unchanged (1.4.0). Full suite 1,680 → 1,693 green (+13: 6 proximity + 7 declare).
+
 ## [v0.4.28] — 2026-07-11
 
 **KA-13 + KA-19 — the close-time published-doc reconciliation, now actually wired into `session-end` and no longer mis-firing on id substrings.** The spec (v3.2.6, KA-11 inc3) declared that the session close must reconcile every published status-claim against the tracked records, but the runtime close never did it — `_drive_close` ran its step-3 audit with `docs_root=None`, so the Rule 11 doc reconciliation stayed dormant at close (the exact recurring pass RECONCILE-PASS-RECURRING wanted mechanized). And the reconciliation's id matcher used a bare substring test, so a RESOLVED short id spuriously matched a longer, unrelated id on the line.
