@@ -6,6 +6,19 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 _Nothing yet._
 
+## [v0.4.31] — 2026-07-12
+
+**REPORT-VERB-FIDELITY + REPORT-VERB-WIRE-CLOSE — the canonical status report now renders faithfully and is machine-emitted at close.** Two related fixes to the deterministic report (Rule 12):
+
+- **REPORT-VERB-FIDELITY** — the report render is brought back in line with the canonical 7-section spec on three points:
+  - *Section 2* is now a **planned-vs-actual** table (`# | Increment | Plan | Status | RAG | Commit-S`) scoped to the **current build's** increments — sourced from a new `TrackedItem.increments[]` field — instead of dumping every historical milestone/release row. `Increment` is a frozen, all-string sub-record; it is display metadata only and never competes with an item's canonical `status`. Omitted from serialization when empty, so existing items round-trip byte-for-byte.
+  - The at-a-glance **milestone cell** falls back to the milestone/release **shipped this session** (then the newest release) before the bare "(no active milestone)", so a session that completes its milestone still names it.
+  - The **drift gate** can now reach GREEN from a **deployed package that ships no `formal/RAGKernel.tla`** (the governance-runtime norm). `guardgen` bakes a `GUARDS_SELF_SHA256` self-hash of the generated guard tables plus a `verify_self()`; when the `.tla` source is unreachable, the gate self-verifies its own guard integrity from baked provenance (True iff intact, False if hand-edited post-generation, None only if the machinery is absent). This removes the false-AMBER "unverified" a genuinely-green released build used to read. The honesty invariant holds: an unknown gate still pulls to AMBER (Rule 14).
+
+- **REPORT-VERB-WIRE-CLOSE** — `session-end` now **machine-renders the deterministic canonical report verbatim** from the just-checkpointed RAG as the mandated close artifact, so the closing report can never be hand-authored (the S136 close-drift root cause). Rendering is the attestation; the report's external scalars (`--tests`, `--released`, `--claims-ok`, …) mirror the `report` verb, and `--no-report` opts out.
+
+Tests: `+test_report_verb_fidelity.py` (12) and 2 new WIRE-CLOSE tests; full suite green.
+
 ## [v0.4.30] — 2026-07-11
 
 **REPORT-VERB — the closing/transfer status report is now a deterministic kernel render, not a hand-authored prose block.** Rule 12 (`report_before_transfer`) has always required the 7-section canonical status report to be a *deterministic render of the RAG canonical fields* ("the report equals the RAG by construction"), but until now the render existed only as a discipline the agent performed by hand — so a hand-assembled report could drift from the RAG even when the RAG itself was clean (the exact transfer-drift gap behind the operator's manual report-paste cross-check).
