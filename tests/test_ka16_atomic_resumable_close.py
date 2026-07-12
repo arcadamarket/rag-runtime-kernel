@@ -80,6 +80,45 @@ def test_session_end_sets_complete_transfer_ready_marker(tmp_path, monkeypatch):
     assert any(e["event"] == "session_end" for e in events)
 
 
+# --- S139 WIRE-CLOSE: the close MACHINE-RENDERS the canonical report ---------
+
+def test_session_end_machine_renders_close_report(tmp_path, monkeypatch, capsys):
+    """The close emits the deterministic 7-section report verbatim (Rule 12).
+
+    Rendering it from the just-checkpointed RAG is what makes hand-authoring
+    impossible (the S136 close-drift root cause) — and the render itself IS the
+    report_rendered attestation, no --report-rendered flag needed.
+    """
+    rag = _write_rag(tmp_path, "S0", seq=1)
+    _start_logger(tmp_path, "S1")
+    monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
+
+    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+               "--summary", "x", "--released", "--release-ref", "runtime-vX",
+               "--tests", "1,731 green", "--claims-ok"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "=== Canonical status report (Rule 12 — machine-rendered at close) ===" in out
+    assert "### 1 · At a glance" in out
+    assert "### 7 · Verification & handoff" in out
+    # the machine render satisfies the attestation step
+    assert _marker(rag)["steps"]["report_rendered"] is True
+
+
+def test_session_end_no_report_suppresses_render(tmp_path, monkeypatch, capsys):
+    """--no-report opts out of the machine render (kept for exceptional cases)."""
+    rag = _write_rag(tmp_path, "S0", seq=1)
+    _start_logger(tmp_path, "S1")
+    monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
+
+    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+               "--summary", "x", "--no-report"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "machine-rendered at close" not in out
+
+
 # --- ERROR_LOG fold is part of the governed call, and idempotent ------------
 
 def test_session_end_folds_error_log_entry(tmp_path, monkeypatch):

@@ -524,7 +524,8 @@ a guard, change formal/RAGKernel.tla, re-run TLC, then regenerate.
   "capability": "generated_guards",
   "description": "TLA+-derived transition table and action enabling-guards",
   "exports": ["GENERATED_TRANSITIONS", "KernelContext", "GuardResult",
-              "ACTION_GUARDS", "legal_transition", "SOURCE_SHA256"],
+              "ACTION_GUARDS", "legal_transition", "SOURCE_SHA256",
+              "GUARDS_SELF_SHA256", "verify_self"],
   "use_when": "Enforcing structurally-verified state transitions (FV-PHASE4)",
   "never_bypass": true,
   "generated": true
@@ -536,21 +537,100 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # SHA-256 of the source .tla this module was generated from. Compared at
-# import/verify time to detect model/code drift.
+# import/verify time to detect model/code drift (needs the .tla to recompute).
 SOURCE_SHA256 = "{source_sha}"
+# SHA-256 of THIS module's own guard tables (STATES / TERMINAL_STATES /
+# GENERATED_TRANSITIONS / ACTION_GUARDS), baked at generation time. Lets a
+# DEPLOYED package that ships no formal/RAGKernel.tla self-verify its guard
+# integrity from baked provenance -- see verify_self() at the foot of this file.
+GUARDS_SELF_SHA256 = "{guards_self_sha}"
 GENERATOR_VERSION = "{gen_version}"
 
 GuardResult = tuple[bool, str]
 '''
 
 
+# Runtime self-verification, emitted verbatim at the foot of generated_guards.py.
+# It reconstructs the SAME canonical payload string that ``canonical_guard_payload``
+# builds from the model at generation time (see the byte-for-byte-matching logic
+# there), hashes it, and compares to the baked GUARDS_SELF_SHA256. A test pins
+# verify_self() == True on the committed file, so any divergence fails loud.
+_SELF_VERIFY_TEMPLATE = '''
+
+# ---------------------------------------------------------------------------
+# Baked self-verification (deployed packages ship no .tla to recompute against)
+# ---------------------------------------------------------------------------
+
+def _guards_payload() -> str:
+    """Canonical, order-stable serialization of this module's guard tables.
+
+    Must match ``guardgen.canonical_guard_payload`` byte-for-byte so the baked
+    GUARDS_SELF_SHA256 verifies at runtime without the formal source.
+    """
+    _lines = []
+    _lines.append("STATES=" + ",".join(sorted(STATES)))
+    _lines.append("TERMINAL=" + ",".join(sorted(TERMINAL_STATES)))
+    for _k in sorted(GENERATED_TRANSITIONS):
+        _lines.append("T:" + _k + "=" + ",".join(sorted(GENERATED_TRANSITIONS[_k])))
+    for _name, _meta in sorted(ACTION_GUARDS.items()):
+        _lines.append("A:" + _name + "=" + ("1" if _meta[1] else "0"))
+    return "\\n".join(_lines)
+
+
+def verify_self() -> bool:
+    """True iff the in-memory guard tables match the baked GUARDS_SELF_SHA256.
+
+    Lets a DEPLOYED package prove its own guard integrity from baked provenance:
+    a post-generation hand-edit to STATES / TERMINAL_STATES / GENERATED_TRANSITIONS
+    / ACTION_GUARDS changes the payload and fails this check. Returns False (never
+    raises) on any mismatch or missing bake.
+    """
+    import hashlib as _hashlib
+    if not GUARDS_SELF_SHA256:
+        return False
+    _got = _hashlib.sha256(_guards_payload().encode("utf-8")).hexdigest()
+    return _got == GUARDS_SELF_SHA256
+'''
+
+
+def canonical_guard_payload(
+    states,
+    terminal_states,
+    transitions,
+    actions,
+) -> str:
+    """Canonical serialization of the guard tables, hashed into GUARDS_SELF_SHA256.
+
+    Kept byte-for-byte identical to the emitted ``_guards_payload`` so the deployed
+    package's ``verify_self`` reproduces the same hash. ``actions`` is an iterable
+    of ``(name, takes_target_bool)`` pairs; ``transitions`` a ``dict[str, iterable]``.
+    """
+    lines = []
+    lines.append("STATES=" + ",".join(sorted(states)))
+    lines.append("TERMINAL=" + ",".join(sorted(terminal_states)))
+    for k in sorted(transitions):
+        lines.append("T:" + k + "=" + ",".join(sorted(transitions[k])))
+    for name, tt in sorted(actions):
+        lines.append("A:" + name + "=" + ("1" if tt else "0"))
+    return "\n".join(lines)
+
+
 def emit_module(model: TlaModel) -> str:
     """Emit the full generated_guards.py source text (byte-deterministic)."""
+    self_payload = canonical_guard_payload(
+        model.states,
+        model.terminal_states,
+        model.transitions,
+        [(a.name, bool(a.takes_target)) for a in model.actions],
+    )
+    guards_self_sha = hashlib.sha256(self_payload.encode("utf-8")).hexdigest()
+
     parts: list[str] = []
     parts.append(_HEADER_TEMPLATE.format(
         gen_version=GENERATOR_VERSION,
         source_name=model.source_name or "formal/RAGKernel.tla",
         source_sha=model.source_sha256,
+        guards_self_sha=guards_self_sha,
     ))
 
     # State-set constants.
@@ -601,6 +681,9 @@ def legal_transition(from_state: str, to_state: str) -> bool:
         )
     reg_lines.append("}")
     parts.append("\n".join(reg_lines))
+
+    # Baked self-verification helpers (verify_self / _guards_payload).
+    parts.append(_SELF_VERIFY_TEMPLATE)
 
     parts.append("")  # trailing newline
     return "\n".join(parts)

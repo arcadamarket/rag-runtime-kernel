@@ -22,7 +22,8 @@ a guard, change formal/RAGKernel.tla, re-run TLC, then regenerate.
   "capability": "generated_guards",
   "description": "TLA+-derived transition table and action enabling-guards",
   "exports": ["GENERATED_TRANSITIONS", "KernelContext", "GuardResult",
-              "ACTION_GUARDS", "legal_transition", "SOURCE_SHA256"],
+              "ACTION_GUARDS", "legal_transition", "SOURCE_SHA256",
+              "GUARDS_SELF_SHA256", "verify_self"],
   "use_when": "Enforcing structurally-verified state transitions (FV-PHASE4)",
   "never_bypass": true,
   "generated": true
@@ -34,8 +35,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # SHA-256 of the source .tla this module was generated from. Compared at
-# import/verify time to detect model/code drift.
+# import/verify time to detect model/code drift (needs the .tla to recompute).
 SOURCE_SHA256 = "268149294421ae6c2f41c116b9f9298fe53678b998ee0dd652b9092548533ecc"
+# SHA-256 of THIS module's own guard tables (STATES / TERMINAL_STATES /
+# GENERATED_TRANSITIONS / ACTION_GUARDS), baked at generation time. Lets a
+# DEPLOYED package that ships no formal/RAGKernel.tla self-verify its guard
+# integrity from baked provenance -- see verify_self() at the foot of this file.
+GUARDS_SELF_SHA256 = "9a88156777efb5e4f3fb582ad114231131f6441471d3d4d3e798a9dbcea10d7e"
 GENERATOR_VERSION = "1.0.0"
 
 GuardResult = tuple[bool, str]
@@ -230,3 +236,39 @@ ACTION_GUARDS: dict[str, tuple] = {
     'StageProposal': (guard_stage_proposal, True),
     'WALCompaction': (guard_wal_compaction, False),
 }
+
+
+# ---------------------------------------------------------------------------
+# Baked self-verification (deployed packages ship no .tla to recompute against)
+# ---------------------------------------------------------------------------
+
+def _guards_payload() -> str:
+    """Canonical, order-stable serialization of this module's guard tables.
+
+    Must match ``guardgen.canonical_guard_payload`` byte-for-byte so the baked
+    GUARDS_SELF_SHA256 verifies at runtime without the formal source.
+    """
+    _lines = []
+    _lines.append("STATES=" + ",".join(sorted(STATES)))
+    _lines.append("TERMINAL=" + ",".join(sorted(TERMINAL_STATES)))
+    for _k in sorted(GENERATED_TRANSITIONS):
+        _lines.append("T:" + _k + "=" + ",".join(sorted(GENERATED_TRANSITIONS[_k])))
+    for _name, _meta in sorted(ACTION_GUARDS.items()):
+        _lines.append("A:" + _name + "=" + ("1" if _meta[1] else "0"))
+    return "\n".join(_lines)
+
+
+def verify_self() -> bool:
+    """True iff the in-memory guard tables match the baked GUARDS_SELF_SHA256.
+
+    Lets a DEPLOYED package prove its own guard integrity from baked provenance:
+    a post-generation hand-edit to STATES / TERMINAL_STATES / GENERATED_TRANSITIONS
+    / ACTION_GUARDS changes the payload and fails this check. Returns False (never
+    raises) on any mismatch or missing bake.
+    """
+    import hashlib as _hashlib
+    if not GUARDS_SELF_SHA256:
+        return False
+    _got = _hashlib.sha256(_guards_payload().encode("utf-8")).hexdigest()
+    return _got == GUARDS_SELF_SHA256
+

@@ -259,6 +259,44 @@ class StatusEvent:
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class Increment:
+    """One planned-vs-actual build increment recorded on a MILESTONE/RELEASE item.
+
+    Pure display metadata for the status report's section 2 (REPORT-VERB-FIDELITY):
+    the canonical spec renders the CURRENT build as ``# | Increment | Plan | Status
+    | RAG | Commit-S``, scoped to these increments rather than a dump of all
+    historical milestones. Frozen + all-string so the owning ``TrackedItem`` stays
+    hashable. Not lifecycle-governed — it never competes with the item's canonical
+    ``status`` (that remains the single source of truth).
+    """
+
+    n: str            # increment label, e.g. "1" / "inc1"
+    plan: str         # what this increment was planned to deliver
+    status: str = ""  # actual outcome, e.g. "DONE" / "in-progress" / "planned"
+    rag: str = ""     # RAG checkpoint seq at which it landed (str for render)
+    commit: str = ""  # commit-Session ref, e.g. "abc1234-S139"
+
+    def to_dict(self) -> dict:
+        return {
+            "n": self.n,
+            "plan": self.plan,
+            "status": self.status,
+            "rag": self.rag,
+            "commit": self.commit,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Increment":
+        return cls(
+            n=str(d.get("n", "")),
+            plan=str(d.get("plan", "")),
+            status=str(d.get("status", "")),
+            rag=str(d.get("rag", "")),
+            commit=str(d.get("commit", "")),
+        )
+
+
+@dataclass(frozen=True)
 class TrackedItem:
     """A single normalized project-state item with ONE canonical status.
 
@@ -276,11 +314,27 @@ class TrackedItem:
     note: str = ""                # one-line context (not a prose authority)
     superseded_by: str | None = None   # set iff status == SUPERSEDED
     history: tuple[StatusEvent, ...] = field(default_factory=tuple)
+    increments: tuple[Increment, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         # Coerce string inputs (e.g. from JSON) to enums without mutating a
         # frozen instance illegally — object.__setattr__ is the sanctioned path.
         object.__setattr__(self, "status", _coerce_status(self.status))
+        # Coerce increments (list-of-dict from JSON, or already-Increment) to a
+        # tuple of Increment so the frozen item stays hashable and round-trips.
+        if self.increments and not all(
+            isinstance(x, Increment) for x in self.increments
+        ):
+            object.__setattr__(
+                self,
+                "increments",
+                tuple(
+                    x if isinstance(x, Increment) else Increment.from_dict(x)
+                    for x in self.increments
+                ),
+            )
+        else:
+            object.__setattr__(self, "increments", tuple(self.increments))
         if not isinstance(self.kind, ItemKind):
             try:
                 object.__setattr__(self, "kind", ItemKind(self.kind))
@@ -364,8 +418,13 @@ class TrackedItem:
         return replace(self, note=note, session=session)
 
     def to_dict(self) -> dict:
-        """Serialise to a JSON-round-trippable dict (canonical field included)."""
-        return {
+        """Serialise to a JSON-round-trippable dict (canonical field included).
+
+        ``increments`` is omitted entirely when empty so existing items serialise
+        byte-for-byte as before (no schema churn / RAG-size bloat for the common
+        case; only MILESTONE/RELEASE builds that record increments carry the key).
+        """
+        out = {
             "id": self.id,
             "title": self.title,
             "status": self.status.value,
@@ -375,6 +434,9 @@ class TrackedItem:
             "superseded_by": self.superseded_by,
             "history": [e.to_dict() for e in self.history],
         }
+        if self.increments:
+            out["increments"] = [inc.to_dict() for inc in self.increments]
+        return out
 
     @classmethod
     def from_dict(cls, d: dict) -> TrackedItem:
@@ -388,4 +450,7 @@ class TrackedItem:
             note=d.get("note", ""),
             superseded_by=d.get("superseded_by"),
             history=tuple(StatusEvent.from_dict(e) for e in d.get("history", [])),
+            increments=tuple(
+                Increment.from_dict(x) for x in d.get("increments", [])
+            ),
         )

@@ -456,6 +456,33 @@ def _cell(value: Optional[str]) -> str:
     return v if v else "n/a"
 
 
+def _focus_build(build_rows: list, session: str):
+    """The CURRENT build item section 2 / the milestone cell describe.
+
+    Order (honest, never fabricated): the newest non-terminal MILESTONE (a build
+    in progress), else the milestone/release that reached terminal THIS session
+    (the just-shipped build), else the newest RELEASE row, else None. Shared by
+    the at-a-glance milestone cell and section 2 so they never disagree.
+    """
+    active = [it for it in build_rows
+              if it.kind == ItemKind.MILESTONE and not it.is_terminal]
+    if active:
+        return active[-1]
+    session_terminal = [
+        it for it in build_rows
+        if it.is_terminal and (
+            it.session == session
+            or any(getattr(ev, "session", None) == session for ev in it.history)
+        )
+    ]
+    if session_terminal:
+        return session_terminal[-1]
+    releases = [it for it in build_rows if it.kind == ItemKind.RELEASE]
+    if releases:
+        return releases[-1]
+    return None
+
+
 def render_status_report(
     source: TrackedItemStore | dict | Iterable[TrackedItem],
     *,
@@ -521,15 +548,24 @@ def render_status_report(
         claims_ok=claims_ok,
         released=released,
     )
+    focus = _focus_build(build_rows, session)
     if milestone is None:
-        # honest default: name the newest non-terminal milestone, else the newest
-        # release row, else a plain phrase — never a fabricated claim.
-        active_ms = [it for it in build_rows
-                     if it.kind == ItemKind.MILESTONE and not it.is_terminal]
-        if active_ms:
-            milestone = f"{active_ms[-1].id} — {active_ms[-1].title}"
-        else:
+        # honest default via the shared focus-build resolver: name the in-progress
+        # milestone, else the milestone/release shipped THIS session (so a completed
+        # build still names itself instead of the bare "(no active milestone)"),
+        # else the newest release — never a fabricated claim.
+        if focus is None:
             milestone = "(no active milestone)"
+        elif focus.kind == ItemKind.MILESTONE and not focus.is_terminal:
+            milestone = f"{focus.id} — {focus.title}"
+        elif focus.is_terminal and (
+            focus.session == session
+            or any(getattr(ev, "session", None) == session
+                   for ev in focus.history)
+        ):
+            milestone = f"{focus.id} — {focus.title} (shipped {session})"
+        else:
+            milestone = f"{focus.id} — {focus.title}"
 
     release_cell = (
         "n/a" if released is None
@@ -566,19 +602,27 @@ def render_status_report(
     ap(f"**Verdict:** {verdict}")
     ap("")
 
-    # (2) BUILD (planned vs actual) ---------------------------------------
-    ap("### 2 · Build (milestones & releases)")
+    # (2) BUILD (planned vs actual, scoped to the CURRENT build's increments) --
+    ap("### 2 · Build (planned vs actual)")
     ap("")
-    if build_rows:
-        ap("| # | Item | Kind | Status | Session |")
-        ap("| --- | --- | --- | --- | --- |")
-        for i, it in enumerate(build_rows, 1):
+    if focus is not None and focus.increments:
+        ap(f"**{focus.id} — {focus.title}** "
+           f"({focus.kind.value}, {focus.status.value})")
+        ap("")
+        ap("| # | Increment | Plan | Status | RAG | Commit-S |")
+        ap("| --- | --- | --- | --- | --- | --- |")
+        for i, inc in enumerate(focus.increments, 1):
             ap(
-                f"| {i} | {it.id} — {it.title} | {it.kind.value} "
-                f"| {it.status.value} | {it.session or '—'} |"
+                f"| {i} | {_cell(inc.n)} | {_cell(inc.plan)} | {_cell(inc.status)} "
+                f"| {_cell(inc.rag)} | {_cell(inc.commit)} |"
             )
+    elif focus is not None:
+        # A current build exists but records no increments yet — name it plainly
+        # rather than dumping the full historical milestone list (the S136 defect a).
+        ap(f"- Current build: {focus.id} — {focus.title} "
+           f"({focus.kind.value}, {focus.status.value}) — no increments recorded.")
     else:
-        ap("_(no milestone / release items in the canonical array)_")
+        ap("_(no active build — resolved milestones/releases are listed via `items`)_")
     ap("")
 
     # (3) THIS SESSION -----------------------------------------------------

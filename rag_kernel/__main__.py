@@ -330,8 +330,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     send_parser.add_argument(
         "--report-rendered", action="store_true",
-        help="Attest the canonical status report was rendered in chat (Rule 12).",
+        help="DEPRECATED (S139 WIRE-CLOSE): the close now machine-renders the "
+             "canonical report itself, so attestation is automatic. Kept as a no-op "
+             "for back-compat.",
     )
+    # S139 WIRE-CLOSE — the close emits the deterministic canonical report verbatim
+    # (Rule 12), so hand-authoring is impossible. These mirror the `report` verb's
+    # external scalars; unset ones render n/a and honestly pull the verdict to AMBER.
+    send_parser.add_argument("--tests", type=str, default=None,
+        help="Test result summary for the close report (e.g. '1,720 green').")
+    send_parser.add_argument("--tests-failing", action="store_true",
+        help="Mark the test gate FAILING in the close report.")
+    send_parser.add_argument("--released", dest="released", action="store_true", default=None,
+        help="Assert the build is released/deployable (drives GREEN in the close report).")
+    send_parser.add_argument("--unreleased", dest="released", action="store_false",
+        help="Assert the build is UNRELEASED (forces AMBER in the close report).")
+    send_parser.add_argument("--release-ref", type=str, default=None,
+        help="Release tag/ref for the close report's release cell.")
+    send_parser.add_argument("--claims-ok", dest="claims_ok", action="store_true", default=None,
+        help="Assert published repo-claims reconciled (Rule 11) in the close report.")
+    send_parser.add_argument("--claims-broken", dest="claims_ok", action="store_false",
+        help="Assert a published repo-claim contradicts reality (forces RED).")
+    send_parser.add_argument("--context-pct", type=str, default=None,
+        help="LLM context-window usage for the close report (e.g. '55%%').")
+    send_parser.add_argument("--milestone", type=str, default=None,
+        help="Override the close report's milestone cell.")
+    send_parser.add_argument("--handoff", type=str, default=None,
+        help="One-line handoff/next-step note for the close report's section 7.")
+    send_parser.add_argument("--no-report", action="store_true",
+        help="Suppress the machine-rendered close report (not recommended).")
     # KA-13 — wire the Rule 11 published-doc reconciliation into the close audit.
     send_parser.add_argument(
         "--docs-root", type=str, default=None,
@@ -1469,11 +1496,20 @@ def cmd_render(args: argparse.Namespace) -> int:
 def _drift_gate_ok(rag_path: Path) -> "bool | None":
     """Best-effort live drift-gate check for the report verb.
 
-    Recomputes the SHA-256 of the formal ``.tla`` source and compares it to the
-    ``SOURCE_SHA256`` baked into ``generated_guards``. True iff they match, False
-    iff they differ, None if the source can't be located (deployed package with
-    no ``formal/`` dir) — mirroring ``_resolve_git_head``'s self-skipping so a
-    deploy without the source audits cleanly rather than breaking.
+    Two evidence paths, in order of strength:
+
+    1. SOURCE PATH (dev worktree): recompute the SHA-256 of the formal ``.tla``
+       source and compare it to ``SOURCE_SHA256`` baked into ``generated_guards``.
+       True iff they match, False iff they differ.
+    2. BAKED-PROVENANCE PATH (deployed package): a deploy ships NO ``formal/`` dir
+       by design (governance_runtime / Rule 19 — only the generated artifact + its
+       provenance is deployed), so the ``.tla`` cannot be recomputed. Fall back to
+       ``generated_guards.verify_self()``, which re-hashes the module's own guard
+       tables against the baked ``GUARDS_SELF_SHA256``. True iff the guards are
+       provably intact, False iff hand-edited post-generation.
+
+    Returns None only if neither path yields evidence (no baseline AND no
+    self-verify machinery) — a genuinely-unknown gate that honestly reads AMBER.
     """
     import hashlib
 
@@ -1482,20 +1518,26 @@ def _drift_gate_ok(rag_path: Path) -> "bool | None":
     except Exception:
         return None
     baseline = getattr(generated_guards, "SOURCE_SHA256", None)
-    if not baseline:
-        return None
-    project_root = rag_path.parent.parent
-    for cand in (
-        project_root / "formal" / "RAGKernel.tla",
-        rag_path.parent / "formal" / "RAGKernel.tla",
-        Path(__file__).resolve().parent.parent / "formal" / "RAGKernel.tla",
-    ):
+    if baseline:
+        project_root = rag_path.parent.parent
+        for cand in (
+            project_root / "formal" / "RAGKernel.tla",
+            rag_path.parent / "formal" / "RAGKernel.tla",
+            Path(__file__).resolve().parent.parent / "formal" / "RAGKernel.tla",
+        ):
+            try:
+                if cand.exists():
+                    sha = hashlib.sha256(cand.read_bytes()).hexdigest()
+                    return sha == baseline
+            except OSError:
+                continue
+    # No reachable .tla source: self-verify from baked provenance (deployed case).
+    verify_self = getattr(generated_guards, "verify_self", None)
+    if callable(verify_self):
         try:
-            if cand.exists():
-                sha = hashlib.sha256(cand.read_bytes()).hexdigest()
-                return sha == baseline
-        except OSError:
-            continue
+            return bool(verify_self())
+        except Exception:
+            return None
     return None
 
 
@@ -1511,22 +1553,40 @@ def cmd_report(args: argparse.Namespace) -> int:
     ``current_status`` prose; an unknown fact renders ``n/a`` and can only pull the
     verdict toward AMBER, never to a false GREEN (Rule 14).
     """
-    import importlib
-
-    import rag_kernel
-    from rag_kernel.drift_store import DriftStoreError, TrackedItemStore, load_hot
-    from rag_kernel import drift_render, generated_guards
+    from rag_kernel.drift_store import DriftStoreError
 
     rag_path = args.rag.resolve()
     if not rag_path.exists():
         print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
         return 1
     try:
-        hot = load_hot(rag_path)
-        store = TrackedItemStore.from_hot(hot)
+        report = _build_report_text(rag_path, args)
     except DriftStoreError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    print(report)
+    return 0
+
+
+def _build_report_text(rag_path: Path, ns: argparse.Namespace) -> str:
+    """Gather the report facts and render the 7-section canonical status report.
+
+    Shared by the ``report`` verb and the ``session-end`` close (S139 WIRE-CLOSE),
+    so the close renders the SAME deterministic artifact rather than trusting a
+    hand-authored one. Facts: STRUCTURED (meta / tracked_items / ledger),
+    LIVE-COMPUTED (health, drift gate, git HEAD, .bak parity, bytes), and EXPLICIT
+    external scalars read off ``ns`` (context %, tests, released?, claims?). An
+    unknown fact renders ``n/a`` and can only pull the verdict toward AMBER, never
+    a false GREEN (Rule 14). Reads only; never mutates the RAG.
+    """
+    import importlib
+
+    import rag_kernel
+    from rag_kernel.drift_store import TrackedItemStore, load_hot
+    from rag_kernel import drift_render, generated_guards
+
+    hot = load_hot(rag_path)
+    store = TrackedItemStore.from_hot(hot)
 
     meta = hot.get("meta", {}) if isinstance(hot, dict) else {}
     ledger = hot.get("inference_ledger", []) if isinstance(hot, dict) else []
@@ -1536,8 +1596,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     health = None
     health_ok = None
     drift_ok = None
-    git_head = args.git_head
-    if not args.no_live:
+    git_head = getattr(ns, "git_head", None)
+    if not getattr(ns, "no_live", False):
         modules = list(rag_kernel._KERNEL_MODULES)
         passed = 0
         for mod_name in modules:
@@ -1569,33 +1629,32 @@ def cmd_report(args: argparse.Namespace) -> int:
     except OSError:
         rag_bytes = None
 
-    # -- explicit external args --
-    tests_ok = None if args.tests is None else (not args.tests_failing)
+    # -- explicit external args (all optional; absent -> n/a -> AMBER) --
+    tests = getattr(ns, "tests", None)
+    tests_ok = None if tests is None else (not getattr(ns, "tests_failing", False))
 
-    report = drift_render.render_status_report(
+    return drift_render.render_status_report(
         store,
-        session=args.session,
+        session=ns.session,
         meta=meta,
         ledger=ledger,
         version=version,
-        milestone=args.milestone,
-        tests=args.tests,
+        milestone=getattr(ns, "milestone", None),
+        tests=tests,
         tests_ok=tests_ok,
         health=health,
         health_ok=health_ok,
         drift_sha=drift_sha,
         drift_ok=drift_ok,
-        released=args.released,
-        release_ref=args.release_ref,
-        claims_ok=args.claims_ok,
-        context_pct=args.context_pct,
+        released=getattr(ns, "released", None),
+        release_ref=getattr(ns, "release_ref", None),
+        claims_ok=getattr(ns, "claims_ok", None),
+        context_pct=getattr(ns, "context_pct", None),
         git_head=git_head,
         rag_bytes=rag_bytes,
         bak_parity=bak_parity,
-        handoff=args.handoff,
+        handoff=getattr(ns, "handoff", None),
     )
-    print(report)
-    return 0
 
 
 def cmd_note(args: argparse.Namespace) -> int:
@@ -2590,12 +2649,36 @@ def _resolve_close_docs_root(
     return str(dr)
 
 
+def _close_report_ns(sid: str, args: argparse.Namespace) -> argparse.Namespace:
+    """Build the namespace ``_build_report_text`` consumes for the close report.
+
+    Keyed on the resolved ``sid`` (so a resume with no --session still renders a
+    correct heading) and forwarding whatever report scalars the close was given;
+    anything unset stays None -> renders n/a -> honestly pulls the verdict to AMBER.
+    """
+    return argparse.Namespace(
+        session=sid,
+        git_head=getattr(args, "git_head", None),
+        no_live=False,
+        tests=getattr(args, "tests", None),
+        tests_failing=getattr(args, "tests_failing", False),
+        released=getattr(args, "released", None),
+        release_ref=getattr(args, "release_ref", None),
+        claims_ok=getattr(args, "claims_ok", None),
+        context_pct=getattr(args, "context_pct", None),
+        milestone=getattr(args, "milestone", None),
+        handoff=getattr(args, "handoff", None),
+        no_report=getattr(args, "no_report", False),
+    )
+
+
 def _drive_close(
     rag_path: Path, rag_dir: Path, sid: str, *, summary: "str | None",
     tasks, status, strict: bool, git_head: "str | None",
     error_log_entry: "str | None", error_log_id: "str | None",
     error_log_path: "str | None", report_rendered: bool,
     marker: "dict | None", resuming: bool, docs_root: "str | None" = None,
+    report_args: "argparse.Namespace | None" = None,
 ) -> int:
     """Run the close transaction forward from whatever step is incomplete.
 
@@ -2679,6 +2762,19 @@ def _drive_close(
     # Step 4/4 — commit completion. Marker write is pure data and touches no
     # audited invariant, so flipping it after a green audit cannot un-clean the
     # RAG (validate-then-commit-the-flag).
+    #
+    # S139 WIRE-CLOSE: the close now MACHINE-RENDERS the deterministic canonical
+    # report from the just-checkpointed RAG as the mandated close artifact, so it
+    # can never be hand-authored (the S136 close-drift root cause). Rendering IS
+    # the attestation — report_rendered is set because the machine produced it.
+    close_report = None
+    if report_args is not None and not getattr(report_args, "no_report", False):
+        try:
+            close_report = _build_report_text(rag_path, report_args)
+            steps["report_rendered"] = True
+        except Exception as exc:  # a render hiccup must never strand a green close
+            print(f"  WARN: could not machine-render close report: {exc}",
+                  file=sys.stderr)
     if report_rendered:
         steps["report_rendered"] = True
     _write_close_marker(
@@ -2688,17 +2784,21 @@ def _drive_close(
         ),
     )
     print("[4/4] Transfer marker: transfer_ready=true (phase COMPLETE).")
-    if not steps.get("report_rendered"):
-        print(
-            "  NOTE: report_rendered not attested — render the canonical status "
-            "report in chat (Rule 12) and pass --report-rendered to record it.",
-            file=sys.stderr,
-        )
     verb = "resumed and completed" if resuming else "ended cleanly"
     print(
         f"Session {sid} {verb}: checkpoint + ERROR_LOG + close + audit all green; "
         "transfer_ready set."
     )
+    if close_report is not None:
+        print("")
+        print("=== Canonical status report (Rule 12 — machine-rendered at close) ===")
+        print(close_report)
+    elif not steps.get("report_rendered"):
+        print(
+            "  NOTE: close report not machine-rendered (--no-report) and not "
+            "attested — render it in chat (Rule 12).",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -2750,6 +2850,7 @@ def cmd_session_end(args: argparse.Namespace) -> int:
         report_rendered=getattr(args, "report_rendered", False),
         marker=active, resuming=False,
         docs_root=_resolve_close_docs_root(rag_path, args),
+        report_args=_close_report_ns(sid, args),
     )
 
 
@@ -2803,6 +2904,7 @@ def cmd_session_resume(args: argparse.Namespace) -> int:
         report_rendered=getattr(args, "report_rendered", False),
         marker=marker, resuming=True,
         docs_root=_resolve_close_docs_root(rag_path, args),
+        report_args=_close_report_ns(sid, args),
     )
 
 
