@@ -4,7 +4,13 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
-_Nothing yet._
+**ERRLOG-ID-GUARD (P1/G1) — ERROR_LOG error-id headings are now a fail-loud auditor invariant.** A new `drift_audit.check_errlog_id_coherence` enforces the formally-verified `GUARD == I0 ∧ I1 ∧ I2` (`formal/ErrlogIdGuard.tla`, master theorem `GUARD ⇔ Legit`, TLC-exhaustive) over `ERROR_LOG.md`:
+
+- **I0 (`errlog_id_malformed`)** — a heading that leads with an error id but is neither a definition (`id + ':' / '—'`) nor a recurrence (`id + recurrence marker`) fails loud, so the heading convention cannot silently drift (self-stabilizing).
+- **I1 (`errlog_id_reuse`)** — an id defined by more than one heading is caught. This is the pre-S140 blind spot: `check_record_coverage` de-duped every heading before checking, so a reused id (two definitions) was invisible.
+- **I2 (`errlog_id_dangling`)** — an id mentioned in a heading with no definition heading is caught.
+
+The classifier is **positional, never prose-inferred** (the model's ML-lens mandate): a recurrence marker inside a descriptive parenthetical (`(recurring, non-fatal):`) or in the description tail stays a definition, and a legitimate `Dfn + Rcr` pair for one id is accepted (the naive "each id heads once" guard's false positive, refuted by counterexample in `ErrlogIdGuard_naive.cfg`). Scope is heading-only, matching the verified model. Wired into `audit_hot` (self-skips when no `ERROR_LOG.md`). `+tests/test_errlog_id_guard.py` (17); full suite 1,733 → 1,750 green (+17), health 20/20, no schema/WAL/`RAGKernel.tla` change (drift gate `268149294421` unchanged, no new capability module).
 
 ## [v0.4.31] — 2026-07-12
 

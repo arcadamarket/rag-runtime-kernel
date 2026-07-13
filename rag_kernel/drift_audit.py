@@ -673,6 +673,116 @@ def check_record_coverage(
 
 
 # ---------------------------------------------------------------------------
+# ERRLOG-ID-GUARD (P1/G1, S140/S141) — ERROR_LOG heading error-id coherence.
+# Formally verified in formal/ErrlogIdGuard.tla (master theorem GUARD <=> Legit,
+# TLC-exhaustive over all logs up to MaxLen). GUARD == I0 /\ I1 /\ I2, where each
+# heading that LEADS with an error id is classified by POSITION — never by
+# inferring structure from prose (the model's ML-lens mandate: enforce the
+# convention, do not guess it):
+#   Dfn  the id (after an optional provenance parenthetical) is followed by a
+#        definition delimiter ':' / '—' / '-' (the model's "id immediately
+#        followed by :").
+#   Rcr  a recurrence marker word (recurrence|recurring|repeat|follow-up|
+#        regression) appears in the heading's head region (before the first
+#        description delimiter) and OUTSIDE any parenthetical — so a descriptor
+#        such as "(recurring, non-fatal):" stays a Dfn and never false-trips.
+#   Mfd  leads with an id but matches NEITHER grammar — malformed; fails loud so
+#        the convention cannot silently drift (self-stabilizing, I0).
+# Invariants: I0 no Mfd heading; I1 <= 1 Dfn per id; I2 every id mentioned in a
+# heading has >= 1 Dfn heading. SCOPE (documented, honest): only markdown
+# *headings* are classified — a plain-paragraph "E-NNN:" line is NOT a definition
+# here, so definitions must be headings. This matches the verified model exactly
+# (heading-scoped); non-heading paragraph defs are an out-of-model residual.
+# ---------------------------------------------------------------------------
+_ERRLOG_HEADING_RE = re.compile(r"^#+\s+(E-\d+)(.*)$")
+_ERRLOG_ANY_ID_RE = re.compile(r"E-\d+")
+_ERRLOG_RECUR_RE = re.compile(
+    r"\b(?:recurrence|recurring|repeat|follow-?up|regression)\b", re.IGNORECASE)
+# A definition delimiter: the id, after an optional (provenance) parenthetical,
+# is immediately followed by ':' , em dash '—', or hyphen '-'.
+_ERRLOG_DEFN_DELIM_RE = re.compile(r"^\s*(?:\([^)]*\)\s*)?[:—-]")
+# The description delimiter that closes the classifiable "head region" of a
+# heading: an em dash, a '--' run, or a colon.
+_ERRLOG_DESC_DELIM_RE = re.compile(r"—|--|:")
+
+
+def _errlog_classify_heading(tail: str) -> str:
+    """Classify an ERROR_LOG heading tail (text after the leading id) as Dfn|Rcr|Mfd.
+
+    ``tail`` is everything on the heading line after the leading ``E-NNN`` token.
+    The head region (before the first description delimiter) is scanned for a
+    recurrence marker with parentheticals stripped, so only a marker used as
+    structure — not one inside a descriptive parenthetical — makes a Rcr.
+    """
+    m = _ERRLOG_DESC_DELIM_RE.search(tail)
+    head = tail[: m.start()] if m else tail
+    head_no_parens = re.sub(r"\([^)]*\)", " ", head)
+    if _ERRLOG_RECUR_RE.search(head_no_parens):
+        return "Rcr"
+    if _ERRLOG_DEFN_DELIM_RE.match(tail):
+        return "Dfn"
+    return "Mfd"
+
+
+def check_errlog_id_coherence(
+    error_log_path: Optional[Path | str] = None,
+) -> list[AuditFinding]:
+    """ERRLOG-ID-GUARD: fail loud on ERROR_LOG.md error-id heading incoherence.
+
+    Enforces the formally-verified GUARD == I0 /\\ I1 /\\ I2 over ERROR_LOG.md:
+      * I0 (errlog_id_malformed): a heading leading with an id that is neither a
+        definition (id + ':' / '—') nor a recurrence (id + recurrence marker).
+      * I1 (errlog_id_reuse): an error id defined by more than one heading.
+      * I2 (errlog_id_dangling): an id mentioned in a heading with no definition
+        heading.
+    Self-skips clean when ``error_log_path`` is None or the file is absent, so a
+    project with no ERROR_LOG still audits clean.
+    """
+    findings: list[AuditFinding] = []
+    if error_log_path is None:
+        return findings
+    p = Path(error_log_path)
+    if not p.exists():
+        return findings
+    defs: dict[str, list[int]] = {}
+    mentioned: dict[str, int] = {}
+    for lineno, ln in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        m = _ERRLOG_HEADING_RE.match(ln)
+        if not m:
+            continue
+        lead_id, tail = m.group(1), m.group(2)
+        for mid in _ERRLOG_ANY_ID_RE.findall(ln):
+            mentioned.setdefault(mid, lineno)
+        kind = _errlog_classify_heading(tail)
+        if kind == "Dfn":
+            defs.setdefault(lead_id, []).append(lineno)
+        elif kind == "Mfd":
+            findings.append(AuditFinding(
+                check="errlog_id_malformed", severity=ERROR,
+                detail=(f"ERROR_LOG heading for {lead_id} (line {lineno}) is malformed: "
+                        f"the id is neither a definition (id + ':' / '—') nor a "
+                        f"recurrence (id + recurrence marker): {ln.strip()[:90]}"),
+                item_id=lead_id))
+    # I1 — at most one definition heading per id (uniqueness).
+    for eid, lines in sorted(defs.items()):
+        if len(lines) > 1:
+            findings.append(AuditFinding(
+                check="errlog_id_reuse", severity=ERROR,
+                detail=(f"ERROR_LOG error id {eid} is defined by {len(lines)} headings "
+                        f"(lines {lines}); each id must have exactly one definition"),
+                item_id=eid))
+    # I2 — every id mentioned in a heading must have a definition heading.
+    for eid, lineno in sorted(mentioned.items()):
+        if eid not in defs:
+            findings.append(AuditFinding(
+                check="errlog_id_dangling", severity=ERROR,
+                detail=(f"ERROR_LOG error id {eid} is mentioned in a heading (line "
+                        f"{lineno}) but has no definition heading"),
+                item_id=eid))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Rule 11 published-doc reconciliation (increment 6)
 # ---------------------------------------------------------------------------
 
@@ -1621,6 +1731,9 @@ def audit_hot(
     findings += check_note_status_contradiction(store)
     findings += check_ledger_consistency(hot)
     findings += check_record_coverage(hot, error_log_path=error_log_path)
+    # ERRLOG-ID-GUARD (P1/G1): ERROR_LOG heading id coherence (I0/I1/I2).
+    # Self-skips when error_log_path is None/absent, like the coverage scan.
+    findings += check_errlog_id_coherence(error_log_path)
     findings += check_current_status_freshness(hot, version=version, git_head=git_head)
     findings += check_current_status_coherence(hot)
     # KA-5/E-046: single-source manifest version binding — pure introspection over

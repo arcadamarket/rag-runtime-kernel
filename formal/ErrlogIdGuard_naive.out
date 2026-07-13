@@ -1,0 +1,19 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 44 and seed -3973449982885835330 with 1 worker on 8 cores with 1532MB heap and 64MB offheap memory [pid: 11706] (Linux 5.15.167.4-microsoft-standard-WSL2 amd64, Ubuntu 21.0.11 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /home/pakhol/formal_run/ErrlogIdGuard.tla
+Parsing file /tmp/Naturals.tla
+Parsing file /tmp/Sequences.tla
+Parsing file /tmp/FiniteSets.tla
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module ErrlogIdGuard
+Starting... (2026-07-13 04:10:17)
+Computing initial states...
+Computed 2 initial states...
+Computed 4 initial states...
+Computed 8 initial states...
+Error: Invariant NaiveFalsePos is violated by the initial state:
+log = <<[id |-> E1, kind |-> Dfn], [id |-> E1, kind |-> Rcr]>>
+
+Finished in 01s at (2026-07-13 04:10:18)
