@@ -28,6 +28,13 @@ What it checks (each deterministic, zero-LLM)
   (``MEMORY.md``, ``feedback_*.md``, ``project_*.md``) may exist inside the project
   root — the RAG is the single source of truth (E-039). Scanned within the project
   root ONLY (filesystem_boundary / E-026).
+* **secrets boundary** (KA-SECRETS-BOUNDARY, ERROR): no declared-secret VALUE may
+  appear verbatim in the RAG. The universal default globs (``config/**``, ``.env*``,
+  ``*.pem`` / ``*.key``, ``credentials*`` / ``secrets*``) — WIDENable but not
+  narrowable via ``meta.secret_paths`` — declare where live credentials live; the
+  auditor extracts their values and fails loud if one leaked into RAG_MASTER.json
+  (Lane-A from the eBay S129 field audit). Redaction-safe: a finding carries only a
+  ``sha256:<12>`` fingerprint + source location, never the secret itself.
 
 Fail-loud contract
 ------------------
@@ -61,6 +68,7 @@ also *verifies* that every render still equals the state it persisted.
               "ERROR", "WARNING", "DRIFT_AUDIT_VERSION",
               "check_render_parity", "check_supersede_refs",
               "check_note_status_contradiction", "check_side_rule_stores",
+              "check_context_side_stores", "check_secrets_boundary",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
               "check_current_status_coherence", "check_manifest_version_binding",
@@ -193,7 +201,17 @@ from rag_kernel import persistence
 #         still passed clean. Label-anchored (like the LATEST COMMIT sha check) so
 #         unlabeled "Prior: vX", spec, and sub-component versions never trip it; shares
 #         _CS_RELEASE_RE / _CS_RELEASE_FIELDS with the drift_store refresh half (DRY).
-DRIFT_AUDIT_VERSION = "1.12.0"
+# 1.13.0 — KA-SECRETS-BOUNDARY (P1/G2): check_secrets_boundary fails loud if a
+#         declared-secret VALUE has leaked into the RAG. Lane-A from the eBay S129
+#         field audit — config/ live credentials had no kernel-level ingest guard.
+#         Reads the declared-secret files (universal defaults config/**, .env*,
+#         *.pem/*.key, credentials*/secrets*, WIDENable but not narrowable via
+#         meta.secret_paths), extracts candidate secret values, and ERRORs on any
+#         verbatim occurrence in the HOT RAG. Redaction-safe: findings carry only a
+#         sha256:<12> fingerprint + source location, never the secret. Filesystem-
+#         backed like the side-store scan (gated on ``root``); self-skips clean when
+#         no declared-secret file exists, so this kernel's own RAG stays clean.
+DRIFT_AUDIT_VERSION = "1.13.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -226,6 +244,48 @@ _COMPLETION_CLAIM_RE = re.compile(
 # the SINGLE source of truth, so the after-the-fact audit checks below and the
 # live pre-write guard (persistence.assert_no_side_stores) cannot drift apart.
 # The two ``check_*`` functions delegate to the persistence finders.
+
+# --- KA-SECRETS-BOUNDARY (P1/G2) -------------------------------------------
+# Universal secret-value boundary: declared-secret files (config/ live
+# credentials + common key material) must NEVER have their values ingested into
+# the RAG. Lane-A from the eBay S129 field audit — config/ credentials had no
+# kernel-level ingest guard. The auditor reads the declared-secret files, extracts
+# candidate secret VALUES, and fails loud if any appears verbatim in the HOT RAG.
+# It NEVER emits the secret itself: a finding carries only a redacted sha256
+# fingerprint + the source location, so the guard cannot become the leak.
+#
+# Declaration is additive over these universal defaults via meta.secret_paths (a
+# project may WIDEN the boundary — e.g. add "keys/" — but never narrow it, since a
+# fail-closed hardening guard must not be disable-able by a RAG edit). Minimum
+# candidate length (meta.secret_min_len, default 12) suppresses trivial matches
+# like ``true`` / short enum values that are not real secrets.
+_DEFAULT_SECRET_GLOBS: tuple[str, ...] = (
+    "config/**",       # a top-level config/ credentials tree (eBay S129 signature)
+    ".env", ".env.*",  # dotenv files (root or nested)
+    "*.pem", "*.key",  # PEM / private-key material
+    "credentials*", "secrets*", "*.credentials",
+)
+_DEFAULT_SECRET_MIN_LEN = 12
+_SECRET_FILE_MAX_BYTES = 262_144  # skip oversized/blobby files (bounded scan)
+_SECRET_MAX_FILES = 2_000         # hard cap on files enumerated (bounded scan)
+# VCS/build/derived dirs never hold declared project secrets and would only add
+# scan cost + false positives; also skip the RAG store itself so an extracted
+# candidate can never "match" its own source file.
+_SECRET_SKIP_DIRS = frozenset({
+    ".git", "__pycache__", "node_modules", ".venv", "venv",
+    ".mypy_cache", ".pytest_cache", "dist", "build", ".idea", "RAG",
+})
+# Key names that mark a value as secret-bearing (matched case-insensitively as a
+# substring of the JSON key path or the env/ini key).
+_SECRET_KEY_RE = re.compile(
+    r"(pass(word|wd)?|secret|token|api[_-]?key|access[_-]?key|"
+    r"auth|credential|private[_-]?key|client[_-]?secret|refresh[_-]?token|"
+    r"\bpat\b|bearer|session[_-]?key|signing[_-]?key)",
+    re.IGNORECASE,
+)
+_ENV_LINE_RE = re.compile(
+    r"^\s*(?:export\s+)?([A-Za-z0-9_.\-]+)\s*[=:]\s*(.+?)\s*$"
+)
 
 # --- Rule 11 published-doc reconciliation (increment 6) --------------------
 # Closed vocabulary of PENDING / not-done status words. A published doc line that
@@ -564,6 +624,168 @@ def check_context_side_stores(rag_dir: Path | str) -> list[AuditFinding]:
                 "remove the stray copy (Rule 13 / FIX-5 P2)"
             ),
         ))
+    return findings
+
+
+def _secret_globs(hot: dict) -> tuple[str, ...]:
+    """Universal default secret globs UNIONed with any ``meta.secret_paths`` (additive)."""
+    meta = hot.get("meta") or {}
+    declared = meta.get("secret_paths")
+    extra = ()
+    if isinstance(declared, (list, tuple)):
+        extra = tuple(s for s in declared if isinstance(s, str) and s.strip())
+    # dedup preserving order; defaults always present (fail-closed, can't be narrowed)
+    seen: dict[str, None] = {}
+    for g in _DEFAULT_SECRET_GLOBS + extra:
+        seen.setdefault(g, None)
+    return tuple(seen)
+
+
+def _secret_min_len(hot: dict) -> int:
+    meta = hot.get("meta") or {}
+    v = meta.get("secret_min_len")
+    if isinstance(v, bool):  # bool is an int subclass — reject it explicitly
+        return _DEFAULT_SECRET_MIN_LEN
+    if isinstance(v, int) and v > 0:
+        return v
+    return _DEFAULT_SECRET_MIN_LEN
+
+
+def _is_secret_file(rel_posix: str, name: str, globs: tuple[str, ...]) -> bool:
+    """True if ``rel_posix`` (or its basename) matches a declared secret glob.
+
+    Supports two forms without needing recursive-``**`` glob engines: a directory
+    prefix (``config/`` / ``config/**`` / ``config/**/*`` → anything under config/)
+    and a filename/relpath glob (``*.pem`` matches nested pems via the basename).
+    """
+    import fnmatch
+    for g in globs:
+        gg = g.strip()
+        if not gg:
+            continue
+        if gg.endswith("/**") or gg.endswith("/**/*") or gg.endswith("/"):
+            base = gg.rstrip("*").rstrip("/")
+            if base and (rel_posix == base or rel_posix.startswith(base + "/")):
+                return True
+            continue
+        if fnmatch.fnmatch(rel_posix, gg) or fnmatch.fnmatch(name, gg):
+            return True
+    return False
+
+
+def _extract_secret_values(path: Path) -> list[tuple[str, str]]:
+    """Return ``(key_label, value)`` candidate secrets from one declared-secret file.
+
+    Structured JSON: string leaves whose key path matches :data:`_SECRET_KEY_RE`.
+    Env/ini/conf: ``KEY=VALUE`` (or ``KEY: VALUE``) lines with a secret-ish key.
+    PEM/private-key material: the base64 body (headers stripped). Binary/oversized
+    files are skipped. Length filtering is applied by the caller.
+    """
+    try:
+        if path.stat().st_size > _SECRET_FILE_MAX_BYTES:
+            return []
+        raw = path.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return []  # unreadable / binary → nothing to extract
+    cands: list[tuple[str, str]] = []
+    # 1) structured JSON
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        data = None
+    if data is not None:
+        for loc, val in _walk_strings(data):
+            key = loc.split("/")[-1]
+            if _SECRET_KEY_RE.search(key) or _SECRET_KEY_RE.search(loc):
+                cands.append((loc, val))
+    # 2) env/ini/conf KEY=VALUE lines (also runs on JSON — cheap, disjoint hits)
+    for line in raw.splitlines():
+        m = _ENV_LINE_RE.match(line)
+        if m:
+            k, v = m.group(1), m.group(2).strip().strip('"').strip("'")
+            if _SECRET_KEY_RE.search(k):
+                cands.append((k, v))
+    # 3) PEM / private-key body
+    if path.name.lower().endswith((".pem", ".key")) or "PRIVATE KEY" in raw:
+        body = "".join(
+            ln.strip() for ln in raw.splitlines()
+            if ln.strip() and not ln.startswith("-----")
+        )
+        if body:
+            cands.append(("<key-body>", body))
+    return cands
+
+
+def check_secrets_boundary(
+    hot: dict, root: Optional[Path | str]
+) -> list[AuditFinding]:
+    """ERROR if any declared-secret VALUE has leaked into the RAG (KA-SECRETS-BOUNDARY).
+
+    Lane-A hardening from the eBay S129 field audit: ``config/`` live credentials
+    had no kernel-level ingest guard, so a secret value pasted/ingested into
+    RAG_MASTER.json (which is committed to git and loaded into context every boot)
+    would go undetected. This guard reads the declared-secret files under the
+    project root, extracts candidate secret values, and fails loud if any appears
+    verbatim in the HOT RAG.
+
+    Universal by construction: the default globs (``config/**``, ``.env*``,
+    ``*.pem`` / ``*.key``, ``credentials*`` / ``secrets*``) apply to EVERY
+    deployment; ``meta.secret_paths`` only WIDENS them (a fail-closed guard cannot
+    be narrowed by a RAG edit). Self-skips clean when ``root`` is None (pure
+    in-memory audits) or no declared-secret file exists — so a project with no
+    ``config/`` tree still audits clean, and this kernel's own RAG is unaffected.
+
+    NEVER leaks the secret: a finding carries only the source location and a
+    redacted ``sha256:<12>`` fingerprint, never the value — the auditor cannot
+    become the exfiltration path it defends against (CS fail-loud + ML zero-token:
+    the LLM only ever sees the compact pass/fail, never the credential).
+    """
+    findings: list[AuditFinding] = []
+    if root is None or not isinstance(hot, dict):
+        return findings
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return findings
+    globs = _secret_globs(hot)
+    min_len = _secret_min_len(hot)
+
+    # Enumerate files under root (bounded), skipping VCS/build/RAG dirs.
+    seen_files = 0
+    candidates: dict[str, tuple[str, str]] = {}  # value -> (rel_posix, key_label)
+    for p in root_path.rglob("*"):
+        if seen_files >= _SECRET_MAX_FILES:
+            break
+        parts = set(p.relative_to(root_path).parts)
+        if parts & _SECRET_SKIP_DIRS:
+            continue
+        if not p.is_file():
+            continue
+        rel_posix = p.relative_to(root_path).as_posix()
+        if not _is_secret_file(rel_posix, p.name, globs):
+            continue
+        seen_files += 1
+        for key_label, val in _extract_secret_values(p):
+            if isinstance(val, str) and len(val) >= min_len:
+                candidates.setdefault(val, (rel_posix, key_label))
+
+    if not candidates:
+        return findings
+
+    # One serialization of the HOT RAG; verbatim-membership test per candidate.
+    hay = json.dumps(hot, ensure_ascii=False)
+    for val, (rel_posix, key_label) in candidates.items():
+        if val in hay:
+            fp = hashlib.sha256(val.encode("utf-8")).hexdigest()[:12]
+            findings.append(AuditFinding(
+                check="secrets_boundary",
+                severity=ERROR,
+                detail=(
+                    f"declared-secret value leaked into the RAG: from {rel_posix} "
+                    f"(key {key_label!r}, sha256:{fp}) — secret values must never be "
+                    "ingested into RAG_MASTER.json (KA-SECRETS-BOUNDARY); remove it "
+                    "from the RAG and reference the secret by path, not by value"
+                ),
+            ))
     return findings
 
 
@@ -1794,6 +2016,10 @@ def audit_hot(
             version=version, module_count=module_count, drift_sha=drift_sha)
     if root is not None:
         findings += check_side_rule_stores(root)
+        # KA-SECRETS-BOUNDARY (P1/G2): fail loud if a declared-secret value leaked
+        # into the RAG. Filesystem-backed like the side-store scan, so gated by the
+        # same ``root`` presence; self-skips clean when no declared-secret file exists.
+        findings += check_secrets_boundary(hot, root)
     return AuditReport(tuple(findings))
 
 
@@ -1932,6 +2158,7 @@ __all__ = [
     "check_note_status_contradiction",
     "check_side_rule_stores",
     "check_context_side_stores",
+    "check_secrets_boundary",
     "check_ledger_consistency",
     "check_record_coverage",
     "check_repo_claim_reconciliation",

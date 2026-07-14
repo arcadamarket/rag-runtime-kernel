@@ -47,6 +47,7 @@ from rag_kernel.drift_audit import (
     check_manifest_version_binding,
     check_note_status_contradiction,
     check_render_parity,
+    check_secrets_boundary,
     check_side_rule_stores,
     check_supersede_refs,
 )
@@ -87,7 +88,7 @@ def _rendered_hot(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_severities():
-    assert DRIFT_AUDIT_VERSION == "1.12.0"
+    assert DRIFT_AUDIT_VERSION == "1.13.0"
     assert ERROR == "error" and WARNING == "warning"
 
 
@@ -250,6 +251,154 @@ def test_side_rule_stores_skips_vcs_and_cache(tmp_path):
 
 def test_side_rule_stores_missing_root_is_empty(tmp_path):
     assert check_side_rule_stores(tmp_path / "does-not-exist") == []
+
+
+# ---------------------------------------------------------------------------
+# secrets boundary (KA-SECRETS-BOUNDARY / P1 G2)
+# ---------------------------------------------------------------------------
+
+import hashlib
+
+
+def _hot_with(*values):
+    """A HOT dict that embeds each given string somewhere in its content."""
+    hot = _rendered_hot(_clean_store())
+    hot["meta"]["_test_blob"] = list(values)
+    return hot
+
+
+def test_secrets_boundary_none_root_self_skips():
+    hot = _hot_with("SUPERSECRETTOKEN-abcdef123456")
+    assert check_secrets_boundary(hot, None) == []
+
+
+def test_secrets_boundary_no_secret_files_is_clean(tmp_path):
+    # A project with no config/ tree and no declared secret files audits clean.
+    (tmp_path / "README.md").write_text("nothing secret here", encoding="utf-8")
+    assert check_secrets_boundary(_rendered_hot(_clean_store()), tmp_path) == []
+
+
+def test_secrets_boundary_detects_leaked_json_value(tmp_path):
+    secret = "AKIA-live-1234567890-EXAMPLE"
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "creds.json").write_text(
+        json.dumps({"api_key": secret, "note": "prod"}), encoding="utf-8")
+    hot = _hot_with(secret)  # the secret leaked into the RAG
+    findings = check_secrets_boundary(hot, tmp_path)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.check == "secrets_boundary" and f.severity == ERROR
+    # redaction: the secret NEVER appears; only its fingerprint does
+    assert secret not in f.detail
+    assert hashlib.sha256(secret.encode()).hexdigest()[:12] in f.detail
+    assert "config/creds.json" in f.detail
+
+
+def test_secrets_boundary_clean_when_secret_not_in_rag(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "creds.json").write_text(
+        json.dumps({"api_key": "value-that-stays-put-987654"}), encoding="utf-8")
+    hot = _rendered_hot(_clean_store())  # secret NOT embedded
+    assert check_secrets_boundary(hot, tmp_path) == []
+
+
+def test_secrets_boundary_ignores_non_secret_keys(tmp_path):
+    # A long value under a NON-secret key is not a credential — even if it happens
+    # to appear in the RAG, it must not trip the guard.
+    shared = "the-quarterly-roadmap-headline-2026"
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "app.json").write_text(
+        json.dumps({"description": shared}), encoding="utf-8")
+    hot = _hot_with(shared)
+    assert check_secrets_boundary(hot, tmp_path) == []
+
+
+def test_secrets_boundary_detects_env_file(tmp_path):
+    secret = "pk_live_env_secret_0987654321"
+    (tmp_path / ".env").write_text(
+        f"HOST=example.com\nAPI_TOKEN={secret}\n", encoding="utf-8")
+    hot = _hot_with(secret)
+    findings = check_secrets_boundary(hot, tmp_path)
+    assert len(findings) == 1 and findings[0].severity == ERROR
+    assert secret not in findings[0].detail
+
+
+def test_secrets_boundary_detects_pem_body(tmp_path):
+    body = "MIIBVwIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEA-EXAMPLE-KEYMATERIAL"
+    (tmp_path / "server.pem").write_text(
+        f"-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\n",
+        encoding="utf-8")
+    hot = _hot_with(body)
+    findings = check_secrets_boundary(hot, tmp_path)
+    assert len(findings) == 1 and findings[0].severity == ERROR
+
+
+def test_secrets_boundary_min_len_suppresses_trivial(tmp_path):
+    # A short value (< default 12) under a secret key is not flagged even if present.
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "creds.json").write_text(
+        json.dumps({"token": "abc"}), encoding="utf-8")
+    hot = _hot_with("abc")
+    assert check_secrets_boundary(hot, tmp_path) == []
+
+
+def test_secrets_boundary_meta_secret_paths_widens(tmp_path):
+    # A project can WIDEN the boundary to a custom dir via meta.secret_paths.
+    secret = "custom-keydir-secret-abcdef123456"
+    keys = tmp_path / "vault"
+    keys.mkdir()
+    (keys / "prod.json").write_text(
+        json.dumps({"secret": secret}), encoding="utf-8")
+    hot = _hot_with(secret)
+    # default globs do NOT cover vault/ → clean
+    assert check_secrets_boundary(hot, tmp_path) == []
+    # declaring it widens the boundary → caught
+    hot["meta"]["secret_paths"] = ["vault/**"]
+    findings = check_secrets_boundary(hot, tmp_path)
+    assert len(findings) == 1 and findings[0].severity == ERROR
+
+
+def test_secrets_boundary_skips_vcs_and_rag_dirs(tmp_path):
+    secret = "should-not-be-scanned-abcdef123456"
+    for d in (".git", "RAG"):
+        sub = tmp_path / d / "config"
+        sub.mkdir(parents=True)
+        (sub / "creds.json").write_text(
+            json.dumps({"api_key": secret}), encoding="utf-8")
+    hot = _hot_with(secret)
+    assert check_secrets_boundary(hot, tmp_path) == []
+
+
+def test_secrets_boundary_wired_into_audit_hot(tmp_path):
+    secret = "wired-in-secret-value-abcdef123456"
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "creds.json").write_text(
+        json.dumps({"password": secret}), encoding="utf-8")
+    clean_hot = _rendered_hot(_clean_store())
+    # baseline: no root passed → pure in-memory audit stays clean
+    assert audit_hot(clean_hot).errors == ()
+    # leaked secret + root → surfaces through the aggregate report
+    hot = _hot_with(secret)
+    report = audit_hot(hot, root=tmp_path)
+    assert any(f.check == "secrets_boundary" and f.severity == ERROR
+               for f in report.errors)
+
+
+def test_secrets_boundary_self_skips_without_root_in_audit_hot(tmp_path):
+    # audit_hot with root=None must never run the filesystem secrets scan.
+    secret = "no-root-no-scan-abcdef123456"
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "creds.json").write_text(
+        json.dumps({"api_key": secret}), encoding="utf-8")
+    hot = _hot_with(secret)
+    report = audit_hot(hot)  # root omitted
+    assert not any(f.check == "secrets_boundary" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
