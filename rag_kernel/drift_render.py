@@ -84,7 +84,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from rag_kernel.drift_control import ItemKind, ItemStatus, TERMINAL_STATUSES, TrackedItem
+from rag_kernel.drift_control import (
+    ItemKind,
+    ItemStatus,
+    PRIORITY_GROUPS,
+    TERMINAL_STATUSES,
+    TrackedItem,
+)
 from rag_kernel.drift_store import (
     TRACKED_ITEMS_KEY,
     TrackedItemStore,
@@ -93,7 +99,11 @@ from rag_kernel.drift_store import (
 from rag_kernel.persistence import atomic_write_json
 
 # Bump when a rendered layout changes in a way a consumer / regression test pins.
-DRIFT_RENDER_VERSION = "1.1.0"
+# 1.2.0 — REPORT-PRIORITY-GROUPS inc2: render_priority_burndown() groups the
+#         backlog by the per-item priority_group (Rule 21 P1..P5 + Unassigned) and
+#         is emitted as a subsection of the canonical report's section 4 (option A
+#         — one report carries the burn-down; no renumbering of sections 5-7).
+DRIFT_RENDER_VERSION = "1.2.0"
 
 # The non-terminal, actionable statuses — the "open backlog".
 ACTIVE_STATUSES: frozenset[ItemStatus] = frozenset(
@@ -264,6 +274,72 @@ def render_backlog_markdown(
         + ("; ".join(section["blocked_or_user_gated"]) or "(none)") + "\n"
         "**Deferred:** " + ("; ".join(section["deferred"]) or "(none)")
     )
+
+
+# ---------------------------------------------------------------------------
+# Priority burn-down render (Rule 21 — REPORT-PRIORITY-GROUPS inc2)
+# ---------------------------------------------------------------------------
+
+def render_priority_burndown(
+    source: TrackedItemStore | dict | Iterable[TrackedItem],
+    *,
+    session: Optional[str] = None,
+) -> list[str]:
+    """Render the Rule 21 priority burn-down as deterministic markdown lines.
+
+    Re-buckets the SAME task backlog that section 4 enumerates, but grouped by the
+    per-item ``priority_group`` (Rule 21 order P1..P5, then an ``Unassigned``
+    catch-all for items carrying no bucket). For each NON-empty group, id-sorted:
+
+      * active items (OPEN / IN_PROGRESS) — "what remains",
+      * deferred items — parked, and
+      * items RESOLVED **this** ``session`` (when given) — "what shipped".
+
+    A group with nothing in any bucket is omitted (an empty P-row is noise). The
+    ``Unassigned`` bucket surfaces backlog items still awaiting a group — the
+    honest signal until every item is tagged (inc3). Pure: a total function of the
+    arguments, so a regression test can pin it byte-for-byte. This is the render
+    the canonical report's section 4 emits (option A) and the deterministic
+    replacement for the hand-composed burn-down Rule 21 used to require.
+    """
+    store = _as_store(source)
+
+    def _shipped_this_session(it: TrackedItem) -> bool:
+        return bool(session) and it.status == ItemStatus.RESOLVED and (
+            it.session == session
+            or any(getattr(ev, "session", None) == session for ev in it.history)
+        )
+
+    lines: list[str] = []
+    for group in (*PRIORITY_GROUPS, ""):  # P1..P5 then Unassigned
+        active: list[TrackedItem] = []
+        deferred: list[TrackedItem] = []
+        shipped: list[TrackedItem] = []
+        for it in store:  # id-sorted
+            if it.kind not in BACKLOG_KINDS:
+                continue
+            if (it.priority_group or "") != group:
+                continue
+            if it.status in ACTIVE_STATUSES:
+                active.append(it)
+            elif it.status == ItemStatus.DEFERRED:
+                deferred.append(it)
+            elif _shipped_this_session(it):
+                shipped.append(it)
+        if not (active or deferred or shipped):
+            continue
+        label = group or "Unassigned"
+        counts = f"{len(active)} active · {len(deferred)} deferred"
+        if shipped:
+            counts += f" · {len(shipped)} shipped {session}"
+        lines.append(f"- **{label}** ({counts}):")
+        for it in active:
+            lines.append(f"  - {it.id} — {it.title}")
+        for it in deferred:
+            lines.append(f"  - {it.id} — {it.title} (deferred)")
+        for it in shipped:
+            lines.append(f"  - {it.id} — {it.title} (shipped {session})")
+    return lines or ["- (no backlog items)"]
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +727,13 @@ def render_status_report(
     ap(f"**Deferred ({n_def}):**")
     for ln in backlog["deferred"] or ["(none)"]:
         ap(f"- {ln}")
+    ap("")
+    # Rule 21 priority burn-down — the SAME backlog re-bucketed by priority_group
+    # (option A: one report carries it, as a section-4 subsection). Deterministic
+    # render, zero hand-touch.
+    ap("**Priority burn-down (Rule 21):**")
+    for ln in render_priority_burndown(store, session=session):
+        ap(ln)
     ap("")
 
     # (5) RISKS & DEVIATIONS (only amber/red) ------------------------------

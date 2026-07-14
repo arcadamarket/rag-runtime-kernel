@@ -29,6 +29,8 @@ from rag_kernel.drift_render import (
     render_deferred_items,
     render_error_log_backlog,
     render_open_tasks,
+    render_priority_burndown,
+    render_status_report,
 )
 
 
@@ -63,7 +65,7 @@ def _hot_from(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_active_statuses():
-    assert DRIFT_RENDER_VERSION == "1.1.0"
+    assert DRIFT_RENDER_VERSION == "1.2.0"
     assert ACTIVE_STATUSES == frozenset({ItemStatus.OPEN, ItemStatus.IN_PROGRESS})
 
 
@@ -244,3 +246,67 @@ def test_apply_renders_file_no_touch_meta(tmp_path):
     p.write_text(json.dumps(hot, indent=2), encoding="utf-8")
     out = apply_renders_file(p, touch_meta=False)
     assert out["meta"]["last_updated_utc"] == "1970-01-01T00:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# priority burn-down (REPORT-PRIORITY-GROUPS inc2)
+# ---------------------------------------------------------------------------
+
+def _tagged_store():
+    return TrackedItemStore([
+        _item("P1-OPEN", ItemStatus.OPEN, session="S40", priority_group="P1"),
+        _item("P1-PROG", ItemStatus.IN_PROGRESS, session="S49", priority_group="P1"),
+        _item("P2-DEF", ItemStatus.DEFERRED, session="S46", priority_group="P2"),
+        _item("P3-DONE", ItemStatus.RESOLVED, session="S51", priority_group="P3"),
+        _item("UNTAG-OPEN", ItemStatus.OPEN, session="S50"),
+    ])
+
+
+def test_burndown_groups_in_priority_order_then_unassigned():
+    lines = render_priority_burndown(_tagged_store())
+    headers = [ln for ln in lines if ln.startswith("- **")]
+    # P3 has only a resolved item (no session passed) -> omitted; order preserved
+    assert headers == [
+        "- **P1** (2 active · 0 deferred):",
+        "- **P2** (0 active · 1 deferred):",
+        "- **Unassigned** (1 active · 0 deferred):",
+    ]
+
+
+def test_burndown_lists_items_id_sorted_with_markers():
+    lines = render_priority_burndown(_tagged_store())
+    assert "  - P1-OPEN — title for P1-OPEN" in lines
+    assert "  - P1-PROG — title for P1-PROG" in lines
+    assert "  - P2-DEF — title for P2-DEF (deferred)" in lines
+
+
+def test_burndown_shipped_this_session_counted_when_session_given():
+    lines = render_priority_burndown(_tagged_store(), session="S51")
+    # P3-DONE was resolved in S51 -> now surfaces under P3 as shipped
+    assert "- **P3** (0 active · 0 deferred · 1 shipped S51):" in lines
+    assert "  - P3-DONE — title for P3-DONE (shipped S51)" in lines
+
+
+def test_burndown_excludes_non_backlog_kinds():
+    store = TrackedItemStore([
+        _item("INS-1", ItemStatus.OPEN, kind=ItemKind.INFERENCE, priority_group="P1"),
+        _item("E-1", ItemStatus.OPEN, kind=ItemKind.ERROR, priority_group="P1"),
+    ])
+    assert render_priority_burndown(store) == ["- (no backlog items)"]
+
+
+def test_burndown_empty_store_message():
+    assert render_priority_burndown(TrackedItemStore([])) == ["- (no backlog items)"]
+
+
+def test_status_report_includes_priority_burndown_section():
+    store = _tagged_store()
+    rep = render_status_report(store, session="S51", meta={"last_checkpoint_seq": 51})
+    assert "**Priority burn-down (Rule 21):**" in rep
+    # the burn-down subsection lives inside section 4, before section 5
+    i4 = rep.index("### 4")
+    i5 = rep.index("### 5")
+    burn = rep.index("**Priority burn-down (Rule 21):**")
+    assert i4 < burn < i5
+    # untagged item shows under Unassigned; a P1 item shows under P1
+    assert "- **P1**" in rep and "- **Unassigned**" in rep
