@@ -4,6 +4,10 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+## [v0.4.32] — 2026-07-14
+
+_P1 control-integrity release — the P1/G1+G2 guard batch (ERRLOG-ID-GUARD, KA-CS-PROSE-DRIFT, KA-SECRETS-BOUNDARY) plus the REPORT-PRIORITY-GROUPS burn-down render (inc1+inc2), now deployed into the governance runtime. Runtime `__version__` 0.4.31 → 0.4.32, `__spec_version__` unchanged (3.2.6); no new capability module (still 19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change); full suite 1,733 → 1,806 green (+73). Module versions: `drift_audit` 1.11.0 → 1.13.0, `drift_store` 1.4.0 → 1.6.0, `drift_control` (LIFECYCLE) 1.0.0 → 1.1.0, `drift_render` 1.1.0 → 1.2.0._
+
 **ERRLOG-ID-GUARD (P1/G1) — ERROR_LOG error-id headings are now a fail-loud auditor invariant.** A new `drift_audit.check_errlog_id_coherence` enforces the formally-verified `GUARD == I0 ∧ I1 ∧ I2` (`formal/ErrlogIdGuard.tla`, master theorem `GUARD ⇔ Legit`, TLC-exhaustive) over `ERROR_LOG.md`:
 
 - **I0 (`errlog_id_malformed`)** — a heading that leads with an error id but is neither a definition (`id + ':' / '—'`) nor a recurrence (`id + recurrence marker`) fails loud, so the heading convention cannot silently drift (self-stabilizing).
@@ -11,6 +15,14 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 - **I2 (`errlog_id_dangling`)** — an id mentioned in a heading with no definition heading is caught.
 
 The classifier is **positional, never prose-inferred** (the model's ML-lens mandate): a recurrence marker inside a descriptive parenthetical (`(recurring, non-fatal):`) or in the description tail stays a definition, and a legitimate `Dfn + Rcr` pair for one id is accepted (the naive "each id heads once" guard's false positive, refuted by counterexample in `ErrlogIdGuard_naive.cfg`). Scope is heading-only, matching the verified model. Wired into `audit_hot` (self-skips when no `ERROR_LOG.md`). `+tests/test_errlog_id_guard.py` (17); full suite 1,733 → 1,750 green (+17), health 20/20, no schema/WAL/`RAGKernel.tla` change (drift gate `268149294421` unchanged, no new capability module).
+
+**KA-CS-PROSE-DRIFT (P1/G1) — every labeled RUNTIME RELEASE token in `current_status` is now guarded and refreshed, not just the leading one.** The E-043 freshness guard + refresh re-stamped only the leading version token and git HEAD, so a secondary `RUNTIME RELEASE vX` / `runtime-vX` claim embedded in the same `current_status` field stayed frozen while audit passed clean. A third label-anchored sub-check (shared `_CS_RELEASE_RE` / `_CS_RELEASE_FIELDS`) asserts **every** labeled release token equals live `__version__`, paired with an all-occurrences refresh (`_refresh_all_tokens`). Unlabeled `Prior: vX`, spec, and sub-component versions are untouched by construction. `drift_audit` 1.11.0 → 1.12.0, `drift_store` 1.4.0 → 1.5.0. +11 tests (1,750 → 1,761).
+
+**KA-SECRETS-BOUNDARY (P1/G2) — a fail-loud secrets-boundary auditor.** New `drift_audit.check_secrets_boundary` (`drift_audit` 1.12.0 → 1.13.0): declared-secret values (defaults `config/**`, `.env*`, `*.pem` / `*.key`, `credentials*` / `secrets*`; widenable via `meta.secret_paths`, never narrowable) must not appear verbatim in the RAG. Findings are redaction-safe (`sha256:<12>` + source location, never the secret). Wired into `audit_hot` under the root-gated block; self-skips clean when no declared-secret file exists. +12 tests (1,761 → 1,773). Lane-A from the eBay S129 field audit (Rule 15 deployment-test triage).
+
+**REPORT-PRIORITY-GROUPS inc1 — a structured per-item Rule 21 priority bucket in the canonical store.** `drift_control` (LIFECYCLE) 1.0.0 → 1.1.0: `TrackedItem.priority_group` (P1..P5 / `''` unassigned), fail-loud validation, `with_priority()`, and `PRIORITY_GROUPS` / `ALLOWED_PRIORITY_GROUPS`; omitted from `to_dict` when empty (the `increments[]` precedent) so untouched items serialize byte-for-byte. `drift_store` 1.5.0 → 1.6.0: guarded `store.set_priority` + `set_priority_in_file` (atomic, `.bak`-refreshed; status never touched, no history event). New `priority` CLI verb (dry-run, fail-loud on unknown id / bad bucket). +27 tests (1,773 → 1,800).
+
+**REPORT-PRIORITY-GROUPS inc2 — the priority burn-down render in the canonical report.** `render_priority_burndown()` (`drift_render` 1.1.0 → 1.2.0) groups the task backlog by each item's `priority_group` into Rule 21 P1..P5 + an Unassigned catch-all, listing active / deferred / shipped-this-session items id-sorted, empty groups omitted. Emitted as a subsection of `render_status_report` section 4 (design option A — one report carries the burn-down; no renumbering of sections 5–7, so the deterministic close render carries it with zero hand-touch). Until items are bucketed, the render honestly shows everything under Unassigned. +6 tests (1,800 → 1,806).
 
 ## [v0.4.31] — 2026-07-12
 
