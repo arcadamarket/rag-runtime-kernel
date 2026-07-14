@@ -20,6 +20,7 @@ from rag_kernel.drift_control import (
     ItemKind,
     ItemStateError,
     ItemStatus,
+    ItemValidationError,
     TrackedItem,
 )
 from rag_kernel.drift_store import (
@@ -34,6 +35,7 @@ from rag_kernel.drift_store import (
     migrate_backlog_file,
     mutate_hot,
     seed_items,
+    set_priority_in_file,
     transition_in_file,
 )
 
@@ -65,7 +67,7 @@ def _write_hot(path: Path, hot: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 def test_version_and_key_constants():
-    assert DRIFT_STORE_VERSION == "1.5.0"  # KA-CS-PROSE-DRIFT: release-token refresh (all labeled occurrences)
+    assert DRIFT_STORE_VERSION == "1.6.0"  # REPORT-PRIORITY-GROUPS inc1: set_priority[_in_file] verb
     assert TRACKED_ITEMS_KEY == "tracked_items"
 
 
@@ -328,3 +330,62 @@ def test_migrated_items_then_transition_in_file(tmp_path):
     t1 = next(d for d in on_disk[TRACKED_ITEMS_KEY] if d["id"] == "T-1")
     assert t1["status"] == "RESOLVED"
     assert [e["to_status"] for e in t1["history"]] == ["IN_PROGRESS", "RESOLVED"]
+
+
+# ---------------------------------------------------------------------------
+# priority-group assignment (REPORT-PRIORITY-GROUPS inc1)
+# ---------------------------------------------------------------------------
+
+def test_store_set_priority_routes_through_guarded_core():
+    store = TrackedItemStore([_item("T-1", status=ItemStatus.OPEN)])
+    updated = store.set_priority("T-1", "P1", session="S145")
+    assert updated.priority_group == "P1"
+    # status untouched, no history event (priority is metadata)
+    assert updated.status == ItemStatus.OPEN
+    assert updated.history == ()
+    # store now holds the tagged item
+    assert store.get("T-1").priority_group == "P1"
+
+
+def test_store_set_priority_unknown_id_raises():
+    store = TrackedItemStore([_item("T-1")])
+    with pytest.raises(UnknownItemError):
+        store.set_priority("NOPE", "P1", session="S145")
+
+
+def test_store_set_priority_bad_group_raises_and_does_not_mutate():
+    store = TrackedItemStore([_item("T-1", status=ItemStatus.OPEN)])
+    with pytest.raises(ItemValidationError):
+        store.set_priority("T-1", "P9", session="S145")
+    # nothing changed
+    assert store.get("T-1").priority_group == ""
+
+
+def test_set_priority_in_file_atomic_and_status_untouched(tmp_path):
+    p = _write_hot(tmp_path / "RAG_MASTER.json",
+                   _hot(items=[_item("T-1", status=ItemStatus.IN_PROGRESS).to_dict()]))
+    set_priority_in_file(p, "T-1", "P2", session="S145", now="2026-07-14T08:00:00Z")
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    row = on_disk[TRACKED_ITEMS_KEY][0]
+    assert row["priority_group"] == "P2"
+    assert row["status"] == "IN_PROGRESS"      # untouched
+    assert row["history"] == []                # no lifecycle event
+    assert on_disk["meta"]["last_updated_utc"] == "2026-07-14T08:00:00Z"
+    assert (tmp_path / "RAG_MASTER.json.bak").exists()
+
+
+def test_set_priority_in_file_clear_omits_key(tmp_path):
+    p = _write_hot(tmp_path / "RAG_MASTER.json",
+                   _hot(items=[_item("T-1", status=ItemStatus.OPEN, priority_group="P3").to_dict()]))
+    set_priority_in_file(p, "T-1", "", session="S145")
+    row = json.loads(p.read_text(encoding="utf-8"))[TRACKED_ITEMS_KEY][0]
+    assert "priority_group" not in row
+
+
+def test_set_priority_in_file_bad_group_leaves_file_intact(tmp_path):
+    p = _write_hot(tmp_path / "RAG_MASTER.json",
+                   _hot(items=[_item("T-1", status=ItemStatus.OPEN).to_dict()]))
+    before = p.read_text(encoding="utf-8")
+    with pytest.raises(ItemValidationError):
+        set_priority_in_file(p, "T-1", "P0", session="S145")
+    assert p.read_text(encoding="utf-8") == before  # nothing written

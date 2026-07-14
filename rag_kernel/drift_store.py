@@ -53,6 +53,7 @@ project's own bookkeeping.
   "exports": ["TrackedItemStore", "DriftStoreError", "DuplicateItemError",
               "UnknownItemError", "TRACKED_ITEMS_KEY", "DRIFT_STORE_VERSION",
               "load_hot", "mutate_hot", "transition_in_file", "set_note_in_file",
+              "set_priority_in_file",
               "seed_items", "migrate_backlog", "migrate_backlog_file",
               "LEDGER_DISPOSITION_TO_STATUS", "INFERENCE_LEDGER_KEY",
               "ledger_disposition_to_status", "inference_specs_from_hot",
@@ -110,7 +111,13 @@ from rag_kernel.persistence import atomic_write_json
 #         _CS_RELEASE_RE / _CS_RELEASE_FIELDS + _refresh_all_tokens), closing the
 #         secondary-narrative drift the leading-token-only refresh left stale. The
 #         paired guard half lives in drift_audit.check_current_status_freshness.
-DRIFT_STORE_VERSION = "1.5.0"
+# 1.6.0 — REPORT-PRIORITY-GROUPS inc1: added the governed priority-assignment path
+#         (store.set_priority + set_priority_in_file) — the only sanctioned way to
+#         set an item's Rule 21 priority_group (P1..P5 / "" to clear), routed
+#         through TrackedItem.with_priority so the bucket is never hand-edited into
+#         tracked_items. Additive; existing items untouched (no group => byte-for-
+#         byte serialization, per drift_control 1.1.0). Feeds the burn-down render.
+DRIFT_STORE_VERSION = "1.6.0"
 
 # The single canonical array key inside RAG_MASTER.json (HOT). Everything else
 # that mentions item status is, or will become, a render of this array.
@@ -273,6 +280,24 @@ class TrackedItemStore:
         self._items[item_id] = updated
         return updated
 
+    def set_priority(
+        self, item_id: str, priority_group: str, *, session: str
+    ) -> TrackedItem:
+        """Set an item's Rule 21 ``priority_group`` through the guarded core.
+
+        Routes through :meth:`TrackedItem.with_priority` — the only sanctioned
+        path — so the bucket is never assigned by hand-editing ``tracked_items``
+        (that hand-edit IS the drift DRIFT-ELIM removes). The value is validated
+        fail-loud against ``ALLOWED_PRIORITY_GROUPS`` (P1..P5, or "" to clear).
+        Status is untouched (priority is metadata, not the canonical authority),
+        so this adds no StatusEvent. Unknown id -> UnknownItemError. Returns the
+        new immutable item.
+        """
+        current = self.get(item_id)
+        updated = current.with_priority(priority_group, session=session)
+        self._items[item_id] = updated
+        return updated
+
     def remove(self, item_id: str) -> TrackedItem:
         """Un-add a PRISTINE item — the exact inverse of :meth:`add`.
 
@@ -397,6 +422,28 @@ def set_note_in_file(
     return mutate_hot(
         path,
         lambda store: store.set_note(item_id, note, session=session),
+        now=now,
+    )
+
+
+def set_priority_in_file(
+    path: Path | str,
+    item_id: str,
+    priority_group: str,
+    *,
+    session: str,
+    now: Optional[str] = None,
+) -> dict:
+    """Atomically set one item's Rule 21 ``priority_group`` in a RAG file.
+
+    The guarded priority-assignment counterpart to :func:`set_note_in_file`: load
+    -> ``store.set_priority`` -> atomic write (tmp -> verify -> .bak -> rename).
+    The canonical ``status`` is never touched. Fails loud (and writes nothing) on
+    an unknown id or a bucket outside ``ALLOWED_PRIORITY_GROUPS``.
+    """
+    return mutate_hot(
+        path,
+        lambda store: store.set_priority(item_id, priority_group, session=session),
         now=now,
     )
 

@@ -315,3 +315,70 @@ def test_round_trip_preserves_everything():
 def test_status_event_round_trip():
     ev = StatusEvent(ItemStatus.OPEN, ItemStatus.IN_PROGRESS, "S48", "r")
     assert StatusEvent.from_dict(ev.to_dict()) == ev
+
+
+# ---------------------------------------------------------------------------
+# priority_group (REPORT-PRIORITY-GROUPS inc1)
+# ---------------------------------------------------------------------------
+
+def test_priority_group_defaults_empty_and_omitted():
+    it = _item()
+    assert it.priority_group == ""
+    # omitted from serialization so untouched items stay byte-for-byte
+    assert "priority_group" not in it.to_dict()
+
+
+def test_with_priority_sets_group_without_touching_status_or_history():
+    it = _item(status=ItemStatus.IN_PROGRESS)
+    tagged = it.with_priority("P1", session="S145")
+    assert tagged.priority_group == "P1"
+    # priority is metadata: status unchanged and NO new history event
+    assert tagged.status == ItemStatus.IN_PROGRESS
+    assert len(tagged.history) == len(it.history)
+    # original is untouched (frozen/immutable)
+    assert it.priority_group == ""
+
+
+def test_priority_group_serialized_only_when_set():
+    it = _item().with_priority("P3", session="S145")
+    d = it.to_dict()
+    assert d["priority_group"] == "P3"
+    assert TrackedItem.from_dict(d).priority_group == "P3"
+
+
+def test_with_priority_empty_string_clears_and_omits():
+    it = _item().with_priority("P2", session="S145")
+    cleared = it.with_priority("", session="S146")
+    assert cleared.priority_group == ""
+    assert "priority_group" not in cleared.to_dict()
+
+
+@pytest.mark.parametrize("bad", ["P0", "P6", "p1", "1", "PX", "high"])
+def test_unknown_priority_group_fails_loud(bad):
+    with pytest.raises(ItemValidationError):
+        _item(priority_group=bad)
+
+
+def test_with_priority_non_string_fails_loud():
+    with pytest.raises(ItemValidationError):
+        _item().with_priority(1, session="S145")
+
+
+def test_priority_group_null_coerces_to_empty():
+    it = TrackedItem.from_dict(
+        {"id": "X", "title": "t", "status": "OPEN", "priority_group": None}
+    )
+    assert it.priority_group == ""
+
+
+def test_all_five_groups_accepted():
+    for g in ("P1", "P2", "P3", "P4", "P5"):
+        assert _item(priority_group=g).priority_group == g
+
+
+def test_round_trip_preserves_priority_group():
+    it = _item(status=ItemStatus.OPEN, priority_group="P4")
+    it = it.with_status(ItemStatus.IN_PROGRESS, session="S48")
+    # a lifecycle transition preserves the priority bucket (replace() carries it)
+    assert it.priority_group == "P4"
+    assert TrackedItem.from_dict(it.to_dict()) == it

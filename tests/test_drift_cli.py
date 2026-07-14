@@ -246,3 +246,49 @@ class TestRenderCommand:
         assert rc == 0
         out = capsys.readouterr().out
         assert "Backlog status" in out and "### Deferred" in out
+
+
+def _priority_of(path, item_id):
+    for it in _load(path)["tracked_items"]:
+        if it["id"] == item_id:
+            return it.get("priority_group", "")
+    raise KeyError(item_id)
+
+
+# ===== priority verb (REPORT-PRIORITY-GROUPS inc1) =====
+
+class TestPriorityVerb:
+    def test_sets_group_and_leaves_status(self, rag_path):
+        rc = main(["priority", "OPEN-1", "P1", "--rag", str(rag_path), "--session", "S145"])
+        assert rc == 0
+        assert _priority_of(rag_path, "OPEN-1") == "P1"
+        assert _status_of(rag_path, "OPEN-1") == "OPEN"  # untouched
+
+    def test_clear_removes_key(self, rag_path):
+        main(["priority", "OPEN-1", "P2", "--rag", str(rag_path), "--session", "S145"])
+        rc = main(["priority", "OPEN-1", "", "--rag", str(rag_path), "--session", "S145"])
+        assert rc == 0
+        row = next(it for it in _load(rag_path)["tracked_items"] if it["id"] == "OPEN-1")
+        assert "priority_group" not in row
+
+    def test_unknown_group_exits_1_without_writing(self, rag_path):
+        rc = main(["priority", "OPEN-1", "P9", "--rag", str(rag_path), "--session", "S145"])
+        assert rc == 1
+        assert _priority_of(rag_path, "OPEN-1") == ""
+
+    def test_unknown_id_exits_1(self, rag_path):
+        rc = main(["priority", "NOPE-9", "P1", "--rag", str(rag_path), "--session", "S145"])
+        assert rc == 1
+
+    def test_missing_rag_exits_1(self, tmp_path):
+        rc = main(["priority", "X", "P1", "--rag", str(tmp_path / "absent.json"), "--session", "S145"])
+        assert rc == 1
+
+    def test_dry_run_does_not_write(self, rag_path):
+        rc = main(["priority", "OPEN-1", "P3", "--rag", str(rag_path), "--session", "S145", "--dry-run"])
+        assert rc == 0
+        assert _priority_of(rag_path, "OPEN-1") == ""  # unchanged
+
+    def test_requires_session(self, rag_path):
+        with pytest.raises(SystemExit):
+            main(["priority", "OPEN-1", "P1", "--rag", str(rag_path)])

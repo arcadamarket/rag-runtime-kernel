@@ -59,6 +59,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "items": "Read-only render of the canonical tracked_items array",
     "render": "Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items; --apply rewrites the legacy arrays atomically (DRIFT-ELIM increment 4)",
     "note": "Refresh a tracked item's one-line note through the guarded API (status untouched) — DRIFT-ELIM increment 5 (INS-038)",
+    "priority": "Set a tracked item's Rule 21 priority_group (P1..P5, or \"\" to clear) through the guarded API (status untouched) — REPORT-PRIORITY-GROUPS inc1",
     "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5",
     "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
     "add-rule": "Append a NEW operating_protocol rule through the guarded atomic store (FIX-5/P3, fail-loud on existing key)",
@@ -585,6 +586,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session id stamped as last-touched (audit trail)",
     )
     note_parser.add_argument("--dry-run", action="store_true", help="Validate without writing")
+
+    # -- priority (REPORT-PRIORITY-GROUPS inc1: guarded priority-group assignment) --
+    priority_parser = subparsers.add_parser(
+        "priority",
+        help="Set a tracked item's Rule 21 priority_group (P1..P5, or \"\" to clear) through the guarded API (status untouched).",
+    )
+    priority_parser.add_argument("item_id", type=str, help="id of the tracked item")
+    priority_parser.add_argument(
+        "priority_group", type=str,
+        help='priority bucket: P1..P5, or "" (empty) to clear the assignment',
+    )
+    priority_parser.add_argument(
+        "--rag", type=Path, default=_default_rag_path(),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    priority_parser.add_argument(
+        "--session", type=str, required=True,
+        help="Session id stamped as last-touched (audit trail)",
+    )
+    priority_parser.add_argument("--dry-run", action="store_true", help="Validate without writing")
 
     # -- dedup-sessions (KA-2 increment B: governed sessions_recent row-repair) --
     dedup_parser = subparsers.add_parser(
@@ -1693,6 +1714,58 @@ def cmd_note(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
     print(f"Note updated on {args.item_id} (status untouched; .bak refreshed).")
+    return 0
+
+
+def cmd_priority(args: argparse.Namespace) -> int:
+    """Set a tracked item's Rule 21 priority_group through the guarded API.
+
+    The priority bucket is metadata, not the canonical status authority, so this
+    never changes ``status`` and appends no history event. Routes through
+    ``drift_store.set_priority_in_file`` (atomic, .bak-refreshed); hand-editing
+    priority_group in tracked_items is the drift the auditor forbids. Fails loud
+    (writes nothing) on an unknown id or a bucket outside P1..P5 / "".
+    """
+    from rag_kernel.drift_control import ALLOWED_PRIORITY_GROUPS
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        TrackedItemStore,
+        load_hot,
+        set_priority_in_file,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    if args.priority_group not in ALLOWED_PRIORITY_GROUPS:
+        print(
+            f"Error: unknown priority_group {args.priority_group!r} "
+            f"(allowed: {sorted(ALLOWED_PRIORITY_GROUPS)})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        store = TrackedItemStore.from_hot(load_hot(rag_path))
+        if args.item_id not in store:
+            print(f"Error: no tracked item with id {args.item_id!r}", file=sys.stderr)
+            return 1
+        if args.dry_run:
+            current = store.get(args.item_id)
+            shown = args.priority_group or "(cleared)"
+            print(
+                f"[dry-run] would set priority_group on {args.item_id} "
+                f"(status {current.status.value}, unchanged): {shown}"
+            )
+            return 0
+        set_priority_in_file(
+            rag_path, args.item_id, args.priority_group, session=args.session
+        )
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    shown = args.priority_group or "(cleared)"
+    print(f"priority_group set on {args.item_id}: {shown} (status untouched; .bak refreshed).")
     return 0
 
 
@@ -4237,6 +4310,7 @@ def main(argv: list[str] | None = None) -> int:
         "render": cmd_render,
         "report": cmd_report,
         "note": cmd_note,
+        "priority": cmd_priority,
         "dedup-sessions": cmd_dedup_sessions,
         "audit": cmd_audit,
         "doctor": cmd_doctor,

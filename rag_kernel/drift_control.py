@@ -51,6 +51,7 @@ invariant the whole kernel is built on, now applied to project bookkeeping.
   "description": "Canonical project-state status enum + lifecycle state machine (DRIFT-ELIM increment 1: pure core, unregistered)",
   "exports": ["ItemStatus", "ItemKind", "TrackedItem", "StatusEvent",
               "LIFECYCLE", "TERMINAL_STATUSES", "RETIRED_STATUSES",
+              "PRIORITY_GROUPS", "ALLOWED_PRIORITY_GROUPS",
               "legal_status_transition",
               "assert_status_transition", "ItemStateError", "ItemValidationError"],
   "use_when": "Recording or transitioning the canonical status of a tracked project item",
@@ -65,7 +66,13 @@ from enum import Enum
 
 # Bump when the lifecycle table or TrackedItem serialization format changes in a
 # way that affects stored data (forces a migration / regression-test refresh).
-LIFECYCLE_VERSION = "1.0.0"
+# 1.1.0 (REPORT-PRIORITY-GROUPS inc1): additive ``priority_group`` field on
+#        TrackedItem (P1..P5 / "" = unassigned) encoding Rule 21's priority
+#        buckets per-item. Optional + omitted-from-``to_dict`` when "" (the
+#        ``increments`` precedent), so existing items serialise byte-for-byte and
+#        no migration of on-disk bytes is forced — only items given a group carry
+#        the key. Feeds the deterministic priority burn-down render (inc2).
+LIFECYCLE_VERSION = "1.1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +124,26 @@ class ItemKind(str, Enum):
     ERROR = "ERROR"          # ERROR_LOG entries
     MILESTONE = "MILESTONE"  # build milestones / increments
     RELEASE = "RELEASE"      # release gates
+
+
+# ---------------------------------------------------------------------------
+# Priority-group vocabulary (Rule 21 P1..P5 buckets, per-item)
+# ---------------------------------------------------------------------------
+
+# The closed set of priority buckets an item may carry (REPORT-PRIORITY-GROUPS).
+# Rule 21 settles the standing hardening backlog into P1 (control-integrity),
+# P2 (verbs + mechanization), P3 (spec + repo), P4 (north-star), P5
+# (condition-gated). Encoding the bucket per-item — instead of leaving it as
+# Rule-21 prose plus a hand-composed tracker — lets the priority burn-down be a
+# DETERMINISTIC RENDER of the canonical array (inc2), same DRY discipline as the
+# rest of DRIFT-ELIM. Order is significant: it fixes the render sequence P1->P5.
+PRIORITY_GROUPS: tuple[str, ...] = ("P1", "P2", "P3", "P4", "P5")
+
+# "" = unassigned (an item outside the standing priority backlog, e.g. a raw
+# forensic record). Membership is validated fail-loud in TrackedItem; the empty
+# string is always allowed and is the default so untouched items serialise
+# byte-for-byte (the ``increments`` precedent).
+ALLOWED_PRIORITY_GROUPS: frozenset[str] = frozenset(PRIORITY_GROUPS) | {""}
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +340,7 @@ class TrackedItem:
     session: str = ""              # session that last touched this item
     note: str = ""                # one-line context (not a prose authority)
     superseded_by: str | None = None   # set iff status == SUPERSEDED
+    priority_group: str = ""       # Rule 21 bucket P1..P5, or "" = unassigned
     history: tuple[StatusEvent, ...] = field(default_factory=tuple)
     increments: tuple[Increment, ...] = field(default_factory=tuple)
 
@@ -344,6 +372,16 @@ class TrackedItem:
             raise ItemValidationError("TrackedItem.id must be non-empty")
         if not self.title or not self.title.strip():
             raise ItemValidationError("TrackedItem.title must be non-empty")
+        # Coerce None -> "" (JSON may carry a null) then validate membership
+        # fail-loud against the closed priority vocabulary — the same
+        # "no silent bad value" discipline the status/kind coercions apply.
+        if self.priority_group is None:
+            object.__setattr__(self, "priority_group", "")
+        if self.priority_group not in ALLOWED_PRIORITY_GROUPS:
+            raise ItemValidationError(
+                f"unknown priority_group: {self.priority_group!r} "
+                f"(allowed: {sorted(ALLOWED_PRIORITY_GROUPS)})"
+            )
         self._validate_supersede_invariant(self.status, self.superseded_by)
 
     @staticmethod
@@ -417,12 +455,29 @@ class TrackedItem:
             )
         return replace(self, note=note, session=session)
 
+    def with_priority(self, priority_group: str, *, session: str) -> TrackedItem:
+        """Return a new TrackedItem in a different Rule 21 ``priority_group``.
+
+        Like ``with_note``, the priority bucket is metadata: it never changes
+        ``status`` and therefore appends no StatusEvent (history records lifecycle
+        moves only). ``__post_init__`` validates the value fail-loud against
+        ``ALLOWED_PRIORITY_GROUPS`` (P1..P5 or "" to clear the assignment), so an
+        illegal bucket stops the caller and writes nothing — the guarded path that
+        keeps priority out of hand-edited JSON, mirroring the note discipline.
+        """
+        if not isinstance(priority_group, str):
+            raise ItemValidationError(
+                f"priority_group must be a string, got {type(priority_group).__name__}"
+            )
+        return replace(self, priority_group=priority_group, session=session)
+
     def to_dict(self) -> dict:
         """Serialise to a JSON-round-trippable dict (canonical field included).
 
-        ``increments`` is omitted entirely when empty so existing items serialise
-        byte-for-byte as before (no schema churn / RAG-size bloat for the common
-        case; only MILESTONE/RELEASE builds that record increments carry the key).
+        ``increments`` and ``priority_group`` are omitted entirely when empty so
+        existing items serialise byte-for-byte as before (no schema churn /
+        RAG-size bloat for the common case; only builds that record increments,
+        or items assigned a Rule 21 bucket, carry the extra key).
         """
         out = {
             "id": self.id,
@@ -434,6 +489,8 @@ class TrackedItem:
             "superseded_by": self.superseded_by,
             "history": [e.to_dict() for e in self.history],
         }
+        if self.priority_group:
+            out["priority_group"] = self.priority_group
         if self.increments:
             out["increments"] = [inc.to_dict() for inc in self.increments]
         return out
@@ -449,6 +506,7 @@ class TrackedItem:
             session=d.get("session", ""),
             note=d.get("note", ""),
             superseded_by=d.get("superseded_by"),
+            priority_group=d.get("priority_group", "") or "",
             history=tuple(StatusEvent.from_dict(e) for e in d.get("history", [])),
             increments=tuple(
                 Increment.from_dict(x) for x in d.get("increments", [])
