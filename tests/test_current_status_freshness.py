@@ -169,3 +169,60 @@ def test_audit_file_threads_git_head(tmp_path):
     report = drift_audit.audit_file(p, scan_root=False, git_head="e109794")
     assert not report.ok
     assert any(f.check == "current_status_freshness" for f in report.errors)
+
+
+# ---------------------------------------------------------------------------
+# labeled RELEASE sub-check (KA-CS-PROSE-DRIFT)
+# ---------------------------------------------------------------------------
+
+def test_release_stale_secondary_narrative_is_error():
+    # The LEADING version token is fresh (v0.4.31) — sub-check 1 passes — but an
+    # embedded labeled "RUNTIME RELEASE" / "runtime-v" claim is frozen at an old
+    # release. That secondary-narrative drift is exactly what KA-CS-PROSE-DRIFT
+    # caught escaping the leading-token-only guard; the release sub-check fires.
+    hot = _hot(
+        version_field="v0.4.31 — deployed; byte-identical to runtime-v0.4.27 worktree."
+    )
+    out = check_current_status_freshness(hot, version="0.4.31")
+    assert len(out) == 1
+    assert out[0].severity == ERROR
+    assert "0.4.27" in out[0].detail and "0.4.31" in out[0].detail
+    assert "KA-CS-PROSE-DRIFT" in out[0].detail
+
+
+def test_release_match_is_clean():
+    hot = _hot(github_field="RUNTIME RELEASE v0.4.31 @ abc1234 (tag runtime-v0.4.31).")
+    assert check_current_status_freshness(hot, version="0.4.31") == []
+
+
+def test_release_unlabeled_prior_is_ignored():
+    # Historical releases written UNLABELED ("Prior: vX") — the project convention —
+    # must NOT be matched; only labeled current-release tokens are governed.
+    hot = _hot(
+        github_field="RUNTIME RELEASE v0.4.31 (marked Latest). Prior: v0.4.27 @ 7b8bca1."
+    )
+    assert check_current_status_freshness(hot, version="0.4.31") == []
+
+
+def test_release_spec_and_component_versions_untouched():
+    # The spec version (3.2.6) and a sub-component version (1.5.0) carry no release
+    # label, so they never trip the release sub-check even when != __version__.
+    hot = _hot(
+        version_field="v0.4.31 — spec 3.2.6; DRIFT_STORE 1.4.0->1.5.0; runtime-v0.4.31."
+    )
+    assert check_current_status_freshness(hot, version="0.4.31") == []
+
+
+def test_release_all_labeled_occurrences_reported():
+    # Two labeled tokens, both stale at different versions — both surface.
+    hot = _hot(
+        github_field="RUNTIME RELEASE v0.4.27 (tag runtime-v0.4.26)."
+    )
+    out = check_current_status_freshness(hot, version="0.4.31")
+    assert len(out) == 1  # one finding per field, enumerating the stale tokens
+    assert "0.4.26" in out[0].detail and "0.4.27" in out[0].detail
+
+
+def test_release_skipped_when_canonical_none():
+    hot = _hot(github_field="RUNTIME RELEASE v0.4.27.")
+    assert check_current_status_freshness(hot, version=None) == []

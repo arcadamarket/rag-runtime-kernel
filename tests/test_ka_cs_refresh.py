@@ -72,6 +72,9 @@ def test_guard_and_repair_share_the_same_constants():
     assert drift_audit._CS_HEAD_FIELDS is drift_store._CS_HEAD_FIELDS
     assert drift_audit._CS_VERSION_TOKEN_RE is drift_store._CS_VERSION_TOKEN_RE
     assert drift_audit._CS_HEAD_RE is drift_store._CS_HEAD_RE
+    # KA-CS-PROSE-DRIFT: the release-token constants are shared the same way.
+    assert drift_audit._CS_RELEASE_RE is drift_store._CS_RELEASE_RE
+    assert drift_audit._CS_RELEASE_FIELDS is drift_store._CS_RELEASE_FIELDS
 
 
 # ---------------------------------------------------------------------------
@@ -312,3 +315,66 @@ def test_cli_strict_missing_token_exits_one(tmp_path):
     rc = main(["refresh-current-status", "--rag", str(p), "--session", "S128",
                "--version", "0.4.27", "--git-head", "abc1234", "--strict"])
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# planner — labeled RELEASE token (KA-CS-PROSE-DRIFT)
+# ---------------------------------------------------------------------------
+
+def _rel_changes(changes):
+    """The release-kind change records, keyed by field (a field can carry more
+    than one change record now — e.g. github_repo gets both a head and a release
+    change — so ``_actions`` (last-wins per field) is unsafe for these)."""
+    return {c["field"]: c for c in changes if c["kind"] == "release"}
+
+
+def test_release_token_restamped_when_stale():
+    # The field's LEADING version token is already fresh (v0.4.31), but an embedded
+    # labeled "RUNTIME RELEASE" / "runtime-v" claim stayed frozen — the exact
+    # KA-CS-PROSE-DRIFT signature. Every labeled occurrence must be re-stamped.
+    field = ("v0.4.31 — deployed. byte-identical to runtime-v0.4.27 worktree "
+             "(tag runtime-v0.4.27). Prior deployed: v0.4.26.")
+    hot = _hot(version_field=field)
+    new_cs, changes = compute_current_status_refresh(hot, version="0.4.31")
+    rel = _rel_changes(changes)
+    assert rel["rag_kernel_version"]["action"] == "updated"
+    got = new_cs["rag_kernel_version"]
+    assert "runtime-v0.4.31" in got and "runtime-v0.4.27" not in got
+    # unlabeled history is preserved untouched
+    assert "Prior deployed: v0.4.26" in got
+
+
+def test_release_token_all_occurrences_restamped():
+    field = ("LATEST COMMIT abc1234. RUNTIME RELEASE v0.4.27 @ 47792d9 "
+             "(tag runtime-v0.4.27, marked Latest). Prior: v0.4.26 @ 7b8bca1.")
+    hot = _hot(github_field=field)
+    new_cs, changes = compute_current_status_refresh(hot, version="0.4.31")
+    got = new_cs["github_repo"]
+    # both the "RUNTIME RELEASE vX" and the "runtime-vX" tag token move
+    assert "RUNTIME RELEASE v0.4.31" in got and "tag runtime-v0.4.31" in got
+    assert "0.4.27" not in got
+    # unlabeled prior + the fresh HEAD are preserved
+    assert "Prior: v0.4.26 @ 7b8bca1" in got and "abc1234" in got
+
+
+def test_release_token_unchanged_when_already_fresh():
+    hot = _hot(github_field="RUNTIME RELEASE v0.4.31 (tag runtime-v0.4.31).")
+    _, changes = compute_current_status_refresh(hot, version="0.4.31")
+    assert _rel_changes(changes)["github_repo"]["action"] == "unchanged"
+
+
+def test_release_token_not_planned_when_authority_none():
+    hot = _hot(github_field="RUNTIME RELEASE v0.4.27.")
+    _, changes = compute_current_status_refresh(hot, version=None)
+    assert not _rel_changes(changes)
+
+
+def test_release_refresh_clears_the_guard_by_construction():
+    # end-to-end: a field carrying a stale labeled release token trips the guard,
+    # and the paired refresh clears it — detection and repair agree by DRY.
+    field = ("v0.4.31 leading. runtime-v0.4.27 tag. RUNTIME RELEASE v0.4.27.")
+    hot = _hot(github_field=field)
+    assert check_current_status_freshness(hot, version="0.4.31")  # dirty
+    new_cs, _ = compute_current_status_refresh(hot, version="0.4.31")
+    assert check_current_status_freshness(
+        {"current_status": new_cs}, version="0.4.31") == []

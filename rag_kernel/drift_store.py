@@ -105,7 +105,12 @@ from rag_kernel.persistence import atomic_write_json
 # drift_audit.check_current_status_freshness now live HERE (the lower module) as
 # the single source of truth; drift_audit imports + re-exports them, so detection
 # and repair can never disagree (same DRY pattern as the shared date coercers).
-DRIFT_STORE_VERSION = "1.4.0"
+# 1.5.0 — KA-CS-PROSE-DRIFT: the current_status refresh now re-stamps EVERY labeled
+#         "RUNTIME RELEASE vX" / "runtime-vX" token in the covered fields (shared
+#         _CS_RELEASE_RE / _CS_RELEASE_FIELDS + _refresh_all_tokens), closing the
+#         secondary-narrative drift the leading-token-only refresh left stale. The
+#         paired guard half lives in drift_audit.check_current_status_freshness.
+DRIFT_STORE_VERSION = "1.5.0"
 
 # The single canonical array key inside RAG_MASTER.json (HOT). Everything else
 # that mentions item status is, or will become, a render of this array.
@@ -860,6 +865,24 @@ _CS_HEAD_RE = re.compile(
 )
 # Leading integer count, comma-grouped ("1,639") or bare ("1639").
 _CS_TESTS_COUNT_RE = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d+)\b")
+# current_status CURRENT-RELEASE version claim (KA-CS-PROSE-DRIFT). A LABELED
+# "RUNTIME RELEASE vX" / "runtime-vX" token denotes the CURRENTLY published release,
+# which by this project's convention tracks ``rag_kernel.__version__``. It is
+# label-anchored — exactly the way ``_CS_HEAD_RE`` keys off "LATEST COMMIT <sha>" —
+# so the E-043 guard/refresh reach the SECONDARY release narrative that the leading
+# version token cannot: the drift KA-CS-PROSE-DRIFT caught was a field whose leading
+# version token was re-stamped fresh while an embedded "RUNTIME RELEASE v0.4.27" /
+# "runtime-v0.4.27" stayed frozen and ``audit`` still passed clean. TWO invariants make
+# this provable rather than prose-guessing: (1) historical releases are written
+# UNLABELED ("Prior: v0.4.26 @ <sha>") per the existing convention, so they are never
+# matched; and (2) the spec version and sub-component versions carry no release label,
+# so they are untouched. ALL matches in a covered field are governed (not just the
+# first) — a single stale labeled token left behind is precisely the drift this closes.
+_CS_RELEASE_RE = re.compile(
+    r"\b(?:runtime\s+release\s+v?|runtime-v)(\d+\.\d+\.\d+)\b", re.IGNORECASE
+)
+# Fields whose labeled release tokens are current-release claims to guard/refresh.
+_CS_RELEASE_FIELDS: tuple[str, ...] = ("github_repo", _CS_VERSION_FIELD)
 
 
 class CurrentStatusRefreshError(DriftStoreError):
@@ -879,6 +902,28 @@ def _refresh_token(pattern: "re.Pattern[str]", want: str, text: str):
     old = m.group(1)
     s, e = m.span(1)
     return text[:s] + want + text[e:], old
+
+
+def _refresh_all_tokens(pattern: "re.Pattern[str]", want: str, text: str):
+    """Replace group(1) of EVERY match, preserving all surrounding text.
+
+    Returns ``(new_text, old_tokens)`` where ``old_tokens`` lists the replaced tokens
+    in order (empty when the pattern does not match). The all-matches sibling of
+    :func:`_refresh_token`, used for the labeled current-release token which may
+    legitimately appear more than once in one field ("RUNTIME RELEASE v0.4.27 ... tag
+    runtime-v0.4.27") — leaving any single occurrence stale would re-open
+    KA-CS-PROSE-DRIFT.
+    """
+    olds: list[str] = []
+
+    def _sub(m: "re.Match[str]") -> str:
+        olds.append(m.group(1))
+        full = m.group(0)
+        s = m.start(1) - m.start(0)
+        e = m.end(1) - m.start(0)
+        return full[:s] + want + full[e:]
+
+    return pattern.sub(_sub, text), olds
 
 
 def compute_current_status_refresh(
@@ -960,6 +1005,27 @@ def compute_current_status_refresh(
     #    auditor does not guard it, and a count must never be fabricated).
     if tests:
         _plan(_CS_TESTS_FIELD, "tests", _CS_TESTS_COUNT_RE, tests)
+
+    # 4. current-RELEASE version tokens (KA-CS-PROSE-DRIFT) — every LABELED
+    #    "RUNTIME RELEASE vX" / "runtime-vX" claim in a covered field must track
+    #    rag_kernel.__version__. Governs ALL matches (not just the leading one), and
+    #    composes on top of steps 1–2 (reads new_cs, so github_repo's already-restamped
+    #    HEAD and rag_kernel_version's already-restamped leading token are preserved).
+    if version:
+        want_v = version.lstrip("v")
+        for fld in _CS_RELEASE_FIELDS:
+            raw = new_cs.get(fld)
+            if not isinstance(raw, str):
+                continue
+            new_text, olds = _refresh_all_tokens(_CS_RELEASE_RE, want_v, raw)
+            if not olds:
+                continue
+            new_cs[fld] = new_text
+            stale = any(o != want_v for o in olds)
+            changes.append({
+                "field": fld, "kind": "release", "old": ",".join(olds),
+                "new": want_v, "action": "updated" if stale else "unchanged",
+            })
 
     return new_cs, changes
 

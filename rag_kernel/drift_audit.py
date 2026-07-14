@@ -100,6 +100,8 @@ from rag_kernel.drift_store import (
     _coerce_utc_instant,
     _CS_HEAD_FIELDS,
     _CS_HEAD_RE,
+    _CS_RELEASE_FIELDS,
+    _CS_RELEASE_RE,
     _CS_VERSION_FIELD,
     _CS_VERSION_TOKEN_RE,
     ledger_disposition_to_status,
@@ -183,7 +185,15 @@ from rag_kernel import persistence
 #         empty/malformed manifest falls back to the universal defaults, so the
 #         auditor is no longer kernel-repo-specific yet stays byte-for-byte back-
 #         compatible for every RAG that has not declared a manifest.
-DRIFT_AUDIT_VERSION = "1.11.0"
+# 1.12.0 — KA-CS-PROSE-DRIFT: check_current_status_freshness gains a third sub-check
+#         asserting every LABELED "RUNTIME RELEASE vX" / "runtime-vX" token in the
+#         covered current_status fields equals the live rag_kernel.__version__. Closes
+#         the secondary-narrative blind spot where a field's leading version token was
+#         re-stamped fresh while an embedded release claim stayed frozen and audit
+#         still passed clean. Label-anchored (like the LATEST COMMIT sha check) so
+#         unlabeled "Prior: vX", spec, and sub-component versions never trip it; shares
+#         _CS_RELEASE_RE / _CS_RELEASE_FIELDS with the drift_store refresh half (DRY).
+DRIFT_AUDIT_VERSION = "1.12.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -1013,7 +1023,8 @@ def check_current_status_freshness(
     git_head: Optional[str] = None,
 ) -> list[AuditFinding]:
     """ERROR if the ``current_status`` narrative's stated runtime version / git
-    HEAD disagree with the live canonical authorities (E-043).
+    HEAD / labeled release version disagree with the live canonical authorities
+    (E-043; the release sub-check is KA-CS-PROSE-DRIFT).
 
     Why this is a GUARD, not a render: ``current_status`` denormalizes two facts
     whose source of truth lives OUTSIDE the RAG — the kernel version
@@ -1073,6 +1084,35 @@ def check_current_status_freshness(
                         ),
                     ))
             break  # only the first head-bearing field is the canonical pointer
+
+    # 3. current-RELEASE version (KA-CS-PROSE-DRIFT): every LABELED "RUNTIME RELEASE
+    #    vX" / "runtime-vX" token in a covered field must equal the live __version__.
+    #    This reaches the SECONDARY release narrative that sub-check 1 (leading token
+    #    only) cannot see — the drift where a field's leading version was re-stamped
+    #    fresh while an embedded release claim stayed frozen and audit passed clean.
+    #    Provable, not prose-guessing: historical releases are written UNLABELED
+    #    ("Prior: vX") by convention so are never matched, and spec/sub-component
+    #    versions carry no release label; ALL labeled matches are checked because a
+    #    single stale one re-opens the drift. Shares _CS_RELEASE_RE / _CS_RELEASE_FIELDS
+    #    with the refresh half (drift_store), so detection and repair cannot disagree.
+    if version:
+        want = version.lstrip("v")
+        for fld in _CS_RELEASE_FIELDS:
+            raw = cs.get(fld)
+            if not isinstance(raw, str):
+                continue
+            stale = sorted({m.group(1) for m in _CS_RELEASE_RE.finditer(raw)
+                            if m.group(1) != want})
+            if stale:
+                findings.append(AuditFinding(
+                    check="current_status_freshness", severity=ERROR,
+                    detail=(
+                        f"current_status.{fld} states RELEASE version "
+                        f"{', '.join(stale)} but live rag_kernel.__version__ is "
+                        f"{want} — stale release narrative "
+                        "(E-043 / KA-CS-PROSE-DRIFT); refresh current_status"
+                    ),
+                ))
     return findings
 
 
