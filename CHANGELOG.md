@@ -4,6 +4,12 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+## [v0.4.33] — 2026-07-15
+
+_SECRETS-INGEST-GUARD (P1/G2) — the ingest-time complement to v0.4.32's audit-time KA-SECRETS-BOUNDARY, shipping P1 as a tagged release (Rule 21 diversion trigger). Runtime `__version__` 0.4.32 → 0.4.33, `__spec_version__` unchanged (3.2.6); no new capability module (still 19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change); full suite 1,806 → 1,813 green (+7). Module version: `drift_audit` 1.13.0 → 1.14.0._
+
+**SECRETS-INGEST-GUARD (P1/G2) — declared-secret values are now refused at the INGESTING boundary, before commit, not only caught after the fact.** KA-SECRETS-BOUNDARY (v0.4.32) made a declared-secret value appearing verbatim in the RAG a fail-loud *audit* finding — but that is a detective control that fires *after* the value has already landed in the store. `KernelApp.validate_secrets_ingest` (`rag_kernel/api.py`) closes the gap with a *preventive* control: a proposal carrying a declared-secret value is rejected at `propose()` — the `BOOT → INGEST → VALIDATE → COMMIT` pipeline's ingest transition — so the secret never reaches `commit()`. Detection and prevention share one source of truth: `drift_audit.collect_declared_secret_values` (`drift_audit` 1.13.0 → 1.14.0) is used by both the audit-time guard and the ingest-time block, so the two can never disagree on what counts as a declared secret (defaults `config/**`, `.env*`, `*.pem`/`*.key`, `credentials*`/`secrets*`; widenable via `meta.secret_paths`, never narrowable). Rejections are redaction-safe (`sha256:<12>` + source location, never the secret value). +7 tests (`tests/test_api.py`, `tests/test_drift_audit.py`), full suite 1,806 → 1,813 green. Lane-A from the eBay S129 field audit (Rule 15 deployment-test triage).
+
 ## [v0.4.32] — 2026-07-14
 
 _P1 control-integrity release — the P1/G1+G2 guard batch (ERRLOG-ID-GUARD, KA-CS-PROSE-DRIFT, KA-SECRETS-BOUNDARY) plus the REPORT-PRIORITY-GROUPS burn-down render (inc1+inc2), now deployed into the governance runtime. Runtime `__version__` 0.4.31 → 0.4.32, `__spec_version__` unchanged (3.2.6); no new capability module (still 19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change); full suite 1,733 → 1,806 green (+73). Module versions: `drift_audit` 1.11.0 → 1.13.0, `drift_store` 1.4.0 → 1.6.0, `drift_control` (LIFECYCLE) 1.0.0 → 1.1.0, `drift_render` 1.1.0 → 1.2.0._
