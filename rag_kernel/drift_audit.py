@@ -211,7 +211,14 @@ from rag_kernel import persistence
 #         sha256:<12> fingerprint + source location, never the secret. Filesystem-
 #         backed like the side-store scan (gated on ``root``); self-skips clean when
 #         no declared-secret file exists, so this kernel's own RAG stays clean.
-DRIFT_AUDIT_VERSION = "1.13.0"
+# 1.14.0 — SECRETS-INGEST-GUARD (P1/G2 fast-follow): factored the declared-secret
+#         file enumeration/extraction out of check_secrets_boundary into the shared
+#         collect_declared_secret_values(hot, root), so the new ingest-time guard
+#         (KernelApp.validate_secrets_ingest, refuses a proposal carrying a secret
+#         VALUE at the INGESTING path before commit merges it into HOT) and the
+#         audit-time boundary check draw from ONE source of truth. Behaviour of
+#         check_secrets_boundary is unchanged (pure refactor + new public export).
+DRIFT_AUDIT_VERSION = "1.14.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -716,6 +723,48 @@ def _extract_secret_values(path: Path) -> list[tuple[str, str]]:
     return cands
 
 
+def collect_declared_secret_values(
+    hot: dict, root: Optional[Path | str]
+) -> dict[str, tuple[str, str]]:
+    """Enumerate declared-secret files under ``root``; return ``{value: (rel_posix, key_label)}``.
+
+    The single shared source of declared-secret VALUES for both boundary defenses:
+    the audit-time :func:`check_secrets_boundary` (reactive — did a value already leak
+    into the HOT RAG?) and the ingest-time ``KernelApp.validate_secrets_ingest``
+    (proactive — refuse a proposal carrying one before it enters context). Factored out
+    (SECRETS-INGEST-GUARD, P1/G2) so the two guards can NEVER diverge on what counts as
+    a secret. Bounded scan (``_SECRET_MAX_FILES`` / ``_SECRET_FILE_MAX_BYTES``), skips
+    VCS/build/RAG dirs, honours ``meta.secret_paths`` (additive) + ``meta.secret_min_len``.
+    Returns an empty mapping when ``root`` is None / not a dir / declares no secret file.
+    """
+    candidates: dict[str, tuple[str, str]] = {}
+    if root is None or not isinstance(hot, dict):
+        return candidates
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return candidates
+    globs = _secret_globs(hot)
+    min_len = _secret_min_len(hot)
+
+    seen_files = 0
+    for p in root_path.rglob("*"):
+        if seen_files >= _SECRET_MAX_FILES:
+            break
+        parts = set(p.relative_to(root_path).parts)
+        if parts & _SECRET_SKIP_DIRS:
+            continue
+        if not p.is_file():
+            continue
+        rel_posix = p.relative_to(root_path).as_posix()
+        if not _is_secret_file(rel_posix, p.name, globs):
+            continue
+        seen_files += 1
+        for key_label, val in _extract_secret_values(p):
+            if isinstance(val, str) and len(val) >= min_len:
+                candidates.setdefault(val, (rel_posix, key_label))
+    return candidates
+
+
 def check_secrets_boundary(
     hot: dict, root: Optional[Path | str]
 ) -> list[AuditFinding]:
@@ -743,31 +792,10 @@ def check_secrets_boundary(
     findings: list[AuditFinding] = []
     if root is None or not isinstance(hot, dict):
         return findings
-    root_path = Path(root)
-    if not root_path.is_dir():
-        return findings
-    globs = _secret_globs(hot)
-    min_len = _secret_min_len(hot)
 
-    # Enumerate files under root (bounded), skipping VCS/build/RAG dirs.
-    seen_files = 0
-    candidates: dict[str, tuple[str, str]] = {}  # value -> (rel_posix, key_label)
-    for p in root_path.rglob("*"):
-        if seen_files >= _SECRET_MAX_FILES:
-            break
-        parts = set(p.relative_to(root_path).parts)
-        if parts & _SECRET_SKIP_DIRS:
-            continue
-        if not p.is_file():
-            continue
-        rel_posix = p.relative_to(root_path).as_posix()
-        if not _is_secret_file(rel_posix, p.name, globs):
-            continue
-        seen_files += 1
-        for key_label, val in _extract_secret_values(p):
-            if isinstance(val, str) and len(val) >= min_len:
-                candidates.setdefault(val, (rel_posix, key_label))
-
+    # Declared-secret VALUES via the shared collector (identical source of truth as
+    # the ingest-time guard — SECRETS-INGEST-GUARD, P1/G2).
+    candidates = collect_declared_secret_values(hot, root)
     if not candidates:
         return findings
 
@@ -2158,6 +2186,7 @@ __all__ = [
     "check_note_status_contradiction",
     "check_side_rule_stores",
     "check_context_side_stores",
+    "collect_declared_secret_values",
     "check_secrets_boundary",
     "check_ledger_consistency",
     "check_record_coverage",

@@ -179,6 +179,72 @@ class TestKernelAppPropose:
         assert "BOOTING" in result["errors"][0]
 
 
+class TestKernelAppSecretsIngestGuard:
+    """SECRETS-INGEST-GUARD (P1/G2): propose() refuses a payload carrying a
+    declared-secret VALUE before it can reach HOT/context."""
+
+    # Deliberately NOT a real provider key format (no sk_live_/AKIA prefix) so
+    # GitHub push-protection's secret scanner doesn't flag this test fixture; the
+    # guard keys off the secret-ish KEY name ("api_key"), not the value pattern.
+    SECRET = "FAKE-testonly-credential-0123456789abcdef"  # >= min_len
+
+    def _declare_secret(self, project_dir):
+        # project root == project_dir.parent (RAG is a subdir); config/ is a
+        # universal default secret glob.
+        cfg = project_dir.parent / "config"
+        cfg.mkdir(exist_ok=True)
+        (cfg / "creds.json").write_text(
+            json.dumps({"api_key": self.SECRET}), encoding="utf-8"
+        )
+
+    def test_no_secret_files_is_noop(self, booted_app):
+        # No config/ secret tree -> guard is a clean no-op.
+        result = booted_app.propose({
+            "action": "update_status",
+            "payload": {"current_status": {"note": self.SECRET}},
+        })
+        assert result["valid"] is True
+
+    def test_blocks_payload_carrying_secret_value(self, booted_app, project_dir):
+        self._declare_secret(project_dir)
+        result = booted_app.propose({
+            "action": "update_status",
+            "payload": {"current_status": {"leaked": self.SECRET}},
+        })
+        assert result["valid"] is False
+        joined = " ".join(result["errors"])
+        assert "Secrets-ingest violation" in joined
+        assert "config/creds.json" in joined
+
+    def test_error_is_redaction_safe(self, booted_app, project_dir):
+        self._declare_secret(project_dir)
+        result = booted_app.propose({
+            "action": "update_status",
+            "payload": {"x": self.SECRET},
+        })
+        assert result["valid"] is False
+        # The raw secret must NEVER appear in the surfaced error; only a fingerprint.
+        assert self.SECRET not in " ".join(result["errors"])
+        assert "sha256:" in " ".join(result["errors"])
+
+    def test_reference_by_path_is_allowed(self, booted_app, project_dir):
+        self._declare_secret(project_dir)
+        result = booted_app.propose({
+            "action": "update_status",
+            "payload": {"current_status": {"secret_ref": "config/creds.json"}},
+        })
+        assert result["valid"] is True
+
+    def test_blocked_secret_never_reaches_hot(self, booted_app, project_dir):
+        self._declare_secret(project_dir)
+        booted_app.propose({
+            "action": "update_status",
+            "payload": {"current_status": {"leaked": self.SECRET}},
+        })
+        # Refused proposal is never staged, so it can never be committed into HOT.
+        assert self.SECRET not in json.dumps(booted_app.get_hot())
+
+
 class TestKernelAppCommit:
     def test_commit_valid_proposal(self, booted_app, project_dir):
         prop = booted_app.propose({

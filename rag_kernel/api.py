@@ -32,6 +32,7 @@ Satisfies: M-023 (core HTTP API)
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -519,6 +520,67 @@ class KernelApp:
             )
         return errors
 
+    # -- Secrets ingest guard (SECRETS-INGEST-GUARD, P1/G2) ------------------
+
+    def _secret_ingest_candidates(self) -> dict[str, tuple[str, str]]:
+        """Declared-secret VALUES for the ingest guard, memoized per session.
+
+        Reuses ``drift_audit.collect_declared_secret_values`` — the SAME source of
+        truth the audit-time ``check_secrets_boundary`` uses — so the proactive
+        (ingest) and reactive (audit) boundaries can never disagree on what a secret
+        is. The project root is ``project_dir.parent`` (RAG is a subdir), matching the
+        ``root`` the close-time audit passes. Scanned once per KernelApp: declared-
+        secret files are effectively static within a session, and the bounded scan
+        should not run on every proposal. Failures degrade OPEN-safe to ``{}`` — the
+        audit-time guard remains the fail-loud backstop.
+        """
+        cache = getattr(self, "_secret_candidates_cache", None)
+        if cache is None:
+            try:
+                from rag_kernel import drift_audit  # lazy: avoid import cycle
+                cache = drift_audit.collect_declared_secret_values(
+                    self.get_hot(), self.project_dir.parent
+                )
+            except Exception:
+                cache = {}
+            self._secret_candidates_cache = cache
+        return cache
+
+    def validate_secrets_ingest(self, proposal: dict) -> list[str]:
+        """Refuse a proposal whose payload carries a declared-secret VALUE (P1/G2).
+
+        The proactive half of KA-SECRETS-BOUNDARY: intercepts the INGESTING path
+        (``propose``) so a live credential can NEVER be committed into HOT / loaded
+        into context — the audit-time ``check_secrets_boundary`` only catches a leak
+        after the fact. Serializes the proposal payload and tests each declared-secret
+        value for verbatim membership. Redaction-safe by construction: an error names
+        only the source location + a ``sha256:<12>`` fingerprint, never the secret, so
+        the guard cannot become the exfiltration path it defends against.
+
+        Returns a list of error strings (empty = clean).
+        """
+        errors: list[str] = []
+        payload = proposal.get("payload")
+        if payload is None:
+            return errors
+        candidates = self._secret_ingest_candidates()
+        if not candidates:
+            return errors
+        try:
+            hay = json.dumps(payload, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            hay = repr(payload)
+        for val, (rel_posix, key_label) in candidates.items():
+            if val and val in hay:
+                fp = hashlib.sha256(val.encode("utf-8")).hexdigest()[:12]
+                errors.append(
+                    f"Secrets-ingest violation: proposal payload carries a declared-secret "
+                    f"value from {rel_posix} (key {key_label!r}, sha256:{fp}). Secret values "
+                    f"must never be ingested into the RAG (KA-SECRETS-BOUNDARY); reference the "
+                    f"secret by path, not by value."
+                )
+        return errors
+
     def propose(self, proposal: dict) -> dict:
         """Submit a mutation proposal for validation.
 
@@ -557,6 +619,10 @@ class KernelApp:
 
         # Echo-back enforcement (INS-015)
         errors.extend(self.validate_echo_back(proposal))
+
+        # Secrets ingest guard (SECRETS-INGEST-GUARD, P1/G2) — refuse a payload
+        # carrying a declared-secret value before it can reach HOT/context.
+        errors.extend(self.validate_secrets_ingest(proposal))
 
         # Conflict payload validation (ENH-005)
         if proposal.get("action") == "add_conflict" and "payload" in proposal:

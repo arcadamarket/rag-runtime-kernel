@@ -48,6 +48,7 @@ from rag_kernel.drift_audit import (
     check_note_status_contradiction,
     check_render_parity,
     check_secrets_boundary,
+    collect_declared_secret_values,
     check_side_rule_stores,
     check_supersede_refs,
 )
@@ -88,7 +89,7 @@ def _rendered_hot(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_severities():
-    assert DRIFT_AUDIT_VERSION == "1.13.0"
+    assert DRIFT_AUDIT_VERSION == "1.14.0"
     assert ERROR == "error" and WARNING == "warning"
 
 
@@ -293,6 +294,24 @@ def test_secrets_boundary_detects_leaked_json_value(tmp_path):
     assert secret not in f.detail
     assert hashlib.sha256(secret.encode()).hexdigest()[:12] in f.detail
     assert "config/creds.json" in f.detail
+
+
+def test_collect_declared_secret_values_shared_source(tmp_path):
+    # The shared collector (used by BOTH the audit-time boundary check and the
+    # ingest-time guard) returns the declared-secret value keyed to its source.
+    secret = "FAKE-shared-collector-credential-0192837465"
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "creds.json").write_text(
+        json.dumps({"api_key": secret}), encoding="utf-8")
+    cands = collect_declared_secret_values(_rendered_hot(_clean_store()), tmp_path)
+    assert secret in cands
+    rel_posix, key_label = cands[secret]
+    assert rel_posix == "config/creds.json"
+
+
+def test_collect_declared_secret_values_none_root_is_empty():
+    assert collect_declared_secret_values({"meta": {}}, None) == {}
 
 
 def test_secrets_boundary_clean_when_secret_not_in_rag(tmp_path):
