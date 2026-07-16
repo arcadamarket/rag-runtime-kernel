@@ -119,6 +119,47 @@ def test_session_end_no_report_suppresses_render(tmp_path, monkeypatch, capsys):
     assert "machine-rendered at close" not in out
 
 
+# --- AUDIT-XFER-SURFACE-ATTEST (S154, F1): close persists the bound artifact ---
+
+def test_session_end_writes_attested_report_artifact(tmp_path, monkeypatch, capsys):
+    """The close writes the machine-rendered report VERBATIM to a deterministic
+    file, and that file verifies AUTHENTIC — so the agent can present the FILE
+    instead of retyping it (the S152 chat-relay hole). AUDIT-XFER-SURFACE-ATTEST.
+    """
+    rag = _write_rag(tmp_path, "S0", seq=1)
+    _start_logger(tmp_path, "S1")
+    monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
+
+    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"])
+    assert rc == 0
+
+    artifact = tmp_path / "AUDIT_CANONICAL_REPORT_S1.md"
+    assert artifact.exists(), "close must persist the transfer-surface report file"
+
+    text = artifact.read_text(encoding="utf-8")
+    # the persisted file carries a report-attest token and verifies AUTHENTIC
+    assert "report-attest: sha256:" in text
+    assert main(["report", "--verify", str(artifact)]) == 0
+
+    # the persisted body matches what was emitted to stdout (verbatim, no drift)
+    out = capsys.readouterr().out
+    assert artifact.name in out
+    assert "AUDIT-XFER-SURFACE-ATTEST" in out
+    assert "present" in out.lower() and "verbatim" in out.lower()
+
+
+def test_session_end_no_report_writes_no_artifact(tmp_path, monkeypatch):
+    """--no-report opts out of the machine render, so no transfer-surface file."""
+    rag = _write_rag(tmp_path, "S0", seq=1)
+    _start_logger(tmp_path, "S1")
+    monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
+
+    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+               "--summary", "x", "--no-report"])
+    assert rc == 0
+    assert not (tmp_path / "AUDIT_CANONICAL_REPORT_S1.md").exists()
+
+
 # --- ERROR_LOG fold is part of the governed call, and idempotent ------------
 
 def test_session_end_folds_error_log_entry(tmp_path, monkeypatch):

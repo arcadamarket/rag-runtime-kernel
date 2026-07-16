@@ -2997,6 +2997,38 @@ def _close_report_ns(sid: str, args: argparse.Namespace) -> argparse.Namespace:
     )
 
 
+# AUDIT-XFER-SURFACE-ATTEST (S154, F1) — the operator-facing transfer surface.
+# The close machine-renders the attested canonical report (S139 WIRE-CLOSE); the
+# helpers below PERSIST that exact text to a deterministic file so the agent
+# presents the FILE verbatim instead of retyping it into chat (the S152 relay
+# hole, where a bare-count paraphrase was pasted with a hand-appended token). The
+# written text already carries its report-attest token, so a presented copy is
+# re-checkable with `rag_kernel report --verify <file>`.
+CLOSE_REPORT_PREFIX = "AUDIT_CANONICAL_REPORT_"
+CLOSE_REPORT_EXT = ".md"
+
+
+def _close_report_artifact_path(rag_dir: Path, sid: str) -> Path:
+    """Deterministic transfer-surface file for a session's canonical close report."""
+    return rag_dir / f"{CLOSE_REPORT_PREFIX}{sid}{CLOSE_REPORT_EXT}"
+
+
+def _write_close_report_artifact(rag_dir: Path, sid: str, report_text: str) -> Path:
+    """Persist the attested close report to the deterministic transfer-surface file.
+
+    Written atomically (tmp -> os.replace) with no ``.bak`` mirror — this is a
+    DERIVED artifact, not canonical RAG state (which alone owns the parity-mirror
+    contract). Returns the path so the close can point the operator/agent at the
+    file to present VERBATIM (AUDIT-XFER-SURFACE-ATTEST / F1).
+    """
+    path = _close_report_artifact_path(rag_dir, sid)
+    data = report_text if report_text.endswith("\n") else report_text + "\n"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
 def _drive_close(
     rag_path: Path, rag_dir: Path, sid: str, *, summary: "str | None",
     tasks, status, strict: bool, git_head: "str | None",
@@ -3132,10 +3164,22 @@ def _drive_close(
     # can never be hand-authored (the S136 close-drift root cause). Rendering IS
     # the attestation — report_rendered is set because the machine produced it.
     close_report = None
+    close_report_path = None
     if report_args is not None and not getattr(report_args, "no_report", False):
         try:
             close_report = _build_report_text(rag_path, report_args)
             steps["report_rendered"] = True
+            # AUDIT-XFER-SURFACE-ATTEST (F1) — persist the attested report to the
+            # deterministic transfer-surface file so the agent presents the FILE
+            # verbatim, never a retype. A write hiccup must not strand a green
+            # close, so it is caught separately from the render.
+            try:
+                close_report_path = _write_close_report_artifact(
+                    rag_dir, sid, close_report
+                )
+            except OSError as exc:
+                print(f"  WARN: could not write close-report artifact: {exc}",
+                      file=sys.stderr)
         except Exception as exc:  # a render hiccup must never strand a green close
             print(f"  WARN: could not machine-render close report: {exc}",
                   file=sys.stderr)
@@ -3157,6 +3201,17 @@ def _drive_close(
         print("")
         print("=== Canonical status report (Rule 12 — machine-rendered at close) ===")
         print(close_report)
+        if close_report_path is not None:
+            print("")
+            print(
+                "AUDIT-XFER-SURFACE-ATTEST — the report above was written VERBATIM to:"
+            )
+            print(f"  {close_report_path}")
+            print(
+                "PRESENT THAT FILE to the operator verbatim (do NOT retype or "
+                "paraphrase it into chat); confirm authenticity with "
+                f"`rag_kernel report --verify {close_report_path.name}`."
+            )
     elif not steps.get("report_rendered"):
         print(
             "  NOTE: close report not machine-rendered (--no-report) and not "
