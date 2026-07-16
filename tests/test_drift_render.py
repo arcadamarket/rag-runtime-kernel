@@ -65,7 +65,7 @@ def _hot_from(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_active_statuses():
-    assert DRIFT_RENDER_VERSION == "1.2.0"
+    assert DRIFT_RENDER_VERSION == "1.3.0"
     assert ACTIVE_STATUSES == frozenset({ItemStatus.OPEN, ItemStatus.IN_PROGRESS})
 
 
@@ -262,29 +262,52 @@ def _tagged_store():
     ])
 
 
-def test_burndown_groups_in_priority_order_then_unassigned():
+def test_burndown_groups_in_priority_order_then_explicit_exemption():
     lines = render_priority_burndown(_tagged_store())
     headers = [ln for ln in lines if ln.startswith("- **")]
-    # P3 has only a resolved item (no session passed) -> omitted; order preserved
+    # P1 holds the only active work -> marked ACTIVE. P3 has only a resolved item
+    # (no session passed) -> omitted. The un-triaged catch-all carries an explicit
+    # label, never a silent "Unassigned" (REPORT-PRIORITY-COMPLETE). Order preserved.
     assert headers == [
-        "- **P1** (2 active · 0 deferred):",
+        "- **P1** ← ACTIVE (2 active · 0 deferred):",
         "- **P2** (0 active · 1 deferred):",
-        "- **Unassigned** (1 active · 0 deferred):",
+        "- **Unprioritized · needs a P-group** (1 active · 0 deferred):",
     ]
+    assert not any("Unassigned" in ln for ln in lines)
 
 
-def test_burndown_lists_items_id_sorted_with_markers():
+def test_burndown_references_active_and_deferred_by_id_only():
+    # Active/deferred items are referenced by id (no title re-list) so the
+    # burn-down is a priority lens, not a duplicate of the flat lists
+    # (REPORT-BACKLOG-DEDUP).
     lines = render_priority_burndown(_tagged_store())
-    assert "  - P1-OPEN — title for P1-OPEN" in lines
-    assert "  - P1-PROG — title for P1-PROG" in lines
-    assert "  - P2-DEF — title for P2-DEF (deferred)" in lines
+    assert "  - remaining: P1-OPEN, P1-PROG" in lines
+    assert "  - deferred: P2-DEF" in lines
+    # no full "id — title" line for an active/deferred backlog item
+    assert not any(
+        ln.startswith("  - P1-OPEN — ") or ln.startswith("  - P2-DEF — ")
+        for ln in lines
+    )
 
 
-def test_burndown_shipped_this_session_counted_when_session_given():
+def test_burndown_active_group_marked_and_p1_always_shown_when_empty():
+    # P1 clear, P2 holds the active work -> P2 is ACTIVE and P1 still renders an
+    # explicit "clear ✓" row (REPORT-RULE21-FIDELITY: no silent, missing P1 row).
+    store = TrackedItemStore([
+        _item("P2-OPEN", ItemStatus.OPEN, session="S60", priority_group="P2"),
+    ])
+    lines = render_priority_burndown(store)
+    assert lines[0] == "- **P1**: clear ✓"
+    assert "- **P2** ← ACTIVE (1 active · 0 deferred):" in lines
+    assert "  - remaining: P2-OPEN" in lines
+
+
+def test_burndown_shipped_this_session_keeps_title_as_shipped_signal():
     lines = render_priority_burndown(_tagged_store(), session="S51")
-    # P3-DONE was resolved in S51 -> now surfaces under P3 as shipped
+    # P3-DONE was resolved in S51 -> surfaces under P3 as shipped, with its title
+    # (it is gone from the flat lists, so this is a signal, not a duplicate).
     assert "- **P3** (0 active · 0 deferred · 1 shipped S51):" in lines
-    assert "  - P3-DONE — title for P3-DONE (shipped S51)" in lines
+    assert "  - shipped S51: P3-DONE — title for P3-DONE" in lines
 
 
 def test_burndown_excludes_non_backlog_kinds():
@@ -308,5 +331,23 @@ def test_status_report_includes_priority_burndown_section():
     i5 = rep.index("### 5")
     burn = rep.index("**Priority burn-down (Rule 21):**")
     assert i4 < burn < i5
-    # untagged item shows under Unassigned; a P1 item shows under P1
-    assert "- **P1**" in rep and "- **Unassigned**" in rep
+    # a P1 item shows under P1; the un-triaged item shows under the explicit label
+    assert "- **P1**" in rep and "Unprioritized · needs a P-group" in rep
+    assert "- **Unassigned**" not in rep
+
+
+def test_status_report_current_build_prefers_live_release_over_stale_row():
+    # No milestone in progress and no MILESTONE/RELEASE tracked-item shipped this
+    # session: section 2 must name the LIVE released runtime, not a stale newest
+    # RELEASE row (REPORT-PRIORITY-COMPLETE cosmetic fold / S154 v0.4.35 gap).
+    store = TrackedItemStore([
+        _item("RELEASE-v0.4.35", ItemStatus.RESOLVED, session="S148",
+              kind=ItemKind.RELEASE),
+        _item("REPORT-X", ItemStatus.RESOLVED, session="S155", priority_group="P1"),
+    ])
+    rep = render_status_report(
+        store, session="S155", meta={"last_checkpoint_seq": 1},
+        released=True, release_ref="runtime-v0.4.37", version="0.4.37",
+    )
+    assert "runtime-v0.4.37 (0.4.37) — released; no milestone in progress" in rep
+    assert "RELEASE-v0.4.35" not in rep.split("### 3")[0]  # not in glance/section 2

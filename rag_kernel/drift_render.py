@@ -103,7 +103,14 @@ from rag_kernel.persistence import atomic_write_json
 #         backlog by the per-item priority_group (Rule 21 P1..P5 + Unassigned) and
 #         is emitted as a subsection of the canonical report's section 4 (option A
 #         — one report carries the burn-down; no renumbering of sections 5-7).
-DRIFT_RENDER_VERSION = "1.2.0"
+# 1.3.0 — REPORT-{RULE21-FIDELITY,BACKLOG-DEDUP,PRIORITY-COMPLETE} (S155): the
+#         burn-down always surfaces P1 + the active group (explicit "clear ✓" row,
+#         never silence), marks the active group "← ACTIVE", references active/
+#         deferred items by id (no title re-list — the flat section-4 lists stay
+#         the itemized authority), and labels the un-triaged catch-all explicitly
+#         instead of a silent "Unassigned". Section 2 / the milestone cell name the
+#         LIVE released build (release_ref/version) over a stale newest-RELEASE row.
+DRIFT_RENDER_VERSION = "1.3.0"
 
 # The non-terminal, actionable statuses — the "open backlog".
 ACTIVE_STATUSES: frozenset[ItemStatus] = frozenset(
@@ -287,20 +294,30 @@ def render_priority_burndown(
 ) -> list[str]:
     """Render the Rule 21 priority burn-down as deterministic markdown lines.
 
-    Re-buckets the SAME task backlog that section 4 enumerates, but grouped by the
-    per-item ``priority_group`` (Rule 21 order P1..P5, then an ``Unassigned``
-    catch-all for items carrying no bucket). For each NON-empty group, id-sorted:
+    Re-buckets the SAME task backlog that section 4 enumerates by per-item
+    ``priority_group`` (Rule 21 order P1..P5, then an explicit un-triaged
+    catch-all). Per group, id-sorted:
 
-      * active items (OPEN / IN_PROGRESS) — "what remains",
-      * deferred items — parked, and
-      * items RESOLVED **this** ``session`` (when given) — "what shipped".
+      * active items (OPEN / IN_PROGRESS) — "what remains", referenced by id,
+      * deferred items — parked, referenced by id, and
+      * items RESOLVED **this** ``session`` (when given) — "what shipped", id + title.
 
-    A group with nothing in any bucket is omitted (an empty P-row is noise). The
-    ``Unassigned`` bucket surfaces backlog items still awaiting a group — the
-    honest signal until every item is tagged (inc3). Pure: a total function of the
-    arguments, so a regression test can pin it byte-for-byte. This is the render
-    the canonical report's section 4 emits (option A) and the deterministic
-    replacement for the hand-composed burn-down Rule 21 used to require.
+    Three fidelity guarantees the earlier render lacked:
+
+      * P1 (the priority spine) and the ACTIVE group ALWAYS render — even when
+        empty they emit an explicit ``clear ✓`` row, never silence
+        (REPORT-RULE21-FIDELITY: an empty P1 must be visible, not omitted);
+      * the ACTIVE group — the lowest-numbered P-group still holding active work —
+        is marked ``← ACTIVE`` (Rule 21 "name the active group");
+      * active/deferred items are REFERENCED by id, not re-listed with titles, so
+        the burn-down is a priority lens rather than a second full copy of the
+        flat section-4 lists (REPORT-BACKLOG-DEDUP); resolved-this-session items
+        (absent from those flat lists) still carry their title as the shipped
+        signal; and the un-triaged catch-all is an explicit, loud label rather
+        than a silent ``Unassigned`` bucket (REPORT-PRIORITY-COMPLETE).
+
+    Pure: a total function of the arguments, so a regression test can pin it
+    byte-for-byte.
     """
     store = _as_store(source)
 
@@ -310,35 +327,78 @@ def render_priority_burndown(
             or any(getattr(ev, "session", None) == session for ev in it.history)
         )
 
-    lines: list[str] = []
-    for group in (*PRIORITY_GROUPS, ""):  # P1..P5 then Unassigned
-        active: list[TrackedItem] = []
-        deferred: list[TrackedItem] = []
-        shipped: list[TrackedItem] = []
-        for it in store:  # id-sorted
-            if it.kind not in BACKLOG_KINDS:
-                continue
-            if (it.priority_group or "") != group:
-                continue
-            if it.status in ACTIVE_STATUSES:
-                active.append(it)
-            elif it.status == ItemStatus.DEFERRED:
-                deferred.append(it)
-            elif _shipped_this_session(it):
-                shipped.append(it)
-        if not (active or deferred or shipped):
+    # One pass: bucket every backlog item by its priority_group.
+    buckets: dict[str, dict[str, list[TrackedItem]]] = {}
+    for it in store:  # id-sorted
+        if it.kind not in BACKLOG_KINDS:
             continue
-        label = group or "Unassigned"
+        b = buckets.setdefault(
+            it.priority_group or "",
+            {"active": [], "deferred": [], "shipped": []},
+        )
+        if it.status in ACTIVE_STATUSES:
+            b["active"].append(it)
+        elif it.status == ItemStatus.DEFERRED:
+            b["deferred"].append(it)
+        elif _shipped_this_session(it):
+            b["shipped"].append(it)
+
+    # No backlog-kind items at all -> the honest "nothing here" sentinel (an
+    # empty P1 row only makes sense when a backlog actually exists).
+    if not buckets:
+        return ["- (no backlog items)"]
+
+    def _bucket(group: str) -> dict[str, list[TrackedItem]]:
+        return buckets.get(group, {"active": [], "deferred": [], "shipped": []})
+
+    # The ACTIVE group is the lowest-numbered P-group still carrying active work
+    # (Rule 21: "name the active group"); None when every P-group is clear.
+    active_group = next(
+        (g for g in PRIORITY_GROUPS if _bucket(g)["active"]), None
+    )
+
+    lines: list[str] = []
+
+    def _emit(label: str, b: dict, *, marker: str = "") -> None:
+        active, deferred, shipped = b["active"], b["deferred"], b["shipped"]
+        if not (active or deferred or shipped):
+            lines.append(f"- **{label}**{marker}: clear ✓")
+            return
         counts = f"{len(active)} active · {len(deferred)} deferred"
         if shipped:
             counts += f" · {len(shipped)} shipped {session}"
-        lines.append(f"- **{label}** ({counts}):")
-        for it in active:
-            lines.append(f"  - {it.id} — {it.title}")
-        for it in deferred:
-            lines.append(f"  - {it.id} — {it.title} (deferred)")
+        lines.append(f"- **{label}**{marker} ({counts}):")
+        # Active/deferred items are enumerated in full (id + title) in the flat
+        # section-4 lists above; here they are REFERENCED by id only, so the
+        # burn-down is a priority lens rather than a second full copy of the
+        # backlog (REPORT-BACKLOG-DEDUP).
+        if active:
+            lines.append("  - remaining: " + ", ".join(it.id for it in active))
+        if deferred:
+            lines.append("  - deferred: " + ", ".join(it.id for it in deferred))
+        # Items resolved THIS session are already gone from the flat lists, so
+        # naming them here (id + title) is the "what shipped" signal Rule 21
+        # wants, not a duplicate.
         for it in shipped:
-            lines.append(f"  - {it.id} — {it.title} (shipped {session})")
+            lines.append(f"  - shipped {session}: {it.id} — {it.title}")
+
+    for group in PRIORITY_GROUPS:
+        b = _bucket(group)
+        has_content = b["active"] or b["deferred"] or b["shipped"]
+        # Always surface P1 (the priority spine) and the active group — even when
+        # empty — so a clear P1 is an explicit "clear ✓" row, never silence
+        # (REPORT-RULE21-FIDELITY). Other groups render only when they hold work.
+        if not has_content and group != "P1" and group != active_group:
+            continue
+        _emit(group, b, marker=" ← ACTIVE" if group == active_group else "")
+
+    # The un-triaged catch-all gets a loud, explicit label (never a silent
+    # "Unassigned" bucket) so an active item awaiting a P-group is a visible
+    # action item, not a surprise (REPORT-PRIORITY-COMPLETE).
+    exempt = _bucket("")
+    if exempt["active"] or exempt["deferred"] or exempt["shipped"]:
+        _emit("Unprioritized · needs a P-group", exempt)
+
     return lines or ["- (no backlog items)"]
 
 
@@ -625,23 +685,43 @@ def render_status_report(
         released=released,
     )
     focus = _focus_build(build_rows, session)
+    # When no build is in progress and nothing shipped as a MILESTONE/RELEASE
+    # tracked-item THIS session, `focus` falls back to the newest RELEASE row —
+    # which goes stale the moment a release ships WITHOUT minting a RELEASE item
+    # (the operator's standing convention). Prefer the LIVE release facts
+    # (release_ref / version, gathered from git by the caller) so section 2 and
+    # the milestone cell name the true current build, not a historical
+    # tracked-item (REPORT-PRIORITY-COMPLETE / the S154 v0.4.35 cosmetic gap).
+    focus_is_stale_release = (
+        focus is not None
+        and focus.kind == ItemKind.RELEASE
+        and not (
+            focus.session == session
+            or any(getattr(ev, "session", None) == session for ev in focus.history)
+        )
+    )
+    live_release_label = None
+    if released and release_ref:
+        _lr = release_ref if not version else f"{release_ref} ({version})"
+        live_release_label = f"{_lr} — released; no milestone in progress"
     if milestone is None:
-        # honest default via the shared focus-build resolver: name the in-progress
-        # milestone, else the milestone/release shipped THIS session (so a completed
-        # build still names itself instead of the bare "(no active milestone)"),
-        # else the newest release — never a fabricated claim.
-        if focus is None:
-            milestone = "(no active milestone)"
-        elif focus.kind == ItemKind.MILESTONE and not focus.is_terminal:
+        # honest default: the in-progress milestone, else the milestone/release
+        # shipped THIS session, else the LIVE released build, else the newest
+        # release tracked-item — never a fabricated claim.
+        if focus is not None and focus.kind == ItemKind.MILESTONE and not focus.is_terminal:
             milestone = f"{focus.id} — {focus.title}"
-        elif focus.is_terminal and (
+        elif focus is not None and focus.is_terminal and (
             focus.session == session
             or any(getattr(ev, "session", None) == session
                    for ev in focus.history)
         ):
             milestone = f"{focus.id} — {focus.title} (shipped {session})"
-        else:
+        elif live_release_label is not None:
+            milestone = live_release_label
+        elif focus is not None:
             milestone = f"{focus.id} — {focus.title}"
+        else:
+            milestone = "(no active milestone)"
 
     release_cell = (
         "n/a" if released is None
@@ -681,7 +761,7 @@ def render_status_report(
     # (2) BUILD (planned vs actual, scoped to the CURRENT build's increments) --
     ap("### 2 · Build (planned vs actual)")
     ap("")
-    if focus is not None and focus.increments:
+    if focus is not None and focus.increments and not focus_is_stale_release:
         ap(f"**{focus.id} — {focus.title}** "
            f"({focus.kind.value}, {focus.status.value})")
         ap("")
@@ -692,6 +772,10 @@ def render_status_report(
                 f"| {i} | {_cell(inc.n)} | {_cell(inc.plan)} | {_cell(inc.status)} "
                 f"| {_cell(inc.rag)} | {_cell(inc.commit)} |"
             )
+    elif live_release_label is not None and (focus is None or focus_is_stale_release):
+        # No build in progress: name the LIVE released runtime, not a stale
+        # newest-RELEASE tracked-item (REPORT-PRIORITY-COMPLETE cosmetic fold).
+        ap(f"- Current build: {live_release_label}.")
     elif focus is not None:
         # A current build exists but records no increments yet — name it plainly
         # rather than dumping the full historical milestone list (the S136 defect a).
