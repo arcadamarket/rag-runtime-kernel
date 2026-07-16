@@ -17,7 +17,7 @@ Satisfies: M-023-P8 (proposal contract)
   "module": "rag_kernel.schemas",
   "capability": "validation",
   "description": "Pure-data validation for proposals, events, HOT/COLD structures",
-  "exports": ["validate_proposal", "validate_event", "validate_hot", "validate_cold"],
+  "exports": ["validate_proposal", "validate_event", "validate_hot", "validate_cold", "validate_next_session_directive", "normalize_directive_text", "directive_matches"],
   "use_when": "Before committing any proposal or writing any RAG structure",
   "never_bypass": true
 }
@@ -260,6 +260,100 @@ def validate_hot(hot: Any) -> ValidationResult:
                 errors.append(
                     f"meta.{key} must be a string, got {type(meta[key]).__name__}"
                 )
+
+    return (len(errors) == 0, errors)
+
+
+# ---------------------------------------------------------------------------
+# KA-INTENT-FIDELITY — next_session_directive (decision-of-record) contract
+# ---------------------------------------------------------------------------
+#
+# Root cause this closes (E-055 / the S146-class failure): a session close
+# STATED a next-session handoff/directive but never persisted it as a discrete,
+# gate-checkable field — the directive lived only in the ephemeral close report
+# (``--handoff`` -> report section 7) or as prose folded into an unrelated rule,
+# so a later "directive banked" claim had no structured artifact backing it.
+#
+# The fix is a DATA-SHAPE fix, not a fuzzy-match fix (LLM proposes, System
+# decides, State persists): the directive is persisted verbatim into a structured
+# ``next_session_directive`` record, and the session-end gate refuses to seal
+# unless the STATED handoff normalized-matches the STORED directive. Matching is
+# deterministic, stdlib-only, zero-token — normalization collapses insignificant
+# whitespace and case ONLY, never meaning; no threshold, no embedding, no model.
+# The optional ``decision_ids`` bind the directive to tracked_items by ID, which
+# the inc2 plan-vs-settled audit resolves without any prose matching.
+
+REQUIRED_DIRECTIVE_KEYS = frozenset({
+    "session",       # id of the CLOSING session that authored the directive
+    "for_session",   # id of the NEXT session the directive governs
+    "directive",     # the settled handoff text, stored verbatim
+})
+
+
+def normalize_directive_text(text: Any) -> str:
+    """Deterministic normalization for directive matching.
+
+    Collapses runs of whitespace to a single space, strips ends, and casefolds.
+    This normalizes ONLY presentation-insignificant differences (spacing, case)
+    — never meaning — so a match stays exact in substance while tolerating a
+    reflowed or re-cased restatement. Non-str input normalizes to "" (a non-str
+    directive is a validation error surfaced elsewhere, and "" never matches a
+    real directive, so the gate fails loud rather than passing on junk).
+    """
+    if not isinstance(text, str):
+        return ""
+    return " ".join(text.split()).casefold()
+
+
+def directive_matches(stated: Any, stored: Any) -> bool:
+    """True iff two directive texts are equal after normalization.
+
+    Empty/blank normalized text never matches — a stated or stored directive that
+    reduces to "" cannot satisfy the gate (fail-loud on absence, not silent pass).
+    """
+    ns = normalize_directive_text(stated)
+    if not ns:
+        return False
+    return ns == normalize_directive_text(stored)
+
+
+def validate_next_session_directive(nsd: Any) -> ValidationResult:
+    """Validate a ``next_session_directive`` (decision-of-record) structure.
+
+    Required:
+    - Top-level must be a dict
+    - ``session``, ``for_session``, ``directive`` present and non-empty str
+    Optional:
+    - ``decision_ids``: list of tracked_item id strings (inc2 plan binding)
+    - ``authored_utc``: ISO-8601 timestamp str
+    """
+    errors: list[str] = []
+
+    if not isinstance(nsd, dict):
+        return _fail(
+            [f"next_session_directive must be a dict, got {type(nsd).__name__}"]
+        )
+
+    for key in REQUIRED_DIRECTIVE_KEYS:
+        if key not in nsd:
+            errors.append(f"next_session_directive missing required field: '{key}'")
+        elif not isinstance(nsd[key], str):
+            errors.append(
+                f"next_session_directive.{key} must be a string, "
+                f"got {type(nsd[key]).__name__}"
+            )
+        elif not nsd[key].strip():
+            errors.append(f"next_session_directive.{key} must not be empty")
+
+    if "decision_ids" in nsd:
+        dids = nsd["decision_ids"]
+        if not isinstance(dids, list) or not all(isinstance(x, str) for x in dids):
+            errors.append(
+                "next_session_directive.decision_ids must be a list of strings"
+            )
+
+    if "authored_utc" in nsd and not isinstance(nsd["authored_utc"], str):
+        errors.append("next_session_directive.authored_utc must be a string")
 
     return (len(errors) == 0, errors)
 

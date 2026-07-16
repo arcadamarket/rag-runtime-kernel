@@ -416,6 +416,10 @@ def build_parser() -> argparse.ArgumentParser:
     ckpt_parser.add_argument("--tasks", type=str, default=None, help="JSON array of open task strings to set (replaces existing)")
     ckpt_parser.add_argument("--status", type=str, default=None, help="New state_machine_status value")
     ckpt_parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
+    # KA-INTENT-FIDELITY inc1 — a stated handoff is persisted VERBATIM as the
+    # structured next_session_directive (decision-of-record); the session-end gate
+    # refuses to seal unless it landed and matches (E-055/S146 guard).
+    ckpt_parser.add_argument("--handoff", type=str, default=None, help="Next-session directive/handoff; persisted verbatim into next_session_directive.")
     # KA-16 — optional ERROR_LOG fold (idempotent) as part of the governed checkpoint.
     ckpt_parser.add_argument("--error-log-entry", type=str, default=None, help="Markdown ERROR_LOG entry to fold in (idempotent).")
     ckpt_parser.add_argument("--error-log-id", type=str, default=None, help="Unique id for the ERROR_LOG entry (default: <session>-checkpoint).")
@@ -2167,6 +2171,30 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
         else rag_path.parent / "ERROR_LOG.md"
     )
 
+    # KA-INTENT-FIDELITY inc1 — persist a STATED handoff as a structured,
+    # gate-checkable ``next_session_directive`` (decision-of-record), VERBATIM.
+    # Root cause closed (E-055 / S146): a close STATED a next-session directive
+    # but it lived only in the ephemeral close report (--handoff -> section 7), so
+    # a later "directive banked" claim had no discrete field backing it. Folding
+    # the write into this atomic checkpoint keeps HOT/.bak parity; an invalid
+    # record aborts BEFORE any side effect (ERROR_LOG fold / RAG write), leaving
+    # the seq un-incremented. The session-end gate (_drive_close) independently
+    # re-verifies persistence + verbatim match before the seal.
+    _handoff = getattr(args, "handoff", None)
+    _directive_record: "dict | None" = None
+    _directive_errors: list[str] = []
+    if isinstance(_handoff, str) and _handoff.strip():
+        from rag_kernel.schemas import validate_next_session_directive
+        _directive_record = {
+            "session": session_id,
+            "for_session": _next_session_id(session_id),
+            "directive": _handoff,
+            "authored_utc": now,
+        }
+        ok_d, _directive_errors = validate_next_session_directive(_directive_record)
+        if not ok_d:
+            _directive_record = None
+
     if args.dry_run:
         print(f"\n[DRY RUN] Would update {rag_path}:")
         print(f"  Session: {session_id}")
@@ -2186,7 +2214,33 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
                 f"  ERROR_LOG: would {'SKIP (id already present)' if already else 'append'} "
                 f"entry id='{eid}' -> {el_path}"
             )
+        if isinstance(_handoff, str) and _handoff.strip():
+            if _directive_errors:
+                print(
+                    "  next_session_directive: would REFUSE — invalid record: "
+                    + "; ".join(_directive_errors)
+                )
+            else:
+                print(
+                    "  next_session_directive: would persist verbatim for "
+                    f"{_directive_record['for_session']} "
+                    "(KA-INTENT-FIDELITY inc1)"
+                )
         return 0
+
+    # 0. KA-INTENT-FIDELITY inc1 — a stated handoff that failed validation aborts
+    # the checkpoint fail-loud BEFORE any side effect (no ERROR_LOG append, no RAG
+    # write); a valid one is folded into the atomic write below.
+    if isinstance(_handoff, str) and _handoff.strip():
+        if _directive_errors:
+            print(
+                "ERROR: next_session_directive invalid — aborting checkpoint "
+                "before any write (seq un-incremented): "
+                + "; ".join(_directive_errors),
+                file=sys.stderr,
+            )
+            return 1
+        rag["next_session_directive"] = _directive_record
 
     # 1. ERROR_LOG fold (idempotent) — must succeed before the RAG commit.
     if error_log_entry:
@@ -2634,6 +2688,22 @@ def _append_error_log(path: Path, text: str, entry_id: str) -> bool:
     return True
 
 
+def _next_session_id(sid: str) -> str:
+    """Best-effort NEXT session id for a directive's ``for_session``.
+
+    Increments a trailing integer run (``S148`` -> ``S149``), preserving prefix
+    and zero-pad width. A sid with no trailing digits gets a ``-next`` suffix so
+    the directive still validates (non-empty str). Deterministic, stdlib-only.
+    """
+    import re
+    m = re.search(r"(\d+)$", sid or "")
+    if not m:
+        return f"{sid}-next" if sid else "next"
+    digits = m.group(1)
+    nxt = str(int(digits) + 1).zfill(len(digits))
+    return sid[: m.start(1)] + nxt
+
+
 def _build_close_marker(
     sid: str, phase: str, steps: dict, started_utc: str,
     completed_utc: "str | None", *, transfer_ready: bool = False,
@@ -2762,6 +2832,10 @@ def _drive_close(
     """
     steps = dict(marker.get("steps", {})) if marker else {}
     started = (marker.get("started_utc") if marker else None) or _utcnow_iso()
+    # KA-INTENT-FIDELITY inc1 — the stated handoff for this close (if any). The
+    # checkpoint step persists it verbatim into next_session_directive; the gate
+    # below re-verifies before the seal is allowed to proceed.
+    handoff = getattr(report_args, "handoff", None) if report_args is not None else None
 
     # Step 1/4 — checkpoint (+ idempotent ERROR_LOG fold).
     if not steps.get("checkpoint"):
@@ -2770,6 +2844,7 @@ def _drive_close(
             rag=rag_path, session=sid, summary=summary, tasks=tasks,
             status=status, dry_run=False, error_log_entry=error_log_entry,
             error_log_id=error_log_id, error_log_path=error_log_path,
+            handoff=handoff,
         ))
         if rc != 0:
             print(
@@ -2787,6 +2862,40 @@ def _drive_close(
         )
     else:
         print("[1/4] Checkpoint: already banked (resuming).")
+
+    # Step 1b — KA-INTENT-FIDELITY inc1 SEAL GATE. If this close STATED a handoff,
+    # refuse to advance toward transfer_ready unless it was persisted VERBATIM as
+    # the structured next_session_directive. An independent re-read + normalized-
+    # exact match is the fail-loud guard for the E-055/S146 "directive stated but
+    # never persisted (or persisted lossily)" class — the very failure this
+    # feature exists to end. On a miss the marker stays CHECKPOINTED (resumable)
+    # and transfer_ready is never set.
+    if isinstance(handoff, str) and handoff.strip():
+        from rag_kernel.schemas import directive_matches
+        try:
+            with open(rag_path, "r", encoding="utf-8-sig") as _f:
+                _nsd = json.load(_f).get("next_session_directive")
+        except (OSError, ValueError) as _exc:
+            print(
+                f"ERROR: intent-fidelity gate could not read RAG ({_exc}) — "
+                "aborting close (marker CHECKPOINTED, resumable).",
+                file=sys.stderr,
+            )
+            return 1
+        _stored = _nsd.get("directive") if isinstance(_nsd, dict) else None
+        if not directive_matches(handoff, _stored):
+            print(
+                "ERROR: intent-fidelity gate FAILED — the stated handoff is not "
+                "persisted verbatim in next_session_directive; refusing to seal "
+                "(marker CHECKPOINTED, resumable). This is the E-055/S146 guard "
+                "(KA-INTENT-FIDELITY inc1).",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "[1b] intent-fidelity: next_session_directive persisted + "
+            "verbatim-matched (KA-INTENT-FIDELITY inc1)."
+        )
 
     # Step 2/4 — close the session logger (KA-4 gate satisfied by step 1).
     if not steps.get("logger_close"):
