@@ -17,7 +17,7 @@ Satisfies: M-023-P8 (proposal contract)
   "module": "rag_kernel.schemas",
   "capability": "validation",
   "description": "Pure-data validation for proposals, events, HOT/COLD structures",
-  "exports": ["validate_proposal", "validate_event", "validate_hot", "validate_cold", "validate_next_session_directive", "normalize_directive_text", "directive_matches"],
+  "exports": ["validate_proposal", "validate_event", "validate_hot", "validate_cold", "validate_next_session_directive", "normalize_directive_text", "directive_matches", "audit_plan_against_directive"],
   "use_when": "Before committing any proposal or writing any RAG structure",
   "never_bypass": true
 }
@@ -356,6 +356,115 @@ def validate_next_session_directive(nsd: Any) -> ValidationResult:
         errors.append("next_session_directive.authored_utc must be a string")
 
     return (len(errors) == 0, errors)
+
+
+def audit_plan_against_directive(
+    plan: Any,
+    cited_ids: Any,
+    nsd: Any,
+    tracked_item_ids: Any,
+) -> ValidationResult:
+    """KA-INTENT-FIDELITY inc2 — verify a session PLAN honors the settled directive.
+
+    The session-START counterpart to inc1's session-END seal gate. inc1 guarantees
+    the prior session's directive was PERSISTED verbatim as a structured
+    ``next_session_directive`` (decision-of-record). inc2 guarantees the NEW
+    session's stated plan is FAITHFUL to that record — closing the other half of
+    E-055 / the S146 drift, where a session anchored on a lossy handoff line and
+    recited a stale blueprint instead of the settled decision-of-record.
+
+    Deterministic, stdlib-only, zero-token — no semantics, no embeddings, no
+    threshold (determinism > flexibility for a fail-loud gate). Three checks:
+
+    1. DIRECTIVE VALIDITY — ``nsd`` must be a well-formed directive (delegates to
+       :func:`validate_next_session_directive`). A missing / degraded record cannot
+       be audited against, so the gate fails loud rather than passing on absence.
+    2. ID-BINDING — the plan's ``cited_ids`` bind to the directive by ID:
+       (a) when the directive PINS ``decision_ids``, the cited set must equal that
+       pinned set exactly — no missing (the plan skipped a settled decision), no
+       extra (the plan smuggled in an unsanctioned one); (b) every cited id AND
+       every pinned id must RESOLVE to a real ``tracked_items`` entry
+       (``tracked_item_ids``). An id that resolves to nothing fails loud.
+    3. NORMALIZED-EXACT RESTATEMENT — ``plan`` must :func:`directive_matches` the
+       stored ``directive`` text (whitespace/case-insensitive only, never meaning).
+
+    ``cited_ids`` and ``tracked_item_ids`` are iterables of id strings. Returns
+    ``(ok, errors)``; errors are order-preserving and de-duplicated.
+    """
+    ok_d, d_errors = validate_next_session_directive(nsd)
+    if not ok_d:
+        # Cannot audit a plan against an unusable record — surface WHY, fail loud.
+        return (
+            False,
+            [f"next_session_directive not auditable: {e}" for e in d_errors]
+            or ["next_session_directive not auditable"],
+        )
+
+    errors: list[str] = []
+
+    # Normalize the plan's cited ids (fail loud on a non-list rather than coerce).
+    if isinstance(cited_ids, (list, tuple)):
+        cited = [c for c in cited_ids if isinstance(c, str) and c.strip()]
+    else:
+        errors.append("cited_ids must be a list of tracked_item id strings")
+        cited = []
+
+    known = (
+        set(tracked_item_ids)
+        if isinstance(tracked_item_ids, (list, tuple, set, frozenset))
+        else set()
+    )
+
+    pinned = nsd.get("decision_ids")
+    has_pins = (
+        isinstance(pinned, list)
+        and bool(pinned)
+        and all(isinstance(x, str) for x in pinned)
+    )
+
+    # (2a) ID-binding: cited set must equal the directive-pinned set exactly.
+    if has_pins:
+        pinned_set = set(pinned)
+        cited_set = set(cited)
+        for missing in sorted(pinned_set - cited_set):
+            errors.append(
+                f"plan omits directive-pinned decision id: {missing}"
+            )
+        for extra in sorted(cited_set - pinned_set):
+            errors.append(
+                f"plan cites a decision id the directive did not sanction: {extra}"
+            )
+
+    # (2b) Resolution: every cited id AND every pinned id must resolve to a
+    #      tracked_item (the SOURCE decisions must actually exist).
+    for cid in cited:
+        if cid not in known:
+            errors.append(
+                f"cited decision id does not resolve to a tracked_item: {cid}"
+            )
+    if has_pins:
+        for pid in pinned:
+            if pid not in known:
+                errors.append(
+                    f"directive-pinned decision id does not resolve to a "
+                    f"tracked_item: {pid}"
+                )
+
+    # (3) Normalized-exact restatement of the directive text.
+    if not directive_matches(plan, nsd.get("directive")):
+        errors.append(
+            "plan restatement does not normalized-match the stored directive text"
+        )
+
+    # Order-preserving de-dup (a pinned id absent from both cited and known can
+    # surface the same id twice).
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for e in errors:
+        if e not in seen:
+            seen.add(e)
+            uniq.append(e)
+    return (len(uniq) == 0, uniq)
 
 
 # ---------------------------------------------------------------------------

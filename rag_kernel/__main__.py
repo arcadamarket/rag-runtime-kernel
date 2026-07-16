@@ -57,6 +57,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "graph": "Run a Graph Orchestrator DAG (JSON spec) through the kernel runtime",
     "resolve|defer|reopen|start|discard|supersede": "Guarded lifecycle transition of a tracked item via drift_store (DRIFT-ELIM)",
     "items": "Read-only render of the canonical tracked_items array",
+    "intent-audit": "Session-START plan-vs-settled gate: verify a stated plan honors the next_session_directive (ID-binding + normalized-exact restatement) and load the SOURCE decisions — KA-INTENT-FIDELITY inc2",
     "render": "Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items; --apply rewrites the legacy arrays atomically (DRIFT-ELIM increment 4)",
     "note": "Refresh a tracked item's one-line note through the guarded API (status untouched) — DRIFT-ELIM increment 5 (INS-038)",
     "priority": "Set a tracked item's Rule 21 priority_group (P1..P5, or \"\" to clear) through the guarded API (status untouched) — REPORT-PRIORITY-GROUPS inc1",
@@ -492,6 +493,26 @@ def build_parser() -> argparse.ArgumentParser:
     items_parser.add_argument("--status", type=str, default=None, help="Filter by status (e.g. OPEN, DEFERRED)")
     items_parser.add_argument("--kind", type=str, default=None, help="Filter by kind (e.g. TASK, MILESTONE)")
     items_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of a table")
+
+    # -- intent-audit (KA-INTENT-FIDELITY inc2: session-START plan-vs-settled gate) --
+    intent_parser = subparsers.add_parser(
+        "intent-audit",
+        help="Verify a session plan honors the settled next_session_directive "
+             "(ID-binding + normalized-exact restatement) — KA-INTENT-FIDELITY inc2.",
+    )
+    intent_parser.add_argument(
+        "--rag", type=Path, default=_default_rag_path(),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    intent_parser.add_argument(
+        "--plan", type=str, required=True,
+        help="The stated session plan — must normalized-match the stored directive text.",
+    )
+    intent_parser.add_argument(
+        "--plan-decisions", type=str, default=None,
+        help="Comma-separated tracked_item ids the plan binds to (must match the "
+             "directive's decision_ids and resolve to real items).",
+    )
 
     # -- render (DRIFT-ELIM increment 4: project tracked_items into legacy surfaces) --
     render_parser = subparsers.add_parser(
@@ -1461,6 +1482,82 @@ def cmd_items(args: argparse.Namespace) -> int:
         sup = f"  -> {it.superseded_by}" if it.superseded_by else ""
         print(f"  {it.id:<{width}}  {it.status.value:<12} {it.kind.value:<10} {it.title}{sup}")
     return 0
+
+
+def cmd_intent_audit(args: argparse.Namespace) -> int:
+    """KA-INTENT-FIDELITY inc2 — session-START plan-vs-settled audit (fail-loud).
+
+    The opening counterpart to inc1's closing seal gate. inc1 persisted the prior
+    session's directive verbatim as a structured ``next_session_directive``
+    (decision-of-record); this verb verifies the NEW session's stated PLAN honors
+    it, closing the other half of E-055 / the S146 drift (anchoring on a lossy
+    handoff line and reciting a stale blueprint instead of the settled decision).
+
+    It does two things:
+
+    1. LOADS THE SOURCE DECISIONS — resolves the directive's ``decision_ids`` to
+       their live ``tracked_items`` records (id, status, title) and prints them, so
+       the session builds on the source of record, NOT the compressed handoff line.
+    2. AUDITS the plan against the directive via
+       :func:`rag_kernel.schemas.audit_plan_against_directive` — ID-binding (cited
+       decisions resolve and match the directive's pinned set) plus normalized-exact
+       restatement. Deterministic, stdlib-only, zero-token; exit 1 on any finding.
+    """
+    from rag_kernel.drift_store import DriftStoreError, TrackedItemStore, load_hot
+    from rag_kernel.schemas import audit_plan_against_directive
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    try:
+        hot = load_hot(rag_path)
+        store = TrackedItemStore.from_hot(hot)
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    nsd = hot.get("next_session_directive")
+    by_id = {it.id: it for it in store}
+
+    # 1. Carry-forward loads the SOURCE decision — not the compressed line.
+    print("Settled directive (decision-of-record):")
+    if isinstance(nsd, dict):
+        print(f"  {nsd.get('session')} -> for {nsd.get('for_session')}")
+        print(f"  directive: {nsd.get('directive')}")
+        dids = nsd.get("decision_ids") or []
+        if dids:
+            print("  source decisions:")
+            for did in dids:
+                it = by_id.get(did)
+                if it is None:
+                    print(f"    - {did}: (UNRESOLVED — no tracked_item)")
+                else:
+                    print(f"    - {it.id} [{it.status.value}] {it.title}")
+    else:
+        print("  (none persisted)")
+
+    cited: list[str] = []
+    if args.plan_decisions:
+        cited = [s.strip() for s in args.plan_decisions.split(",") if s.strip()]
+
+    ok, findings = audit_plan_against_directive(
+        args.plan, cited, nsd, list(by_id.keys())
+    )
+    print()
+    if ok:
+        print(
+            "intent-audit: OK — plan is faithful to the settled directive "
+            "(ID-binding + normalized-exact restatement)."
+        )
+        return 0
+    print(
+        "intent-audit: FAIL — plan does not honor the settled directive:",
+        file=sys.stderr,
+    )
+    for f in findings:
+        print(f"  - {f}", file=sys.stderr)
+    return 1
 
 
 def cmd_render(args: argparse.Namespace) -> int:
@@ -4501,6 +4598,7 @@ def main(argv: list[str] | None = None) -> int:
         "reopen": cmd_item_transition, "start": cmd_item_transition,
         "discard": cmd_item_transition, "supersede": cmd_item_transition,
         "items": cmd_items,
+        "intent-audit": cmd_intent_audit,
         "render": cmd_render,
         "report": cmd_report,
         "note": cmd_note,
