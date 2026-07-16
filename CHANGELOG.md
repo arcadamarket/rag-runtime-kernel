@@ -4,6 +4,10 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+## [v0.4.34] — 2026-07-16
+
+_REPORT-RENDER-ATTEST — the canonical status report is now machine-attested against re-prosing. `report` appends a `report-attest: sha256(<normalized body>)` trailer, and a new `report --verify <file>` recomputes it and fails loud on any mismatch or absence, so a hand-typed / summarized / reflowed report is detectable; the governed `report_render_attestation` rule makes an unattested canonical report INVALID. Mechanizes Rule 12 for the in-chat / on-demand render path that S139 WIRE-CLOSE (session-end only) left unguarded — the exact gap behind E-060 (S136) and its recurrence E-062 (S149). This release also ships **KA-INTENT-FIDELITY inc1** (already on main): a `next_session_directive` decision-of-record + a session-end handoff-persistence seal gate that refuses to seal unless a stated handoff is persisted verbatim — increment 1 of 2, with the plan-vs-settled ID-bound audit (inc2) still to come. Runtime `__version__` 0.4.33 → 0.4.34, `__spec_version__` unchanged (3.2.6); no new capability module (still 19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change); full suite 1,813 → 1,841 green (+28: +19 inc1, +9 REPORT-RENDER-ATTEST)._
+
 ## [v0.4.33] — 2026-07-15
 
 _SECRETS-INGEST-GUARD (P1/G2) — the ingest-time complement to v0.4.32's audit-time KA-SECRETS-BOUNDARY, shipping P1 as a tagged release (Rule 21 diversion trigger). Runtime `__version__` 0.4.32 → 0.4.33, `__spec_version__` unchanged (3.2.6); no new capability module (still 19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change); full suite 1,806 → 1,813 green (+7). Module version: `drift_audit` 1.13.0 → 1.14.0._
