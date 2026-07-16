@@ -522,8 +522,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
     )
     report_parser.add_argument(
-        "--session", type=str, required=True,
-        help="Session id for the report heading (e.g. S136)",
+        "--session", type=str, default=None,
+        help="Session id for the report heading (e.g. S136). Required unless --verify.",
+    )
+    # REPORT-RENDER-ATTEST (E-062) — verify a rendered/pasted report is the VERBATIM
+    # kernel render, not a hand-authored / re-prosed copy. Recomputes the
+    # report-attest sha256 over the report body and fails loud on mismatch/absence.
+    report_parser.add_argument(
+        "--verify", type=Path, default=None, metavar="FILE",
+        help="Verify FILE is a verbatim `rag_kernel report` render (checks the report-attest token); fail loud if re-prosed or missing.",
     )
     report_parser.add_argument(
         "--context-pct", type=str, default=None,
@@ -1566,6 +1573,65 @@ def _drift_gate_ok(rag_path: Path) -> "bool | None":
     return None
 
 
+# ---------------------------------------------------------------------------
+# REPORT-RENDER-ATTEST (E-062, recurrence of E-060) — report provenance guard.
+# ---------------------------------------------------------------------------
+#
+# Rule 12 ("the report is a DETERMINISTIC RENDER, never re-prosed") was behavioral
+# only, so the in-chat / on-demand report kept getting hand-authored (E-060 S136,
+# E-062 S149). This mechanizes it: `report` appends a `report-attest: sha256(body)`
+# token, and `report --verify` recomputes it and fails loud on mismatch/absence.
+# A hand-typed or summarized report cannot carry a matching token, so re-prosing
+# becomes machine-detectable. Zero-token, stdlib-only, deterministic.
+
+_REPORT_ATTEST_SEP = "\n\n---\nreport-attest: "
+
+
+def _normalize_report_body(body: str) -> str:
+    """Deterministic normalization for attestation: strip trailing whitespace per
+    line and drop trailing blank lines. Tolerates paste-time trailing-whitespace /
+    newline drift WITHOUT tolerating any content change."""
+    lines = [ln.rstrip() for ln in body.splitlines()]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _report_attest_token(body: str) -> str:
+    import hashlib
+    digest = hashlib.sha256(_normalize_report_body(body).encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _append_report_attest(body: str) -> str:
+    token = _report_attest_token(body)
+    return (
+        f"{body}{_REPORT_ATTEST_SEP}{token}\n"
+        "(deterministic render — `rag_kernel report`; a re-prosed copy fails "
+        "`rag_kernel report --verify <file>`)"
+    )
+
+
+def _verify_report_attest(text: str) -> "tuple[bool, str]":
+    """Return (ok, detail). ok iff ``text`` carries a report-attest token that
+    matches a recompute over its own body. A missing token => INVALID: a re-prosed
+    report has no valid token."""
+    if _REPORT_ATTEST_SEP not in text:
+        return False, (
+            "no report-attest token — not a kernel render "
+            "(re-prosed / hand-authored)"
+        )
+    body, _, rest = text.rpartition(_REPORT_ATTEST_SEP)
+    claimed = rest.splitlines()[0].strip() if rest.strip() else ""
+    recomputed = _report_attest_token(body)
+    if claimed == recomputed:
+        return True, f"AUTHENTIC — verbatim kernel render ({recomputed})"
+    return False, (
+        "body does not match its report-attest token "
+        f"(claimed {claimed or 'MISSING'}, recomputed {recomputed}) — re-prosed or altered"
+    )
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Render the 7-section canonical status report deterministically (REPORT-VERB).
 
@@ -1579,6 +1645,24 @@ def cmd_report(args: argparse.Namespace) -> int:
     verdict toward AMBER, never to a false GREEN (Rule 14).
     """
     from rag_kernel.drift_store import DriftStoreError
+
+    # REPORT-RENDER-ATTEST (E-062) — verify mode: no RAG or --session needed; check
+    # a rendered/pasted report carries a matching report-attest token. Fails loud
+    # on a re-prosed / hand-authored / altered copy.
+    verify_path = getattr(args, "verify", None)
+    if verify_path is not None:
+        try:
+            text = Path(verify_path).read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"Error: cannot read {verify_path}: {e}", file=sys.stderr)
+            return 1
+        ok, detail = _verify_report_attest(text)
+        print(("report --verify: OK — " if ok else "report --verify: FAIL — ") + detail)
+        return 0 if ok else 1
+
+    if not getattr(args, "session", None):
+        print("Error: --session is required (unless --verify).", file=sys.stderr)
+        return 1
 
     rag_path = args.rag.resolve()
     if not rag_path.exists():
@@ -1658,7 +1742,7 @@ def _build_report_text(rag_path: Path, ns: argparse.Namespace) -> str:
     tests = getattr(ns, "tests", None)
     tests_ok = None if tests is None else (not getattr(ns, "tests_failing", False))
 
-    return drift_render.render_status_report(
+    body = drift_render.render_status_report(
         store,
         session=ns.session,
         meta=meta,
@@ -1680,6 +1764,7 @@ def _build_report_text(rag_path: Path, ns: argparse.Namespace) -> str:
         bak_parity=bak_parity,
         handoff=getattr(ns, "handoff", None),
     )
+    return _append_report_attest(body)
 
 
 def cmd_note(args: argparse.Namespace) -> int:
