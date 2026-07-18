@@ -38,6 +38,7 @@ write (tmp -> fsync -> ``.bak`` parity mirror -> rename) via
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -203,6 +204,15 @@ class MigrationPlan:
     notes: list[str] = field(default_factory=list)
     policy_from: Optional[str] = None
     policy_to: Optional[str] = None
+    # MIGRATE-INITPROMPT-PAIRING (S160): meta.policy_version and
+    # meta.rag_files.init_prompt are a COHERENCE PAIR — spec_parser seeds both from
+    # the same spec file at init. Advancing one without the other manufactures a
+    # record/reality split (Rule 11): the deployment claims one spec version while
+    # pointing at another spec file. Found by dogfooding this verb on the kernel's
+    # own RAG, which sat at policy 3.2.3 / init_prompt v3.2.3 against code at 3.2.6
+    # for four spec generations with audit reading clean throughout.
+    init_prompt_from: Optional[str] = None
+    init_prompt_to: Optional[str] = None
     policy_action: str = "unchanged"  # advanced | ahead-preserved | unchanged | absent
 
     @property
@@ -245,6 +255,25 @@ def plan_migration(hot: dict, *, spec_version: Optional[str] = None) -> Migratio
             plan.policy_action = "ahead-preserved"
         else:
             plan.policy_action = "unchanged"
+
+    # Pair the init_prompt pointer to the advancing policy_version. Deployment-
+    # agnostic: the embedded version token is rewritten in place, so any naming
+    # convention survives and a pointer that carries no recognisable version token
+    # is left untouched rather than guessed at.
+    if plan.policy_action == "advanced" and plan.policy_from and plan.policy_to:
+        have_prompt = (meta.get("rag_files") or {}).get("init_prompt")
+        if isinstance(have_prompt, str) and have_prompt:
+            # Bounded so a version token is never matched inside a longer one:
+            # 3.2.3 must not match in 13.2.30 (lookbehind) or v3.2.31 (lookahead),
+            # while still matching the common "..._v3.2.3.md" where the trailing
+            # dot belongs to the file extension, not the version.
+            paired, n = re.subn(
+                r"(?<![0-9.])" + re.escape(plan.policy_from) + r"(?!\d)(?!\.\d)",
+                plan.policy_to,
+                have_prompt,
+            )
+            if n and paired != have_prompt:
+                plan.init_prompt_from, plan.init_prompt_to = have_prompt, paired
     return plan
 
 
@@ -261,6 +290,8 @@ def apply_migration(
         meta["schema_version"] = plan.schema_to
     if plan.policy_action == "advanced":
         meta["policy_version"] = plan.policy_to
+        if plan.init_prompt_to:
+            meta.setdefault("rag_files", {})["init_prompt"] = plan.init_prompt_to
     if plan.steps or plan.policy_action == "advanced":
         meta["last_updated_utc"] = stamp
         history = meta.setdefault("migrations", [])

@@ -397,3 +397,68 @@ class TestExtensibility:
         monkeypatch.setattr(sm, "CURRENT_SCHEMA_VERSION", "9.9")
         steps = sm.resolve_path(SCHEMA_MIGRATIONS[0].from_version)
         assert [s.to_version for s in steps][-1] == "9.9"
+
+
+# --------------------------------------------------------------------------- #
+# MIGRATE-INITPROMPT-PAIRING (S160)
+# --------------------------------------------------------------------------- #
+class TestInitPromptPairing:
+    """meta.policy_version and meta.rag_files.init_prompt are a coherence PAIR.
+
+    Found by dogfooding this verb on the kernel's own RAG: policy_version advanced
+    3.2.3 -> 3.2.7 while init_prompt kept pointing at the v3.2.3 spec file, so the
+    deployment claimed one spec version and pointed at another (Rule 11 split).
+    """
+
+    @staticmethod
+    def _hot_with_prompt(prompt, policy="3.2.3", schema=CURRENT_SCHEMA_VERSION):
+        hot = _hot(schema=schema, policy=policy)
+        hot["meta"]["rag_files"] = {"init_prompt": prompt}
+        return hot
+
+    def test_init_prompt_advances_with_policy(self):
+        hot = self._hot_with_prompt("INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md")
+        plan = plan_migration(hot, spec_version="3.2.7")
+        assert plan.policy_action == "advanced"
+        assert plan.init_prompt_from == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md"
+        assert plan.init_prompt_to == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md"
+        out = apply_migration(hot, plan, session="S160")
+        assert out["meta"]["rag_files"]["init_prompt"] == plan.init_prompt_to
+        assert out["meta"]["policy_version"] == "3.2.7"
+
+    def test_naming_convention_is_not_hardcoded(self):
+        hot = self._hot_with_prompt("specs/house-style-3.2.3.markdown")
+        plan = plan_migration(hot, spec_version="3.2.7")
+        assert plan.init_prompt_to == "specs/house-style-3.2.7.markdown"
+
+    def test_pointer_without_version_token_is_left_alone(self):
+        hot = self._hot_with_prompt("INIT_PROMPT.md")
+        plan = plan_migration(hot, spec_version="3.2.7")
+        assert plan.policy_action == "advanced"
+        assert plan.init_prompt_to is None
+        out = apply_migration(hot, plan, session="S160")
+        assert out["meta"]["rag_files"]["init_prompt"] == "INIT_PROMPT.md"
+
+    def test_no_partial_version_token_match(self):
+        # 3.2.3 must not match inside 13.2.30 or v3.2.31
+        hot = self._hot_with_prompt("SPEC_v3.2.31.md")
+        plan = plan_migration(hot, spec_version="3.2.7")
+        assert plan.init_prompt_to is None
+
+    def test_absent_rag_files_is_not_fabricated(self):
+        hot = _hot(schema=CURRENT_SCHEMA_VERSION, policy="3.2.3")
+        plan = plan_migration(hot, spec_version="3.2.7")
+        assert plan.init_prompt_to is None
+        out = apply_migration(hot, plan, session="S160")
+        assert "init_prompt" not in out["meta"].get("rag_files", {})
+
+    def test_ahead_policy_does_not_touch_init_prompt(self):
+        hot = self._hot_with_prompt(
+            "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.9.md", policy="3.2.9"
+        )
+        plan = plan_migration(hot, spec_version="3.2.7")
+        assert plan.policy_action == "ahead-preserved"
+        assert plan.init_prompt_to is None
+        out = apply_migration(hot, plan, session="S160")
+        assert (out["meta"]["rag_files"]["init_prompt"]
+                == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.9.md")

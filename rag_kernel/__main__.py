@@ -4405,6 +4405,9 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         print("  policy_version: absent on target — left absent (not fabricated)")
     else:
         print(f"  policy_version: {plan.policy_from} (already current)")
+    if plan.init_prompt_to:
+        print(f"  rag_files.init_prompt: {plan.init_prompt_from} -> "
+              f"{plan.init_prompt_to} (paired to policy_version)")
     print("  rag_version / tracked_items / operating_protocol: untouched "
           "(project-owned state)")
     if wrote:

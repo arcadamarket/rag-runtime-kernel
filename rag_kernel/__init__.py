@@ -66,7 +66,7 @@ Zero external dependencies. Python 3.12-3.14, standard library only.
 # 0.4.7 / spec 3.2.2 while the live authorities had moved on). The drift_audit
 # `manifest_version_binding` check fails loud if a literal is ever re-introduced
 # or if the injected manifest disagrees with these constants.
-__version__ = "0.4.38"
+__version__ = "0.4.39"
 __spec_version__ = "3.2.7"
 
 # ── Supported Python matrix (KA-17) ───────────────────────────
