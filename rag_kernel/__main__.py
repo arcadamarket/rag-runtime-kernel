@@ -4362,8 +4362,9 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     hand-edit of another project's canonical state. This verb reads the TARGET's own
     meta, resolves a declared ladder path, and applies it atomically (tmp -> .bak
     parity -> rename). Direction is never assumed: a target AHEAD of this kernel is
-    refused, not downgraded (the eBay clone runs policy_version 3.2.7 against this
-    kernel's 3.2.6). Idempotent — already-current is a no-op with no write. Exit 0 on
+    refused, not downgraded (at S159 the eBay clone ran policy_version 3.2.7 against
+    this kernel's then-current 3.2.6; the S160 self-adoption of v3.2.7 closed that
+    gap). Idempotent — already-current is a no-op with no write. Exit 0 on
     success/no-op, 1 on any fail-loud condition.
     """
     from rag_kernel.schema_migrate import SchemaMigrateError, migrate_file

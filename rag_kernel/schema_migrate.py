@@ -16,8 +16,9 @@ DESIGN CONTRACT (operator-banked, S158/S159)
    ``to_version`` IS the schema the kernel currently speaks. Adding a future step is
    a data change, not a logic change.
 2. **Read the target's meta — never assume direction.** A deploy can legitimately be
-   AHEAD of this kernel on an independently-versioned field (the eBay clone runs
-   ``policy_version`` 3.2.7 against this kernel's 3.2.6 spec). Every field is
+   AHEAD of this kernel on an independently-versioned field (at S159 the eBay clone
+   ran ``policy_version`` 3.2.7 against this kernel's then-current 3.2.6 spec, a gap
+   the S160 self-adoption of v3.2.7 has since closed). Every field is
    compared independently and a NEWER target is REFUSED, never silently downgraded.
 3. **Fail loud on unknown.** A ``schema_version`` that is neither the current
    terminal nor a node of the ladder raises — nothing is written.

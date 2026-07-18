@@ -67,7 +67,7 @@ Zero external dependencies. Python 3.12-3.14, standard library only.
 # `manifest_version_binding` check fails loud if a literal is ever re-introduced
 # or if the injected manifest disagrees with these constants.
 __version__ = "0.4.38"
-__spec_version__ = "3.2.6"
+__spec_version__ = "3.2.7"
 
 # ── Supported Python matrix (KA-17) ───────────────────────────
 # The declared, tested CPython window — single-sourced here (like __version__)
