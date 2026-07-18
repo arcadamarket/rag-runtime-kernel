@@ -86,8 +86,8 @@ class TestModuleRegistration:
         registry = rag_kernel.discover()
         assert "generated_guards" in registry["critical_modules"]
 
-    def test_manifest_module_count_is_nineteen(self):
-        """The functional-capability count (manifest dict) is 19.
+    def test_manifest_module_count_is_twenty(self):
+        """The functional-capability count (manifest dict) is 20.
 
         FV-PHASE4 reconciled the count to 12; M-009 added context_policy as
         the 13th functional module; GRAPH-ORCH increment 5 (INS-025)
@@ -95,11 +95,13 @@ class TestModuleRegistration:
         (INS-030) registered agent_supervisor as the 15th; DRIFT-ELIM
         increment 3 registered drift_control as the 16th and drift_store as
         the 17th; DRIFT-ELIM increment 4 registered drift_render as the 18th;
-        DRIFT-ELIM increment 5 registered drift_audit as the 19th.
+        DRIFT-ELIM increment 5 registered drift_audit as the 19th;
+        KA-SCHEMA-MIGRATE registered schema_migrate as the 20th.
         """
         registry = rag_kernel.discover()
         manifest_modules = registry["package"]["modules"]
-        assert len(manifest_modules) == 19
+        assert len(manifest_modules) == 20
+        assert "schema_migrate" in manifest_modules
         assert "generated_guards" in manifest_modules
         assert "guardgen" in manifest_modules
         assert "context_policy" in manifest_modules

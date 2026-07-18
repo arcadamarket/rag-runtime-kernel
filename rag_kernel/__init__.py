@@ -27,6 +27,7 @@ Zero external dependencies. Python 3.12-3.14, standard library only.
     "drift_control": "Canonical project-state status enum + lifecycle state machine (OPEN→IN_PROGRESS→{RESOLVED|DEFERRED|SUPERSEDED|DISCARDED}, DEFERRED↔OPEN): pure, fail-loud item-lifecycle core (DRIFT-ELIM increment 1)",
     "drift_store": "Deterministic, atomic mutation API over the RAG tracked_items array: guarded transitions, atomic persistence (tmp→verify→.bak→rename), one-time backlog migration — the canonical store every status render projects from (DRIFT-ELIM increment 2)",
     "drift_render": "Deterministic, idempotent renderers projecting the canonical tracked_items array into the legacy open_tasks / deferred_items arrays, the Rule 12 status-report backlog, and the ERROR_LOG backlog summary — makes tracked_items the sole authority, every status mention a derived render (DRIFT-ELIM increment 4)",
+    "schema_migrate": "Governed deployment-facing schema/version migration (KA-SCHEMA-MIGRATE): a declared ladder of additive, idempotent schema steps whose terminal node IS the schema the kernel speaks; reads the TARGET deploy's meta and compares every kernel-owned field independently, refusing (never silently downgrading) a deployment that is ahead, failing loud on an unknown origin version, no-op when already current, and never touching project-owned state (rag_version, tracked_items content, operating_protocol)",
     "drift_audit": "Fail-loud session-boundary auditor: asserts the rendered legacy open_tasks/deferred_items match the canonical tracked_items array (E-040 regression), supersede refs resolve, notes don't contradict status (INS-038), no Cowork-memory side stores exist in the project root (Rule 13), current_status version/HEAD match the live authorities (E-043), and the FIX-1 integrity family — WAL monotonicity, RAG↔.bak parity, unsubstituted-placeholder scan, leaked template-key scan, COLD↔HOT spec-version coherence, non-empty written_by_session, session-id coherence (K1+K2)"
   },
   "cli_commands": {
@@ -65,7 +66,7 @@ Zero external dependencies. Python 3.12-3.14, standard library only.
 # 0.4.7 / spec 3.2.2 while the live authorities had moved on). The drift_audit
 # `manifest_version_binding` check fails loud if a literal is ever re-introduced
 # or if the injected manifest disagrees with these constants.
-__version__ = "0.4.37"
+__version__ = "0.4.38"
 __spec_version__ = "3.2.6"
 
 # ── Supported Python matrix (KA-17) ───────────────────────────
@@ -111,7 +112,7 @@ import json
 from typing import Any
 
 # Module-count convention (closes INS-003 / INS-019):
-#   * "19 capability modules" == the manifest `modules` dict above — the
+#   * "20 capability modules" == the manifest `modules` dict above — the
 #     functional units, excluding the __init__ package marker and the
 #     __main__ CLI entry point. (M-009 added context_policy as the 13th;
 #     GRAPH-ORCH increment 5 registered graph_orchestrator as the 14th;
@@ -119,10 +120,11 @@ from typing import Any
 #     DRIFT-ELIM increment 3 registered drift_control as the 16th and
 #     drift_store as the 17th; DRIFT-ELIM increment 4 registered
 #     drift_render as the 18th; DRIFT-ELIM increment 5 registered
-#     drift_audit as the 19th.)
+#     drift_audit as the 19th; KA-SCHEMA-MIGRATE registered schema_migrate
+#     as the 20th.)
 #   * _KERNEL_MODULES below additionally includes __main__ as a final import
 #     target so discover()/cmd_health verify the CLI imports cleanly too
-#     (20 import targets == 19 capability modules + __main__).
+#     (21 import targets == 20 capability modules + __main__).
 #   The __init__ package marker is never counted (it IS the package).
 _KERNEL_MODULES = [
     "rag_kernel.state_machine",
@@ -144,6 +146,7 @@ _KERNEL_MODULES = [
     "rag_kernel.drift_store",
     "rag_kernel.drift_render",
     "rag_kernel.drift_audit",
+    "rag_kernel.schema_migrate",
     "rag_kernel.__main__",
 ]
 

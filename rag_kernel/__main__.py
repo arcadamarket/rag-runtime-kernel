@@ -65,6 +65,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
     "add-rule": "Append a NEW operating_protocol rule through the guarded atomic store (FIX-5/P3, fail-loud on existing key)",
     "update-rule": "Re-set an EXISTING operating_protocol rule (string or dict/JSON value) or one sub-key of a dict rule through the guarded atomic store (UPDATE-RULE-VERB, fail-loud on a missing target unless --create)",
+    "migrate": "Migrate a DEPLOYMENT's RAG meta up to the schema this kernel speaks — declared additive ladder, reads the target's own meta, refuses to downgrade a deploy that is ahead, fails loud on an unknown origin version, no-op when already current (KA-SCHEMA-MIGRATE)",
     "refresh-current-status": "Re-stamp current_status machine-facts (runtime version + git HEAD, optional --tests count) through the guarded atomic store — the governed repair for the E-043 freshness guard (KA-CS-REFRESH)",
     "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)",
     "context": "Read/write the sanctioned, non-loaded RAG_CONTEXT.json project-context store (set|get|list) — FIX-11 inc2 / U3"
@@ -785,6 +786,20 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="fail loud if a targeted field/token is missing instead of skipping it")
     refresh_cs_parser.add_argument("--dry-run", action="store_true",
                                    help="show the planned old->new token changes without writing")
+
+    # -- migrate (KA-SCHEMA-MIGRATE: governed deployment-facing schema/version uplift) --
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="Migrate a DEPLOYMENT's RAG meta up to the schema this kernel speaks — declared ladder, reads the target's own meta, refuses to downgrade a deploy that is ahead, fails loud on an unknown origin, no-op when current (KA-SCHEMA-MIGRATE).",
+    )
+    migrate_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                                help="Path to the TARGET deployment's RAG_MASTER.json")
+    migrate_parser.add_argument("--session", type=str, required=True,
+                                help="session id recorded in the meta.migrations audit trail")
+    migrate_parser.add_argument("--spec-version", dest="spec_version", type=str, default=None,
+                                help="policy/spec version to reconcile against (default: live rag_kernel.__spec_version__)")
+    migrate_parser.add_argument("--dry-run", action="store_true",
+                                help="show the planned migration without writing")
 
     # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
     verify_parser = subparsers.add_parser(
@@ -4338,6 +4353,64 @@ def cmd_refresh_current_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_migrate(args: argparse.Namespace) -> int:
+    """Governed schema/version migration of a DEPLOYMENT's RAG (KA-SCHEMA-MIGRATE).
+
+    The kernel is deployed onto other projects; redeploying the pinned package does
+    not move a deploy's ``meta.schema_version`` / ``meta.policy_version``, so new
+    code silently drives an old-shaped RAG and the only prior remedy was a forbidden
+    hand-edit of another project's canonical state. This verb reads the TARGET's own
+    meta, resolves a declared ladder path, and applies it atomically (tmp -> .bak
+    parity -> rename). Direction is never assumed: a target AHEAD of this kernel is
+    refused, not downgraded (the eBay clone runs policy_version 3.2.7 against this
+    kernel's 3.2.6). Idempotent — already-current is a no-op with no write. Exit 0 on
+    success/no-op, 1 on any fail-loud condition.
+    """
+    from rag_kernel.schema_migrate import SchemaMigrateError, migrate_file
+
+    try:
+        plan, wrote = migrate_file(
+            args.rag,
+            session=args.session,
+            spec_version=args.spec_version,
+            dry_run=args.dry_run,
+        )
+    except SchemaMigrateError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    if plan.is_noop:
+        header = "migrate: already current — no change"
+    elif args.dry_run:
+        header = "[DRY RUN] migrate would apply"
+    else:
+        header = "migrate applied"
+    print(f"{header} [session {args.session}]:")
+
+    # Line-by-line render of every planned change (STRICT-OBEY rendering discipline —
+    # never collapse a plan into a bare count).
+    print(f"  schema_version: {plan.schema_from} -> {plan.schema_to}"
+          f"{' (unchanged)' if not plan.steps else ''}")
+    for step in plan.steps:
+        print(f"    step {step.from_version} -> {step.to_version}: {step.description}")
+    for note in plan.notes:
+        print(f"      - {note}")
+    if plan.policy_action == "advanced":
+        print(f"  policy_version: {plan.policy_from} -> {plan.policy_to}")
+    elif plan.policy_action == "ahead-preserved":
+        print(f"  policy_version: {plan.policy_from} is AHEAD of this kernel's "
+              f"{plan.policy_to} — PRESERVED (never downgraded)")
+    elif plan.policy_action == "absent":
+        print("  policy_version: absent on target — left absent (not fabricated)")
+    else:
+        print(f"  policy_version: {plan.policy_from} (already current)")
+    print("  rag_version / tracked_items / operating_protocol: untouched "
+          "(project-owned state)")
+    if wrote:
+        print("  written atomically; .bak refreshed to byte-parity (HOT == BAK).")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Deterministic post-init coherence gate (FIX-2, K4/K8).
 
@@ -4666,6 +4739,7 @@ def main(argv: list[str] | None = None) -> int:
         "add-rule": cmd_add_rule,
         "update-rule": cmd_update_rule,
         "refresh-current-status": cmd_refresh_current_status,
+        "migrate": cmd_migrate,
         "verify": cmd_verify,
         "context": cmd_context,
     }

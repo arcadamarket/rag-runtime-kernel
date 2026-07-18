@@ -335,7 +335,9 @@ def test_canonical_facts_live():
     # (rag_kernel.__version__), never a frozen literal that silently rots on the
     # next version bump and re-reddens the suite (the original S60→S61 E-041).
     assert version == rag_kernel.__version__
-    assert module_count == 19
+    # same de-drift principle applied to the count: assert against the live
+    # manifest, not a literal that rots on the next module registration
+    assert module_count == len(rag_kernel.discover()["package"]["modules"])
     assert drift_sha and len(drift_sha) == 12
 
 
