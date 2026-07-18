@@ -226,6 +226,96 @@ class TestApply:
 
 
 # --------------------------------------------------------------------------- #
+# init_prompt / COLD coherence — MIGRATE-INITPROMPT-REPAIR-PATH (S161)
+# --------------------------------------------------------------------------- #
+class TestInitPromptCoherence:
+    """The init_prompt pointer and COLD init_prompt_reference must AGREE with
+    policy_version, reconciled UNCONDITIONALLY — not only when policy advances."""
+
+    def _hot_ip(self, policy, token, **extra):
+        hot = _hot(schema=CURRENT_SCHEMA_VERSION, policy=policy, **extra)
+        hot["meta"]["rag_files"] = {
+            "init_prompt": f"INIT_UNIVERSAL_RUNTIME_KERNEL_v{token}.md",
+            "cold": "RAG_COLD.json",
+        }
+        return hot
+
+    def test_stale_pointer_at_current_policy_is_not_a_noop(self):
+        # the kernel's own S160 split: policy already current but pointer stuck behind
+        hot = self._hot_ip("3.2.6", "3.2.3")
+        plan = plan_migration(hot, spec_version="3.2.6")
+        assert plan.policy_action == "unchanged"
+        assert not plan.is_noop
+        assert plan.init_prompt_action == "repaired"
+        assert plan.init_prompt_to == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md"
+
+    def test_apply_repairs_stale_pointer(self):
+        hot = self._hot_ip("3.2.6", "3.2.3")
+        plan = plan_migration(hot, spec_version="3.2.6")
+        apply_migration(hot, plan, session="S161")
+        assert (hot["meta"]["rag_files"]["init_prompt"]
+                == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md")
+
+    def test_coherent_pointer_stays_a_noop(self):
+        hot = self._hot_ip("3.2.6", "3.2.6")
+        plan = plan_migration(hot, spec_version="3.2.6")
+        assert plan.is_noop
+        assert plan.init_prompt_action == "unchanged"
+
+    def test_advance_still_pairs_the_pointer(self):
+        hot = self._hot_ip("3.2.0", "3.2.0")
+        plan = plan_migration(hot, spec_version="3.2.6")
+        assert plan.policy_action == "advanced"
+        assert plan.init_prompt_action == "paired-on-advance"
+        assert plan.init_prompt_to == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md"
+
+    def test_unrecognized_token_is_left_untouched(self):
+        hot = _hot(schema=CURRENT_SCHEMA_VERSION, policy="3.2.6")
+        hot["meta"]["rag_files"] = {"init_prompt": "INIT_PROMPT.md"}
+        plan = plan_migration(hot, spec_version="3.2.6")
+        assert plan.init_prompt_action == "unrecognized"
+        assert plan.init_prompt_to is None
+        assert plan.is_noop
+
+    def test_bounded_token_not_matched_inside_a_longer_one(self):
+        # 3.2.3 must not be rewritten where it appears inside v13.2.30 etc.; the only
+        # real token here is 3.2.6 (already current) so nothing changes.
+        hot = self._hot_ip("3.2.6", "3.2.6")
+        plan = plan_migration(hot, spec_version="3.2.6")
+        assert plan.init_prompt_to is None
+
+    def test_cold_reference_repaired_in_the_same_pass(self, tmp_path):
+        hot = self._hot_ip("3.2.6", "3.2.3")
+        cold = {"init_prompt_reference": {
+            "version": "3.2.3",
+            "filename": "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md"}}
+        p = _write(tmp_path, hot)
+        (tmp_path / "RAG_COLD.json").write_text(json.dumps(cold), encoding="utf-8")
+        plan, wrote = migrate_file(p, session="S161", spec_version="3.2.6")
+        assert wrote and plan.cold_action == "repaired"
+        after = json.loads((tmp_path / "RAG_COLD.json").read_text(encoding="utf-8"))
+        assert after["init_prompt_reference"]["version"] == "3.2.6"
+        assert (after["init_prompt_reference"]["filename"]
+                == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md")
+
+    def test_repair_writes_hot_and_mirrors_bak(self, tmp_path):
+        p = _write(tmp_path, self._hot_ip("3.2.6", "3.2.3"))
+        plan, wrote = migrate_file(p, session="S161", spec_version="3.2.6")
+        assert wrote
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert (data["meta"]["rag_files"]["init_prompt"]
+                == "INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md")
+        bak = p.with_suffix(p.suffix + ".bak")
+        assert bak.read_bytes() == p.read_bytes()
+
+    def test_repair_is_idempotent(self, tmp_path):
+        p = _write(tmp_path, self._hot_ip("3.2.6", "3.2.3"))
+        migrate_file(p, session="S161", spec_version="3.2.6")
+        plan, wrote = migrate_file(p, session="S162", spec_version="3.2.6")
+        assert plan.is_noop and not wrote
+
+
+# --------------------------------------------------------------------------- #
 # File-level transaction
 # --------------------------------------------------------------------------- #
 class TestMigrateFile:
@@ -439,11 +529,16 @@ class TestInitPromptPairing:
         out = apply_migration(hot, plan, session="S160")
         assert out["meta"]["rag_files"]["init_prompt"] == "INIT_PROMPT.md"
 
-    def test_no_partial_version_token_match(self):
-        # 3.2.3 must not match inside 13.2.30 or v3.2.31
+    def test_full_token_replaced_without_partial_corruption(self):
+        # S161 (MIGRATE-INITPROMPT-REPAIR-PATH) re-shaped this to the UNCONDITIONAL
+        # invariant "init_prompt MUST AGREE with policy_version": a pointer naming an
+        # unrelated version (v3.2.31) while policy is 3.2.7 is a real disagreement and
+        # is reconciled. The FULL semver token is extracted and replaced wholesale, so
+        # the result is the clean 'v3.2.7' — NEVER a partial-digit artifact like
+        # 'v3.2.71' from matching '3.2.3' inside '3.2.31'.
         hot = self._hot_with_prompt("SPEC_v3.2.31.md")
         plan = plan_migration(hot, spec_version="3.2.7")
-        assert plan.init_prompt_to is None
+        assert plan.init_prompt_to == "SPEC_v3.2.7.md"
 
     def test_absent_rag_files_is_not_fabricated(self):
         hot = _hot(schema=CURRENT_SCHEMA_VERSION, policy="3.2.3")

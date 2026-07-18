@@ -48,6 +48,23 @@ from rag_kernel.persistence import atomic_write_json
 
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%S+00:00"
 
+#: A dotted numeric version token embedded in a longer string (e.g. a filename or a
+#: policy label). Capturing group 1 is the bare ``major.minor.patch``.
+_SEMVER_RE = re.compile(r"(\d+\.\d+\.\d+)")
+
+
+def _rewrite_token(text: str, old: str, new: str) -> tuple[str, int]:
+    """Replace a dotted version token ``old`` with ``new`` in ``text``, in place.
+
+    Bounded so a token is never matched inside a longer one: ``3.2.3`` must not
+    match in ``13.2.30`` (lookbehind) or ``v3.2.31`` (lookahead), while still
+    matching the common ``..._v3.2.3.md`` where the trailing dot is the extension.
+    Returns ``(rewritten, n_substitutions)``.
+    """
+    return re.subn(
+        r"(?<![0-9.])" + re.escape(old) + r"(?!\d)(?!\.\d)", new, text
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Errors
@@ -213,20 +230,129 @@ class MigrationPlan:
     # for four spec generations with audit reading clean throughout.
     init_prompt_from: Optional[str] = None
     init_prompt_to: Optional[str] = None
+    # paired-on-advance | repaired | unchanged | absent | unrecognized
+    #   paired-on-advance: token moved together WITH an advancing policy_version.
+    #   repaired: pointer lagged the (already-current) policy_version and was lifted
+    #             to agree with it — the MIGRATE-INITPROMPT-REPAIR-PATH case that the
+    #             advance-only pairing structurally could not reach.
+    init_prompt_action: str = "unchanged"
+    # COLD ``init_prompt_reference`` is the COLD half of the same self-version pair
+    # that :func:`spec_parser.verify_coherence` binds (version + filename token). It
+    # is reconciled to the same effective policy version, independent of an advance.
+    cold_version_from: Optional[str] = None
+    cold_version_to: Optional[str] = None
+    cold_filename_from: Optional[str] = None
+    cold_filename_to: Optional[str] = None
+    cold_action: str = "unchanged"  # repaired | unchanged | absent | unrecognized
     policy_action: str = "unchanged"  # advanced | ahead-preserved | unchanged | absent
 
     @property
     def is_noop(self) -> bool:
-        return not self.steps and self.policy_action != "advanced"
+        # MIGRATE-INITPROMPT-REPAIR-PATH (S161): the invariant is now "init_prompt (and
+        # its COLD reference) MUST AGREE with policy_version", checked UNCONDITIONALLY —
+        # not only when policy advances. A stale pointer or COLD reference is a real,
+        # writable divergence even when the schema ladder and policy_version are already
+        # current, so it is NOT a no-op. The old test (``not steps and policy_action !=
+        # 'advanced'``) reported no-op while the pointer still lagged — which is exactly
+        # why the kernel's own split (policy 3.2.7 / init_prompt v3.2.3) could not
+        # self-repair once policy had already reached 3.2.7.
+        return (
+            not self.steps
+            and self.policy_action != "advanced"
+            and self.init_prompt_to is None
+            and self.cold_action != "repaired"
+        )
 
 
-def plan_migration(hot: dict, *, spec_version: Optional[str] = None) -> MigrationPlan:
+def _effective_policy(plan: MigrationPlan, have_policy: Optional[str]) -> Optional[str]:
+    """The policy version the init_prompt pair must AGREE with.
+
+    On an advance it is the advancing target; when policy is already current (or the
+    deployment is legitimately ahead) it is the deployment's own live value, so a
+    pointer left behind by a PAST advance is still repaired. ``absent`` policy gives
+    no anchor, so nothing is paired (returns ``None``).
+    """
+    if plan.policy_action == "advanced":
+        return plan.policy_to
+    if plan.policy_action in ("unchanged", "ahead-preserved"):
+        return have_policy
+    return None
+
+
+def _plan_init_prompt(plan: MigrationPlan, meta: dict, effective_policy: str) -> None:
+    """Reconcile ``meta.rag_files.init_prompt``'s version token to ``effective_policy``.
+
+    Deployment-agnostic: only the embedded version token is rewritten in place, so any
+    naming convention survives and a pointer carrying no recognisable token is left
+    untouched (``unrecognized``) rather than guessed at.
+    """
+    have_prompt = (meta.get("rag_files") or {}).get("init_prompt")
+    if not (isinstance(have_prompt, str) and have_prompt):
+        plan.init_prompt_action = "absent"
+        return
+    m = _SEMVER_RE.search(have_prompt)
+    if not m:
+        plan.init_prompt_action = "unrecognized"
+        return
+    cur = m.group(1)
+    if cur == effective_policy:
+        plan.init_prompt_action = "unchanged"
+        return
+    paired, n = _rewrite_token(have_prompt, cur, effective_policy)
+    if n and paired != have_prompt:
+        plan.init_prompt_from, plan.init_prompt_to = have_prompt, paired
+        plan.init_prompt_action = (
+            "paired-on-advance" if plan.policy_action == "advanced" else "repaired"
+        )
+    else:  # pragma: no cover - a readable token that cannot be rewritten is degenerate
+        plan.init_prompt_action = "unrecognized"
+
+
+def _plan_cold_reference(plan: MigrationPlan, cold, effective_policy: str) -> None:
+    """Reconcile COLD ``init_prompt_reference`` (version + filename token) in place.
+
+    Self-skips (``absent``) when no COLD dict or no reference object is supplied, so a
+    deployment without a COLD scaffold is unaffected. Each field is rewritten by token
+    so a bespoke naming convention survives.
+    """
+    if not isinstance(cold, dict):
+        plan.cold_action = "absent"
+        return
+    ipr = cold.get("init_prompt_reference")
+    if not isinstance(ipr, dict):
+        plan.cold_action = "absent"
+        return
+    changed = False
+    cur_v = ipr.get("version")
+    if isinstance(cur_v, str) and cur_v:
+        mv = _SEMVER_RE.search(cur_v)
+        if mv and mv.group(1) != effective_policy:
+            new_v, nv = _rewrite_token(cur_v, mv.group(1), effective_policy)
+            plan.cold_version_from = cur_v
+            plan.cold_version_to = new_v if nv else effective_policy
+            changed = True
+    cur_fn = ipr.get("filename")
+    if isinstance(cur_fn, str) and cur_fn:
+        mf = _SEMVER_RE.search(cur_fn)
+        if mf and mf.group(1) != effective_policy:
+            new_fn, nf = _rewrite_token(cur_fn, mf.group(1), effective_policy)
+            if nf and new_fn != cur_fn:
+                plan.cold_filename_from = cur_fn
+                plan.cold_filename_to = new_fn
+                changed = True
+    plan.cold_action = "repaired" if changed else "unchanged"
+
+
+def plan_migration(
+    hot: dict, *, cold=None, spec_version: Optional[str] = None
+) -> MigrationPlan:
     """Compute the migration plan for an already-loaded HOT dict. Never writes.
 
     ``spec_version`` defaults to the kernel's live ``__spec_version__``. The policy
     field is compared INDEPENDENTLY of the schema ladder: a deployment ahead on
     policy keeps its own value (reported as ``ahead-preserved``) — the migration is
-    not a one-way uplift.
+    not a one-way uplift. When ``cold`` (a loaded COLD dict) is supplied its
+    ``init_prompt_reference`` is reconciled to the same effective policy version.
     """
     meta = hot.get("meta")
     if not isinstance(meta, dict):
@@ -256,31 +382,32 @@ def plan_migration(hot: dict, *, spec_version: Optional[str] = None) -> Migratio
         else:
             plan.policy_action = "unchanged"
 
-    # Pair the init_prompt pointer to the advancing policy_version. Deployment-
-    # agnostic: the embedded version token is rewritten in place, so any naming
-    # convention survives and a pointer that carries no recognisable version token
-    # is left untouched rather than guessed at.
-    if plan.policy_action == "advanced" and plan.policy_from and plan.policy_to:
-        have_prompt = (meta.get("rag_files") or {}).get("init_prompt")
-        if isinstance(have_prompt, str) and have_prompt:
-            # Bounded so a version token is never matched inside a longer one:
-            # 3.2.3 must not match in 13.2.30 (lookbehind) or v3.2.31 (lookahead),
-            # while still matching the common "..._v3.2.3.md" where the trailing
-            # dot belongs to the file extension, not the version.
-            paired, n = re.subn(
-                r"(?<![0-9.])" + re.escape(plan.policy_from) + r"(?!\d)(?!\.\d)",
-                plan.policy_to,
-                have_prompt,
-            )
-            if n and paired != have_prompt:
-                plan.init_prompt_from, plan.init_prompt_to = have_prompt, paired
+    # init_prompt / COLD coherence (MIGRATE-INITPROMPT-REPAIR-PATH, S161).
+    # meta.policy_version, meta.rag_files.init_prompt, and COLD.init_prompt_reference
+    # are one coherence set (spec_parser seeds all three from a single spec version at
+    # init, and verify_coherence binds them). The token is reconciled to the EFFECTIVE
+    # policy — the advancing target when policy moves, otherwise the deployment's live
+    # policy_version — so a pointer OR COLD reference left behind by a past advance is
+    # repaired even when policy is already current. Fires unconditionally, not only on
+    # an advance (the advance-only gate was the defect this path fixes).
+    effective_policy = _effective_policy(plan, have_policy)
+    if effective_policy:
+        _plan_init_prompt(plan, meta, effective_policy)
+        _plan_cold_reference(plan, cold, effective_policy)
     return plan
 
 
 def apply_migration(
-    hot: dict, plan: MigrationPlan, *, session: str, now: Optional[str] = None
+    hot: dict,
+    plan: MigrationPlan,
+    *,
+    session: str,
+    now: Optional[str] = None,
+    cold=None,
 ) -> dict:
-    """Apply ``plan`` to ``hot`` in memory and re-stamp the migration audit trail."""
+    """Apply ``plan`` to ``hot`` (and, if supplied, ``cold``) in memory and re-stamp
+    the migration audit trail. The COLD dict is mutated in place; the caller writes it.
+    """
     stamp = now or datetime.now(timezone.utc).strftime(_TS_FORMAT)
     for step in plan.steps:
         plan.notes.extend(step.apply(hot))
@@ -290,9 +417,26 @@ def apply_migration(
         meta["schema_version"] = plan.schema_to
     if plan.policy_action == "advanced":
         meta["policy_version"] = plan.policy_to
-        if plan.init_prompt_to:
-            meta.setdefault("rag_files", {})["init_prompt"] = plan.init_prompt_to
-    if plan.steps or plan.policy_action == "advanced":
+    # The init_prompt pointer is repaired whenever it lags — NOT only on a policy
+    # advance. The advance-only gate here was the MIGRATE-INITPROMPT-REPAIR-PATH defect.
+    if plan.init_prompt_to:
+        meta.setdefault("rag_files", {})["init_prompt"] = plan.init_prompt_to
+    # COLD init_prompt_reference is the COLD half of the same coherence set.
+    if plan.cold_action == "repaired" and isinstance(cold, dict):
+        ipr = cold.get("init_prompt_reference")
+        if isinstance(ipr, dict):
+            if plan.cold_version_to is not None:
+                ipr["version"] = plan.cold_version_to
+            if plan.cold_filename_to is not None:
+                ipr["filename"] = plan.cold_filename_to
+
+    changed = (
+        bool(plan.steps)
+        or plan.policy_action == "advanced"
+        or plan.init_prompt_to is not None
+        or plan.cold_action == "repaired"
+    )
+    if changed:
         meta["last_updated_utc"] = stamp
         history = meta.setdefault("migrations", [])
         if not isinstance(history, list):
@@ -313,10 +457,20 @@ def apply_migration(
                 "policy_from": plan.policy_from,
                 "policy_to": meta.get("policy_version"),
                 "policy_action": plan.policy_action,
+                "init_prompt_action": plan.init_prompt_action,
+                "init_prompt_from": plan.init_prompt_from,
+                "init_prompt_to": plan.init_prompt_to,
+                "cold_action": plan.cold_action,
                 "steps": [f"{s.from_version}->{s.to_version}" for s in plan.steps],
             }
         )
     return hot
+
+
+def _cold_path_for(hot_path: Path, hot: dict) -> Path:
+    """The COLD file beside the HOT RAG — name overridable via ``meta.rag_files.cold``."""
+    name = ((hot.get("meta") or {}).get("rag_files") or {}).get("cold") or "RAG_COLD.json"
+    return hot_path.parent / name
 
 
 def migrate_file(
@@ -326,11 +480,16 @@ def migrate_file(
     spec_version: Optional[str] = None,
     dry_run: bool = False,
     now: Optional[str] = None,
+    cold_path: Path | str | None = None,
 ) -> tuple[MigrationPlan, bool]:
     """Load -> plan -> (optionally) atomically migrate a deployment's RAG file.
 
     Returns ``(plan, wrote)``. ``wrote`` is False for a dry run and for a no-op, so
     an already-current deployment leaves the file and its ``.bak`` byte-untouched.
+    The sibling COLD file (``meta.rag_files.cold`` beside the RAG, or ``cold_path``)
+    is loaded so its ``init_prompt_reference`` can be reconciled in the same pass; it
+    is written only when the plan actually repairs it. A malformed/absent COLD is out
+    of scope — HOT migration still proceeds and the COLD half self-skips.
     """
     p = Path(path)
     if not p.exists():
@@ -339,10 +498,23 @@ def migrate_file(
     if not isinstance(hot, dict):
         raise SchemaMigrateError(f"HOT root must be a JSON object, got {type(hot).__name__}")
 
-    plan = plan_migration(hot, spec_version=spec_version)
+    cp = Path(cold_path) if cold_path is not None else _cold_path_for(p, hot)
+    cold = None
+    if cp.exists():
+        try:
+            loaded = json.loads(cp.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cold = loaded
+        except (ValueError, OSError):  # malformed COLD is out of scope for THIS pass
+            cold = None
+
+    plan = plan_migration(hot, cold=cold, spec_version=spec_version)
     if plan.is_noop or dry_run:
         return plan, False
 
-    apply_migration(hot, plan, session=session, now=now)
+    apply_migration(hot, plan, session=session, now=now, cold=cold)
     atomic_write_json(p, hot, mirror_bak=True, guard_side_stores=True)
+    if plan.cold_action == "repaired" and cold is not None:
+        # COLD is a generic (non-parity) store — prior-file crash backup, no mirror.
+        atomic_write_json(cp, cold)
     return plan, True

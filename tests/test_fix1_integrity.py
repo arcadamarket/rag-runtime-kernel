@@ -22,6 +22,7 @@ from rag_kernel import drift_audit
 from rag_kernel.drift_audit import (
     check_bak_parity,
     check_cold_hot_version,
+    check_policy_initprompt_coherence,
     check_placeholder_tokens,
     check_session_id_coherence,
     check_template_keys,
@@ -222,6 +223,35 @@ def test_cold_version_match_clean(tmp_path):
 def test_cold_absent_self_skips(tmp_path):
     hot = {"meta": {"policy_version": "3.2.2"}}
     assert check_cold_hot_version(tmp_path / "nope.json", hot) == []
+
+
+# --------------------------------------------------------------------------
+# HOT policy_version <-> init_prompt token (MIGRATE-INITPROMPT-REPAIR-PATH, S161)
+# The COLD<->HOT check binds COLD to the init_prompt TOKEN, so a stale pointer
+# that AGREES with a stale COLD is invisible there — this binds the two
+# HOT-internal self-version fields directly so the split fails loud.
+# --------------------------------------------------------------------------
+
+def test_policy_initprompt_split_is_error():
+    # the kernel's own S160 split: policy advanced to 3.2.7, pointer left at v3.2.3
+    hot = {"meta": {"policy_version": "3.2.7",
+                    "rag_files": {"init_prompt": "INIT_..._v3.2.3.md"}}}
+    f = check_policy_initprompt_coherence(hot)
+    assert _checks(f) == {"policy_initprompt_coherence"}
+
+
+def test_policy_initprompt_coherent_is_clean():
+    hot = {"meta": {"policy_version": "3.2.7",
+                    "rag_files": {"init_prompt": "INIT_..._v3.2.7.md"}}}
+    assert check_policy_initprompt_coherence(hot) == []
+
+
+def test_policy_initprompt_self_skips_when_token_absent():
+    # a pointer with no parseable version token is out of scope, not a false positive
+    hot = {"meta": {"policy_version": "3.2.7",
+                    "rag_files": {"init_prompt": "INIT_PROMPT.md"}}}
+    assert check_policy_initprompt_coherence(hot) == []
+    assert check_policy_initprompt_coherence({"meta": {"policy_version": "3.2.7"}}) == []
 
 
 # --------------------------------------------------------------------------

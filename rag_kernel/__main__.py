@@ -4406,8 +4406,18 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     else:
         print(f"  policy_version: {plan.policy_from} (already current)")
     if plan.init_prompt_to:
+        how = ("paired to advancing policy_version"
+               if plan.init_prompt_action == "paired-on-advance"
+               else "repaired to policy_version (pointer was stale)")
         print(f"  rag_files.init_prompt: {plan.init_prompt_from} -> "
-              f"{plan.init_prompt_to} (paired to policy_version)")
+              f"{plan.init_prompt_to} ({how})")
+    if plan.cold_action == "repaired":
+        if plan.cold_version_to is not None:
+            print(f"  COLD init_prompt_reference.version: {plan.cold_version_from} -> "
+                  f"{plan.cold_version_to} (repaired to policy_version)")
+        if plan.cold_filename_to is not None:
+            print(f"  COLD init_prompt_reference.filename: {plan.cold_filename_from} -> "
+                  f"{plan.cold_filename_to} (repaired to policy_version)")
     print("  rag_version / tracked_items / operating_protocol: untouched "
           "(project-owned state)")
     if wrote:

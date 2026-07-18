@@ -77,6 +77,7 @@ also *verifies* that every render still equals the state it persisted.
               "check_written_by_session", "check_session_id_coherence",
               "check_sessions_recent_coherence",
               "check_wal_integrity", "check_bak_parity", "check_cold_hot_version",
+              "check_policy_initprompt_coherence",
               "canonical_facts", "audit_hot", "audit_file", "assert_clean"],
   "use_when": "Verifying at a session boundary that every status render still matches the canonical tracked_items array and no parallel state store exists",
   "never_bypass": true
@@ -1981,6 +1982,42 @@ def check_cold_hot_version(cold_path: Path | str, hot: dict) -> list[AuditFindin
     return findings
 
 
+def check_policy_initprompt_coherence(hot: dict) -> list[AuditFinding]:
+    """ERROR if HOT ``meta.policy_version`` disagrees with the version token embedded
+    in ``meta.rag_files.init_prompt`` (MIGRATE-INITPROMPT-REPAIR-PATH, S161).
+
+    ``policy_version`` and the ``init_prompt`` file pointer are a COHERENCE PAIR —
+    ``spec_parser`` seeds both from the same INIT spec at deploy time. :func:`
+    check_cold_hot_version` binds COLD to the init_prompt TOKEN, so when a policy
+    advance moves ``policy_version`` but leaves the pointer behind, the stale pointer
+    still AGREES with the (equally stale) COLD reference and the split is invisible
+    there — precisely the state the kernel's own RAG sat in for four spec generations
+    (policy 3.2.7 / init_prompt v3.2.3) while ``audit`` read clean. This binds the two
+    HOT-internal self-version fields DIRECTLY so that split fails loud. Pure over the
+    in-memory HOT; self-skips when either field is absent or carries no parseable
+    version token (a deployment whose pointer has no version token is out of scope).
+    """
+    findings: list[AuditFinding] = []
+    meta = hot.get("meta") if isinstance(hot, dict) else None
+    if not isinstance(meta, dict):
+        return findings
+    pv = meta.get("policy_version")
+    ip = (meta.get("rag_files") or {}).get("init_prompt")
+    if not isinstance(pv, str) or not isinstance(ip, str):
+        return findings
+    m_pv = _SEMVER_RE.search(pv)
+    m_ip = _SEMVER_RE.search(ip)
+    if not m_pv or not m_ip:
+        return findings
+    if m_pv.group(1) != m_ip.group(1):
+        findings.append(AuditFinding(
+            check="policy_initprompt_coherence", severity=ERROR,
+            detail=(f"HOT meta.policy_version {m_pv.group(1)} != "
+                    f"meta.rag_files.init_prompt version token {m_ip.group(1)} "
+                    f"— run `migrate` to repair the init_prompt/policy split")))
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Aggregate runners
 # ---------------------------------------------------------------------------
@@ -2029,6 +2066,10 @@ def audit_hot(
     # KA-5/E-046: single-source manifest version binding — pure introspection over
     # the kernel package (no hot input), always-on.
     findings += check_manifest_version_binding()
+    # MIGRATE-INITPROMPT-REPAIR-PATH (S161): bind meta.policy_version to the
+    # init_prompt version token so a policy advance that leaves the pointer behind
+    # fails loud. Pure over HOT, always-on; self-skips when either token is absent.
+    findings += check_policy_initprompt_coherence(hot)
     # FIX-1 integrity invariants over the in-memory state (each self-skips when its
     # source is absent): unsubstituted placeholders, leaked template keys, empty
     # written_by_session, malformed session ids.
@@ -2205,6 +2246,7 @@ __all__ = [
     "check_wal_integrity",
     "check_bak_parity",
     "check_cold_hot_version",
+    "check_policy_initprompt_coherence",
     "canonical_facts",
     "audit_hot",
     "audit_file",
