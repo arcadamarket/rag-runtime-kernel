@@ -1,9 +1,13 @@
 # DESIGN — Governed scaffold transplant (`transplant` verb)
 
-Status: **DESIGN ONLY — not implemented.** Authored S159 at operator direction after
-the S159 finding that `KA-SCHEMA-MIGRATE` (meta/schema versions) does NOT and never
-did cover scaffold transplant, and that the S148 diversion plan assumed it would.
-Implementation is S160+ work. Sibling of `SPEC-PROMOTION-DRIFT` (E-063).
+Status: **DESIGN — classification authority RATIFIED; implementation underway (S162).**
+Authored S159 at operator direction after the S159 finding that `KA-SCHEMA-MIGRATE`
+(meta/schema versions) does NOT and never did cover scaffold transplant, and that the
+S148 diversion plan assumed it would. The one blocking design call — the classification
+authority (§2) — was settled in S160: **operator ratified Authority A (spec-derived)**
+(tracked item `TRANSPLANT-CLASSIFY-AUTHORITY`). Its precondition (this kernel self-adopts
+its own spec) is satisfied as of S161 (kernel at policy/spec **v3.2.7**). Implementation
+is S162 work. Sibling of `SPEC-PROMOTION-DRIFT` (E-063).
 
 ---
 
@@ -24,21 +28,25 @@ kernel's **35**. A naive "sync the rules" would destroy the 16-rule delta that i
 precisely the clone's own work. `KA-SCHEMA-MIGRATE` deliberately refuses to go near
 this (PRESERVE-IN-PLACE, operator ruling D2, S158).
 
-## 2. The blocking design decision (operator input required)
+## 2. Classification authority — RATIFIED: Authority A (spec-derived), operator ruling S160
 
-**How is a rule classified as universal scaffold vs project-specific?**
+**How is a rule classified as universal scaffold vs project-specific?** — **Settled.**
+The operator ratified **Authority A** in S160 (`TRANSPLANT-CLASSIFY-AUTHORITY`); the
+alternatives below are retained only to record why A won. This is no longer an open call.
 
-Three candidate authorities, in descending order of determinism:
+Three candidate authorities were weighed, in descending order of determinism:
 
 | # | Authority | Mechanism | Verdict |
 |---|---|---|---|
-| A | **Spec-derived** | A rule is universal **iff** it appears in the INIT spec (`INIT_UNIVERSAL_RUNTIME_KERNEL_v<spec>.md`) that both sides can name. The spec IS the definition of "universal" — that is what the word means in this project. | **Recommended.** Deterministic, zero-token, no tagging debt, and it ties transplant to spec adoption, closing `SPEC-PROMOTION-DRIFT` from the same mechanism. |
+| A | **Spec-derived** | A rule is universal **iff** it appears in the INIT spec (`INIT_UNIVERSAL_RUNTIME_KERNEL_v<spec>.md`) that both sides can name. The spec IS the definition of "universal" — that is what the word means in this project. | **RATIFIED (operator, S160).** Deterministic, zero-token, no tagging debt, and it ties transplant to spec adoption, closing `SPEC-PROMOTION-DRIFT` from the same mechanism. |
 | B | **Provenance-tagged** | Each rule carries `universal: true` at authoring time; transplant moves tagged rules only. | Deterministic going forward, but every rule authored before the tag existed is unclassified — a migration problem of its own. |
 | C | **Name-matching** | Rule keys present in the source kernel are treated as universal. | **Reject.** A deploy that independently authored a rule under a colliding key would have it silently overwritten. Exactly the failure mode this project exists to prevent. |
 
-Option A implies a hard precondition: **this kernel must first self-adopt spec
+Option A implied a hard precondition: **this kernel must first self-adopt spec
 v3.2.7** (operator ruling D4, S159), because a transplant that reads the spec as its
-authority cannot run from a kernel that is behind its own spec.
+authority cannot run from a kernel that is behind its own spec. **Precondition satisfied
+(S161):** the kernel is at policy/spec v3.2.7 with its `init_prompt` pointer reconciled,
+so Authority A is now runnable.
 
 ## 3. Contract (all options)
 
@@ -90,9 +98,10 @@ Mirrors `tests/test_schema_migrate.py` in shape:
 what made the S148 plan assume one verb covered both. They stay separate verbs with
 separate guards.
 
-## 7. Open question for the operator
+## 7. Classification authority — RESOLVED (S160)
 
-Confirm authority **A (spec-derived)**, or name another. Everything else in this
-design is settled and implementable; the classification authority is the one call
-that cannot be defaulted safely, because getting it wrong silently damages another
-project's canonical state.
+The one call that could not be defaulted safely — the classification authority — is
+**settled: the operator ratified Authority A (spec-derived) in S160**
+(`TRANSPLANT-CLASSIFY-AUTHORITY`). Everything else in this design was already
+implementable; with the authority ratified and its precondition met (§2), the verb is
+fully specified and implementation proceeds in S162. No open operator question remains.

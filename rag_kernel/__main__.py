@@ -801,6 +801,22 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument("--dry-run", action="store_true",
                                 help="show the planned migration without writing")
 
+    # -- transplant (TRANSPLANT-CLASSIFY-AUTHORITY: governed scaffold-rule transplant) --
+    transplant_parser = subparsers.add_parser(
+        "transplant",
+        help="Transplant MISSING universal governance rules from a SOURCE kernel into a TARGET deployment. Authority A (spec-derived): a rule is universal iff its key appears in the named INIT spec. Additive-only, project-specific rules invisible, collision on differing content is fail-loud (never overwrite), target-ahead refused, idempotent, atomic + audited.",
+    )
+    transplant_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                                   help="Path to the TARGET deployment's RAG_MASTER.json (the one written)")
+    transplant_parser.add_argument("--source", type=Path, required=True,
+                                   help="Path to the SOURCE kernel's RAG_MASTER.json (read-only authority for rule content)")
+    transplant_parser.add_argument("--spec", type=Path, required=True,
+                                   help="INIT spec .md whose operating_protocol keys DEFINE the universal set (Authority A)")
+    transplant_parser.add_argument("--session", type=str, required=True,
+                                   help="session id recorded in the meta.transplants audit trail")
+    transplant_parser.add_argument("--dry-run", action="store_true",
+                                   help="render every planned addition and collision line-by-line without writing")
+
     # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
     verify_parser = subparsers.add_parser(
         "verify",
@@ -4425,6 +4441,75 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_transplant(args: argparse.Namespace) -> int:
+    """Governed scaffold transplant (TRANSPLANT-CLASSIFY-AUTHORITY).
+
+    Moves ONLY the first class of divergence — universal governance rules the target
+    is MISSING — from a source kernel into a target deployment, leaving the target's
+    own project-specific rules invisible and untouched. Classification is Authority A
+    (operator-ratified S160): a rule is universal iff its key appears in the named INIT
+    spec. Additive-only; a universal rule the target has locally amended is a fail-loud
+    collision, never an overwrite; a target ahead of the spec is refused; idempotent;
+    atomic (FIX-4 .bak parity) with a meta.transplants audit entry. Exit 0 on
+    success/no-op, 1 on any fail-loud condition (unknown spec, collision, target ahead,
+    source incomplete).
+    """
+    from rag_kernel.transplant import (
+        TransplantError,
+        transplant_file,
+    )
+
+    try:
+        plan, wrote = transplant_file(
+            args.rag,
+            args.source,
+            args.spec,
+            session=args.session,
+            dry_run=args.dry_run,
+        )
+    except TransplantError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    if plan.is_noop and not args.dry_run:
+        header = "transplant: target already carries every universal rule — no change"
+    elif args.dry_run:
+        header = "[DRY RUN] transplant would apply"
+    else:
+        header = "transplant applied"
+    print(f"{header} [session {args.session}]:")
+    print(f"  authority: A (spec-derived) — spec v{plan.spec_version} "
+          f"({Path(args.spec).name})")
+    print(f"  source kernel: {plan.source_version}   target: {plan.target_version}")
+
+    # Line-by-line render of every planned change (STRICT-OBEY — never a bare count).
+    if plan.additions:
+        print(f"  additions ({len(plan.additions)}) — universal rules missing from target:")
+        for key, _ in plan.additions:
+            print(f"    + {key}")
+    else:
+        print("  additions (0): none — nothing to add")
+    if plan.collisions:
+        print(f"  COLLISIONS ({len(plan.collisions)}) — universal rules the target has "
+              f"locally amended (FAIL-LOUD, nothing written):")
+        for key, _t, _s in plan.collisions:
+            print(f"    ! {key} — target content differs from source; overwrite forbidden")
+    print(f"  project-specific rules: invisible — untouched "
+          f"({len(plan.present_identical)} universal already-identical, skipped)")
+
+    if plan.collisions:
+        # Contract §2/§4: a collision is a fail-loud condition (exit 1) whether or not
+        # this was a dry run. A real run already raised before any write; a dry run
+        # rendered the collisions above and now signals the same fail-loud via exit code.
+        print("  RESULT: HALT — resolve collisions by operator ruling, then re-run.",
+              file=sys.stderr)
+        return 1
+    if wrote:
+        print("  written atomically; .bak refreshed to byte-parity (HOT == BAK); "
+              "meta.transplants stamped.")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Deterministic post-init coherence gate (FIX-2, K4/K8).
 
@@ -4754,6 +4839,7 @@ def main(argv: list[str] | None = None) -> int:
         "update-rule": cmd_update_rule,
         "refresh-current-status": cmd_refresh_current_status,
         "migrate": cmd_migrate,
+        "transplant": cmd_transplant,
         "verify": cmd_verify,
         "context": cmd_context,
     }
