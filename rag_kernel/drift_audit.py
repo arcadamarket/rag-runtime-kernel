@@ -1529,6 +1529,62 @@ def check_project_context_placeholders(hot: dict) -> list[AuditFinding]:
     return findings
 
 
+def check_asset_registry(
+    rag_dir: Optional[Path | str],
+    project_root: Optional[Path | str] = None,
+) -> list[AuditFinding]:
+    """ERROR when a registered baked asset has vanished, its on-disk sha256 diverged
+    from the recorded hash, or one path is registered under two ids (REUSE-REGISTRY-GUARD).
+
+    Reads the sanctioned, NON-LOADED ``RAG_CONTEXT.json`` ``baked_assets`` partition
+    via :func:`rag_kernel.asset_registry.load_registry`, so the auditor and the
+    register/reuse-check verbs agree by construction. Self-skips clean when ``rag_dir``
+    is None, the store/partition is absent, or the registry is empty — a deployment
+    that never baked an asset audits clean and byte-for-byte back-compatibly.
+    """
+    findings: list[AuditFinding] = []
+    if rag_dir is None:
+        return findings
+    try:
+        from rag_kernel.asset_registry import (
+            AssetRegistryError, compute_sha256, list_assets, resolve_path,
+        )
+    except Exception:  # pragma: no cover - sibling module always present
+        return findings
+    try:
+        assets = list_assets(rag_dir)
+    except AssetRegistryError as ex:
+        return [AuditFinding(
+            check="asset_registry", severity=ERROR,
+            detail=f"baked_assets registry unreadable: {ex}")]
+
+    root = project_root if project_root is not None else Path(rag_dir).parent
+    seen_paths: dict[str, str] = {}
+    for rec in assets:
+        prior = seen_paths.get(rec.path)
+        if prior is not None and prior != rec.asset_id:
+            findings.append(AuditFinding(
+                check="asset_registry", severity=ERROR,
+                detail=(f"path {rec.path!r} registered under two ids "
+                        f"({prior!r} and {rec.asset_id!r}) — duplicate baked asset")))
+        else:
+            seen_paths.setdefault(rec.path, rec.asset_id)
+        fp = resolve_path(rec.path, root)
+        if not fp.is_file():
+            findings.append(AuditFinding(
+                check="asset_registry", severity=ERROR,
+                detail=(f"registered asset {rec.asset_id!r} missing on disk at "
+                        f"{rec.path!r} — registry record without a file")))
+            continue
+        actual = compute_sha256(fp)
+        if actual != rec.sha256:
+            findings.append(AuditFinding(
+                check="asset_registry", severity=ERROR,
+                detail=(f"registered asset {rec.asset_id!r} at {rec.path!r} diverged: "
+                        f"recorded sha256 {rec.sha256[:12]} != on-disk {actual[:12]}")))
+    return findings
+
+
 def check_template_keys(hot: dict) -> list[AuditFinding]:
     """ERROR for any ``_``-prefixed template key leaked into operating_protocol (K5).
 
@@ -2185,6 +2241,10 @@ def audit_file(
     extra += check_wal_integrity(p.parent / wal_name)
     extra += check_bak_parity(p, hot)
     extra += check_cold_hot_version(p.parent / cold_name, hot)
+    # REUSE-REGISTRY-GUARD: baked-asset registry integrity. RAG_CONTEXT.json lives in
+    # the RAG dir (= p.parent); project root = use_root (default: the grandparent).
+    extra += check_asset_registry(
+        p.parent, use_root if use_root is not None else p.parent.parent)
     # KA-1: ran-but-never-checkpointed — a completed session log (RAG/session_log_
     # <sid>.jsonl) newer than meta.written_by_session is the governance-freeze
     # signature the auditor previously missed. RAG dir = p.parent; self-skips clean.

@@ -817,6 +817,48 @@ def build_parser() -> argparse.ArgumentParser:
     transplant_parser.add_argument("--dry-run", action="store_true",
                                    help="render every planned addition and collision line-by-line without writing")
 
+    # -- register-asset / reuse-check (REUSE-REGISTRY-GUARD: baked-asset registry) --
+    # Lean-RAG: the inventory lives in the sanctioned, NON-LOADED RAG_CONTEXT.json
+    # `baked_assets` partition; RAG_MASTER.json carries only the concise
+    # reuse_registry_guard pointer rule. See rag_kernel.asset_registry.
+    reg_asset_parser = subparsers.add_parser(
+        "register-asset",
+        help="Register a baked asset (path + purpose + sha256) into the sanctioned, "
+             "non-loaded RAG_CONTEXT.json baked_assets partition (lean-RAG). Additive + "
+             "idempotent; a rebound id or a duplicate path is fail-loud. REUSE-REGISTRY-GUARD.",
+    )
+    reg_asset_parser.add_argument("path", type=Path,
+                                  help="path to the asset file (relative to project root or absolute)")
+    reg_asset_parser.add_argument("--purpose", type=str, required=True,
+                                  help="one-line description of what the asset does (matched by reuse-check)")
+    reg_asset_parser.add_argument("--id", dest="asset_id", type=str, default=None,
+                                  help="stable asset id (default: the project-relative POSIX path)")
+    reg_asset_parser.add_argument("--session", type=str, required=True,
+                                  help="session id recorded on the asset record")
+    reg_asset_parser.add_argument("--rag-dir", type=Path, default=_default_rag_path().parent,
+                                  help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
+    reg_asset_parser.add_argument("--project-root", type=Path, default=None,
+                                  help="project root for portable relative-path storage (default: parent of rag-dir)")
+    reg_asset_parser.add_argument("--dry-run", action="store_true",
+                                  help="validate + render the record without writing")
+
+    reuse_check_parser = subparsers.add_parser(
+        "reuse-check",
+        help="Pre-write reuse guard: report any baked asset already covering a --path "
+             "and/or --purpose. Fail-loud (exit 1) on a hit so you REUSE instead of "
+             "rewrite; exit 0 when nothing is baked yet. REUSE-REGISTRY-GUARD.",
+    )
+    reuse_check_parser.add_argument("--path", type=Path, default=None,
+                                    help="candidate asset path to check for prior registration")
+    reuse_check_parser.add_argument("--purpose", type=str, default=None,
+                                    help="candidate purpose to check (case-insensitive containment, either direction)")
+    reuse_check_parser.add_argument("--rag-dir", type=Path, default=_default_rag_path().parent,
+                                    help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
+    reuse_check_parser.add_argument("--project-root", type=Path, default=None,
+                                    help="project root for portable relative-path storage (default: parent of rag-dir)")
+    reuse_check_parser.add_argument("--json", dest="json_output", action="store_true",
+                                    help="output matches as JSON instead of text")
+
     # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
     verify_parser = subparsers.add_parser(
         "verify",
@@ -4510,6 +4552,91 @@ def cmd_transplant(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_context_dir(rag_dir: Path) -> Path:
+    """Shared with cmd_context (KA-CTX-RAGFLAG): operators habitually pass a FILE to
+    a --rag*-style flag; the context store lives in a DIRECTORY. When the path is (or
+    names) a file, use its containing directory instead of crashing at mkdir."""
+    d = rag_dir.resolve()
+    if d.is_file() or d.suffix.lower() == ".json":
+        print(f"note: registry store lives in a directory, but --rag-dir named a file "
+              f"({d.name}); using its directory {d.parent} instead.", file=sys.stderr)
+        d = d.parent
+    return d
+
+
+def cmd_register_asset(args: argparse.Namespace) -> int:
+    """Register a baked asset into the sanctioned baked_assets partition (REUSE-REGISTRY-GUARD).
+
+    Additive + idempotent through the lean-RAG RAG_CONTEXT.json store: re-registering
+    the same id with identical content is a no-op, a rebound id or a duplicate path is
+    fail-loud (exit 1). The file being registered must exist (its sha256 is the record).
+    """
+    from rag_kernel.asset_registry import (
+        AssetRegistryError, PARTITION_NAME, normalize_path, register_asset,
+    )
+
+    rag_dir = _resolve_context_dir(args.rag_dir)
+    project_root = args.project_root.resolve() if args.project_root else rag_dir.parent
+    asset_id = args.asset_id or normalize_path(args.path, project_root)
+
+    try:
+        rec, action = register_asset(
+            rag_dir, asset_id=asset_id, path=args.path, purpose=args.purpose,
+            session=args.session, project_root=project_root, dry_run=args.dry_run,
+        )
+    except AssetRegistryError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        head = "[DRY RUN] would register"
+    elif action == "idempotent":
+        head = "already registered (idempotent -- no write)"
+    else:
+        head = "registered"
+    print(f"register-asset: {head} [session {args.session}]:")
+    print(f"  id:      {rec.asset_id}")
+    print(f"  path:    {rec.path}")
+    print(f"  purpose: {rec.purpose}")
+    print(f"  sha256:  {rec.sha256}")
+    if action == "created" and not args.dry_run:
+        print(f"  -> appended to RAG_CONTEXT.json[{PARTITION_NAME}] (non-loaded store; no .bak).")
+    return 0
+
+
+def cmd_reuse_check(args: argparse.Namespace) -> int:
+    """Pre-write reuse guard (REUSE-REGISTRY-GUARD): report baked assets already
+    covering a path/purpose. Fail-loud (exit 1) on a hit so the caller reuses instead
+    of re-authoring; exit 0 when nothing is baked yet. Never writes."""
+    import json as _json
+    from rag_kernel.asset_registry import AssetRegistryError, reuse_check
+
+    rag_dir = _resolve_context_dir(args.rag_dir)
+    project_root = args.project_root.resolve() if args.project_root else rag_dir.parent
+
+    try:
+        hits = reuse_check(
+            rag_dir, path=args.path, purpose=args.purpose, project_root=project_root
+        )
+    except AssetRegistryError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json_output", False):
+        print(_json.dumps({"ok": not hits, "hits": [h.to_dict() for h in hits]}, indent=2))
+        return 1 if hits else 0
+
+    if not hits:
+        crit = args.path if args.path is not None else args.purpose
+        print(f"reuse-check: CLEAR -- no baked asset covers {str(crit)!r}; safe to author.")
+        return 0
+    print(f"reuse-check: REUSE -- {len(hits)} baked asset(s) already cover this "
+          f"(do NOT rewrite; reuse):")
+    for h in hits:
+        print(f"  - {h.asset_id}  [{h.path}]  purpose: {h.purpose}  sha256:{h.sha256[:12]}")
+    return 1
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Deterministic post-init coherence gate (FIX-2, K4/K8).
 
@@ -4840,6 +4967,8 @@ def main(argv: list[str] | None = None) -> int:
         "refresh-current-status": cmd_refresh_current_status,
         "migrate": cmd_migrate,
         "transplant": cmd_transplant,
+        "register-asset": cmd_register_asset,
+        "reuse-check": cmd_reuse_check,
         "verify": cmd_verify,
         "context": cmd_context,
     }
