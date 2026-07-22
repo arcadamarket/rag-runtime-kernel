@@ -2599,8 +2599,75 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _session_seq(sid: "str | None") -> "int | None":
+    """Trailing-integer sequence of a session id (``S171`` -> 171); None if absent."""
+    import re
+    if not sid:
+        return None
+    m = re.search(r"(\d+)$", str(sid))
+    return int(m.group(1)) if m else None
+
+
+def _last_sealed_session(rag_path: Path, rag_dir: Path) -> "str | None":
+    """The most recent session PROVEN sealed: its ``session_close`` marker reached
+    ``transfer_ready`` AND its canonical transfer-surface report exists on disk
+    (Rule 23 — ``AUDIT_CANONICAL_REPORT_<sid>.md``). Returns the sealed session id,
+    else None (the latest close is not a completed, surfaced seal).
+    """
+    marker = _read_close_marker(rag_path)
+    if not isinstance(marker, dict) or not marker.get("transfer_ready", False):
+        return None
+    sealed = marker.get("session")
+    if not sealed:
+        return None
+    if not _close_report_artifact_path(rag_dir, sealed).exists():
+        return None
+    return sealed
+
+
+def _unsealed_prior_session(
+    rag_path: Path, rag_dir: Path, new_sid: "str | None"
+) -> "str | None":
+    """CLOSE-SEAL-ENFORCE (KA-21): the highest PRIOR session that RAN (has a
+    ``session_log_*.jsonl`` on disk) but was never sealed. Returns that session id,
+    else None.
+
+    Catches the S157 class — a session that never ran ``session-end``, leaving zero
+    close events and no ``AUDIT_CANONICAL_REPORT`` — which the single ``session_close``
+    marker (holding only the LAST completed close) structurally cannot reveal. The
+    check is gated on the close protocol being in use (a ``session_close`` marker
+    exists): a legacy/un-migrated RAG that never adopted the sealed close closes
+    byte-for-byte as before (back-compat, mirroring KA-13's undeclared skip).
+
+    A ran session ``S`` counts as unsealed iff ``session_log_S<seq>.jsonl`` exists
+    with ``seq`` strictly greater than the last sealed session's seq, excluding
+    ``new_sid`` itself.
+    """
+    import re
+    if not isinstance(_read_close_marker(rag_path), dict):
+        return None  # close protocol not in use — legacy RAG, do not retro-enforce
+    sealed_seq = _session_seq(_last_sealed_session(rag_path, rag_dir))
+    if sealed_seq is None:
+        return None  # last close not a completed seal — step 3 handles aborts
+    new_seq = _session_seq(new_sid)
+    worst, worst_seq = None, sealed_seq
+    for p in rag_dir.glob("session_log_*.jsonl"):
+        m = re.search(r"session_log_(.+)\.jsonl$", p.name)
+        if not m:
+            continue
+        cand_seq = _session_seq(m.group(1))
+        if cand_seq is None:
+            continue
+        if new_seq is not None and cand_seq == new_seq:
+            continue  # the session being started now
+        if cand_seq > worst_seq:
+            worst, worst_seq = m.group(1), cand_seq
+    return worst
+
+
 def _carry_forward_gate(
-    rag_path: Path, *, strict: bool = False, git_head: "str | None" = None
+    rag_path: Path, *, strict: bool = False, git_head: "str | None" = None,
+    rag_dir: "Path | None" = None, new_sid: "str | None" = None,
 ) -> tuple[bool, list[str]]:
     """KA-6 session-START gate: is the INHERITED RAG coherent and safe to build on?
 
@@ -2674,6 +2741,26 @@ def _carry_forward_gate(
     except (OSError, ValueError):
         pass
 
+    # 4. CLOSE-SEAL-ENFORCE (S172, KA-21). Step 3 catches a close that STARTED and
+    #    aborted (marker transfer_ready=false); this catches the complementary hole
+    #    — a prior session that never ran session-end AT ALL, so no close event and
+    #    no AUDIT_CANONICAL_REPORT ever existed (the S157 gap, independently
+    #    reproduced as the eBay S14 CLOSE-GAP — UNIVERSAL per Rule 15). Refuse to
+    #    build a new session forward over an unsealed predecessor.
+    if rag_dir is not None:
+        try:
+            unsealed = _unsealed_prior_session(rag_path, rag_dir, new_sid)
+            if unsealed:
+                findings.append(
+                    f"unsealed prior session: {unsealed} ran (session_log present) but "
+                    "was never sealed — no COMPLETE session_close and no "
+                    f"AUDIT_CANONICAL_REPORT_{unsealed}.md. Seal it first: "
+                    "`session-resume` (if a close was interrupted) or `session-end "
+                    f"--session {unsealed}` — or pass --force to start anyway (UNSAFE)."
+                )
+        except (OSError, ValueError):
+            pass
+
     return (not findings), findings
 
 
@@ -2743,6 +2830,82 @@ def _render_rule_digest(lines: "list[tuple[str, str]]") -> str:
     if not lines:
         return "  (no operating_protocol rules in this RAG)"
     return "\n".join(f"  - {k}: {summ}" for k, summ in lines)
+
+
+# ---------------------------------------------------------------------------
+# KA-20 — BOOT-GUARD-FIRST-ACTION (S172)
+# ---------------------------------------------------------------------------
+#
+# Root cause (E-071/072/073/075/076, five consecutive fresh boots): at "hello" a
+# cold-booting agent reads RAG_MASTER.json via the PERMANENTLY-BANNED Cowork
+# sandbox to brief the operator, BEFORE the governed ritual. A rule in the RAG
+# cannot bind — the agent breaks it while loading it. The kernel cannot observe a
+# sandbox read from inside, so BOOT-GUARD does not claim to (increment-status
+# honesty). It removes the TRIGGER and records PROOF:
+#
+#   (1) session-start renders a deterministic BOOT-STATE BRIEFING — the exact
+#       state facts (ledger OPEN/overdue, next_session_directive, backlog counts)
+#       the agent would otherwise open the RAG to get — so there is no reason to
+#       read RAG_MASTER.json directly at all;
+#   (2) it writes a ``boot_guard`` first-action marker (the governed boot ran);
+#   (3) it prints an explicit E-071-class notice naming the sandbox read as a
+#       violation.
+#
+# The load-bearing PREVENTION is out-of-band, in the Project Instructions (which
+# load before any file read): step 1 must mandate `rag_kernel session-start` as
+# the first action and forbid a direct RAG read. Kernel + PI together = the
+# "kill the trigger + fail loud" design settled S172.
+
+_BOOT_GUARD_NOTICE = (
+    "[BOOT-GUARD] The briefing above is the CANONICAL boot state — it is complete.\n"
+    "  Do NOT read RAG_MASTER.json directly (sandbox or any transport) to brief\n"
+    "  state: a direct/sandbox read of the canonical RAG at boot is an E-071-class\n"
+    "  tool_hierarchy violation. All governed reads go through this command / tmux."
+)
+
+
+def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None) -> str:
+    """Deterministic boot-state briefing from the RAG — every state fact the agent
+    needs at boot, so it never has to open RAG_MASTER.json itself (KA-20).
+
+    Renders: inference_ledger OPEN count (+ overdue OPEN items >2 sessions old per
+    inference_ledger_protocol step 4), the next_session_directive, and
+    priority_actions / open_tasks / deferred_items counts.
+    """
+    led = rag.get("inference_ledger", []) or []
+    open_items = [x for x in led if isinstance(x, dict) and x.get("disposition") == "OPEN"]
+    cur_seq = _session_seq(current_sid)
+    overdue = 0
+    if cur_seq is not None:
+        for x in open_items:
+            s = _session_seq(x.get("session"))
+            if s is not None and (cur_seq - s) > 2:
+                overdue += 1
+    pa = rag.get("priority_actions", []) or []
+    ot = rag.get("open_tasks", []) or []
+    di = rag.get("deferred_items", []) or []
+    nsd = rag.get("next_session_directive")
+
+    lines: list[str] = []
+    overdue_txt = f" ({overdue} OVERDUE >2 sessions)" if overdue else ""
+    lines.append(
+        f"  inference_ledger: {len(open_items)} OPEN of {len(led)} total{overdue_txt}"
+    )
+    if isinstance(nsd, dict):
+        directive = " ".join(str(nsd.get("directive", "")).split())
+        if len(directive) > 300:
+            directive = directive[:300] + "…"
+        lines.append(
+            f"  next_session_directive: for {nsd.get('for_session', '?')} "
+            f"(by {nsd.get('session', '?')}) — {directive or '(none)'}"
+        )
+    else:
+        lines.append("  next_session_directive: (none)")
+    lines.append(
+        f"  backlog: priority_actions={len(pa)}, open_tasks={len(ot)}, "
+        f"deferred_items={len(di)}"
+    )
+    return "\n".join(lines)
 
 
 def _read_top_level_field(rag_path: Path, key: str):
@@ -2842,7 +3005,8 @@ def cmd_session_start(args: argparse.Namespace) -> int:
 
     # 1. Carry-forward gate (fail-loud).
     ok, findings = _carry_forward_gate(
-        rag_path, strict=args.strict, git_head=getattr(args, "git_head", None)
+        rag_path, strict=args.strict, git_head=getattr(args, "git_head", None),
+        rag_dir=rag_dir, new_sid=sid,
     )
     print("[1/4] Carry-forward gate:")
     if ok:
@@ -2925,6 +3089,24 @@ def cmd_session_start(args: argparse.Namespace) -> int:
             "rule_count": len(lines),
             "started_utc": _utcnow_iso(),
             "attested_utc": None,
+        },
+    )
+
+    # 3c. BOOT-GUARD (KA-20) — render the canonical boot-state briefing so the
+    #     agent has every state fact WITHOUT reading RAG_MASTER.json directly (the
+    #     E-071-class trigger), record the first-action boot-proof marker, and
+    #     print the E-071-class notice.
+    print("[BOOT-GUARD] Boot-state briefing (canonical — no direct RAG read needed):")
+    print(_render_boot_briefing(rag, current_sid=sid))
+    print(_BOOT_GUARD_NOTICE)
+    _write_top_level_field(
+        rag_path,
+        "boot_guard",
+        {
+            "session": sid,
+            "first_action_utc": _utcnow_iso(),
+            "briefing_rendered": True,
+            "source": "rag_kernel session-start (governed boot path)",
         },
     )
 

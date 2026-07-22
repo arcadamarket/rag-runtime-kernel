@@ -4,6 +4,35 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+## [v0.4.45] — 2026-07-22
+
+_BOOT-INTEGRITY SPINE (S172) — two fail-loud boot-boundary guards shipped together.
+**BOOT-GUARD-FIRST-ACTION (KA-20, E-071/072/073/075/076 — fifth consecutive fresh-boot
+recurrence):** a cold-booting agent reads `RAG_MASTER.json` via the PERMANENTLY-BANNED
+Cowork sandbox to brief the operator BEFORE the governed ritual — a rule in the RAG
+cannot bind because the agent breaks it while loading it. The kernel cannot observe a
+sandbox read from inside, so BOOT-GUARD does not claim to (increment-status honesty): it
+kills the TRIGGER and records PROOF. `session-start` phase 1 now renders a deterministic
+**boot-state briefing** (inference_ledger OPEN count + `>2`-session OVERDUE flag,
+`next_session_directive`, and priority_actions/open_tasks/deferred_items counts) so the
+agent has every state fact WITHOUT opening the RAG directly; writes a `boot_guard`
+first-action marker; and prints an explicit E-071-class notice. The load-bearing
+prevention is the out-of-band Project-Instructions rewrite (step 1 mandates
+`rag_kernel session-start` as the first action and forbids a direct RAG read). **CLOSE-SEAL-ENFORCE
+(KA-21, S157 gap; independently reproduced as the eBay S14 CLOSE-GAP — UNIVERSAL per Rule
+15):** the carry-forward gate's KA-16 step 3 catches a close that STARTED and aborted
+(`session_close` marker `transfer_ready=false`) but NOT a session that never ran
+`session-end` at all (zero close events, no `AUDIT_CANONICAL_REPORT`). `_carry_forward_gate`
+now refuses to open a new session over an unsealed predecessor — a session with a
+`session_log` on disk whose seq exceeds the last SEALED session's (sealed = `transfer_ready`
+AND `AUDIT_CANONICAL_REPORT_<sid>.md` present, Rule 23). Gated on the close protocol being
+in use (a `session_close` marker exists) so a legacy/un-migrated RAG is byte-for-byte
+untouched; `--force` overrides, message points to `session-resume`/`session-end`. Runtime
+`__version__` 0.4.44 → 0.4.45, `__spec_version__` unchanged (3.2.7); no new capability
+module (still 20), drift gate `268149294421` unchanged (no schema/WAL/TLA+ change); new
+tests `test_ka20_boot_guard_first_action` + `test_ka21_close_seal_enforce`; full suite
+2,002 → 2,021 green (+19)._
+
 ## [v0.4.44] — 2026-07-22
 
 _BOOTMAP-BOOTROOT-FIX (E-074) — the domain boot-map's `boot_root` is now pinned to the project root, decoupling it from `--gc-path`/CWD. The v0.4.43 bootmap seals its baseline against the project root (`refresh_baseline(rag_dir.parent, …)`) and the audit invariant keys off `p.parent.parent`, but `cmd_session_start` derived the boot-line `boot_root` from `--gc-path` — whose default `Path(".")` is always truthy, so the intended `else rag_dir.parent` branch was dead. Run per `governance_runtime` from `RAG/`, session-start walked `RAG/` and diffed RAG-relative paths against the project-root-keyed baseline, emitting a spurious full `+N/-M` turnover on every boot (cosmetic — `session_start_line` is READ-ONLY, the persisted seal was always correct). `boot_root` is now unconditionally `rag_dir.parent`; `--gc-path` governs ONLY the GC scan, never the boot-map root. Regression test `test_session_start_bootmap_root_is_project_root_not_gcpath` (fails on the old code, passes on the fix). Runtime `__version__` 0.4.43 → 0.4.44, `__spec_version__` unchanged (3.2.7); no new capability module (still 20), health 21/21, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change); full suite 2,001 → 2,002 green (+1)._
