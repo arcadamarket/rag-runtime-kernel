@@ -32,6 +32,34 @@ KA-8 — bake the GC-first carry-forward gate + session-end ritual into the univ
 
 ---
 
+## v0.4.44 — Released (2026-07-22)
+
+BOOTMAP-BOOTROOT-FIX (E-074) — the domain boot-map's `boot_root` is pinned to the project root, decoupled from `--gc-path`/CWD. v0.4.43 seals its baseline against the project root and audits against `p.parent.parent`, but `cmd_session_start` derived the boot-line `boot_root` from `--gc-path` (default `Path(".")`, always truthy → the intended `else rag_dir.parent` branch was dead), so a run from `RAG/` diffed RAG-relative paths against the project-root-keyed baseline and emitted a spurious full `+N/-M` boot line (cosmetic — `session_start_line` is READ-ONLY, the persisted seal was always correct). `boot_root` is now unconditionally `rag_dir.parent`; `--gc-path` governs only the GC scan. +regression test `test_session_start_bootmap_root_is_project_root_not_gcpath`. Runtime `__version__` 0.4.43 → 0.4.44, `__spec_version__` unchanged (3.2.7); no new capability module (still 20), health 21/21, drift gate `268149294421` unchanged; full suite 2,001 → 2,002 green (+1).
+
+## v0.4.43 — Released (2026-07-21)
+
+ROOT-FILE-MANIFEST — a deterministic domain boot-map. New `rag_kernel/bootmap.py` walks the project root at session-open, emitting `{path, sha256, size, mtime, class, owner}` per file (GC exclude set + `GIT WORKTREES` dev tree), persisted to a machine-generated `BOOTMAP_MANIFEST.json` sidecar under `.bak` parity, diffed by content-hash against the prior-session baseline into a `since-S<last>` `+new/~changed/-deleted` boot line. `owner=operator` classification closes S166 F3. A fail-loud `check_map_coverage` invariant runs in `audit`. Folded into `session-start` [2/4] and `session-end` close (Step 1c reseal), no per-boot GitHub read. Resolves ROOT-FILE-MANIFEST. Runtime `__version__` 0.4.42 → 0.4.43, `__spec_version__` unchanged (3.2.7); new verb-support module `bootmap` (count stays 20), health 21/21, drift gate unchanged; full suite 1,964 → 2,001 green (+37).
+
+## v0.4.42 — Released (2026-07-21)
+
+REUSE-REGISTRY-GUARD — a baked-asset registry + reuse-before-rewrite guard closing the anti-redundancy gap where agents re-author already-baked artifacts. New `asset_registry` verb-support module (inventory of `{asset_id, path, purpose, sha256}`, a pre-write reuse guard, a fail-loud auditor); the inventory lives in the non-loaded `RAG_CONTEXT.json` `baked_assets` partition with only a concise `reuse_registry_guard` pointer in HOT. New verbs `register-asset` + `reuse-check`; `drift_audit.check_asset_registry` fails loud on a vanished/diverged/duplicate-path asset. Runtime `__version__` 0.4.41 → 0.4.42, `__spec_version__` unchanged (3.2.7); no new capability module (still 20), health 21/21; full suite 1,946 → 1,964 green (+18).
+
+## v0.4.41 — Released
+
+Scaffold transplant verb on classification Authority A (spec-derived) — `rag_kernel/transplant.py`, additive-only, fail-loud on collision (never overwrite), dry-run line-by-line, atomic FIX-4 + `meta.transplants` audit trail, wired in `__main__`. Resolves TRANSPLANT-CLASSIFY-AUTHORITY. Runtime `__version__` 0.4.40 → 0.4.41; suite 1,929 → 1,946 green.
+
+## v0.4.40 — Released
+
+MIGRATE-INITPROMPT-REPAIR-PATH — unconditional `init_prompt`/`policy` coherence with an auditor invariant `check_policy_initprompt_coherence`, closing the coherence-pair gap surfaced in E-068. Runtime `__version__` bump into 0.4.40.
+
+## v0.4.39 — Released
+
+Spec `v3.2.7` self-adoption + `migrate` init_prompt pairing — the kernel adopts its own newest spec generation and pairs the `init_prompt` with `policy_version` during migrate. `__spec_version__` → 3.2.7.
+
+## v0.4.38 — Released
+
+KA-SCHEMA-MIGRATE — a governed, deployment-facing schema/version migration verb (`migrate`) with a declared additive-idempotent ladder; never assumes direction, refuses a deployment that is ahead, preserves project-owned state in place, and appends a `meta.migrations` audit entry. New `schema_migrate` capability module (the 20th). Runtime `__version__` 0.4.37 → 0.4.38; suite 1,861 → 1,911 green (+50).
+
 ## v0.4.37 — Released (2026-07-16)
 
 REPORT-{RULE21-FIDELITY, BACKLOG-DEDUP, PRIORITY-COMPLETE} — the three report-content findings of the S153 transfer-surface audit, fixed together in the section-4 renderer (operator-authorized batch, S155). The Rule 21 priority burn-down now always surfaces **P1** (the priority spine) and the **active group** — an empty group emits an explicit `clear ✓` row instead of being silently omitted — and marks the lowest-numbered group still holding active work `← ACTIVE`, so the burn-down actually names the active group + what shipped this session + what remains (REPORT-RULE21-FIDELITY). Active/deferred items are now **referenced by id** in the burn-down rather than re-listed with their titles, leaving the flat Open / Blocked / Deferred lists as the single itemized authority (Rule 16), so no backlog item prints twice; items resolved *this* session (already gone from the flat lists) keep their title as the shipped signal (REPORT-BACKLOG-DEDUP). The un-triaged catch-all carries an explicit `Unprioritized · needs a P-group` label instead of a silent `Unassigned` bucket, and section 2 / the at-a-glance milestone cell now name the **live released build** (`release_ref`/`version`, gathered from git by the caller) rather than a stale newest-`RELEASE` tracked-item — folding the S154 cosmetic gap where the report read `RELEASE-v0.4.35` after v0.4.36 had shipped without a minted RELEASE item (REPORT-PRIORITY-COMPLETE). Runtime `__version__` 0.4.36 → 0.4.37, `__spec_version__` unchanged (3.2.6). No new module (still 19), health 20/20, drift gate `268149294421` unchanged (no schema/WAL/TLA+ change), full suite 1,859 → 1,861 green (+2). `drift_render` 1.2.0 → 1.3.0.
