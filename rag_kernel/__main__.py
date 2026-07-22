@@ -2876,7 +2876,16 @@ def cmd_session_start(args: argparse.Namespace) -> int:
         print("[2/4] GC: skipped (--no-gc).")
     try:
         from rag_kernel import bootmap
-        boot_root = Path(args.gc_path).resolve() if getattr(args, "gc_path", None) else rag_dir.parent
+        # BOOTMAP-BOOTROOT-FIX (S170, E-074): the domain boot-map baseline is
+        # ALWAYS sealed against the project root (refresh_baseline(rag_dir.parent,
+        # ...)) and audited against p.parent.parent, so boot_root MUST be that same
+        # project root regardless of --gc-path or CWD. The prior form keyed boot_root
+        # off --gc-path (default Path(".") = CWD, always truthy -> the else branch
+        # was dead): run per governance_runtime from RAG/, it walked RAG/ and diffed
+        # RAG-relative paths against the project-root-keyed baseline, yielding a
+        # spurious full +N/-M turnover. --gc-path governs ONLY the GC scan (above),
+        # never the boot-map root.
+        boot_root = rag_dir.parent
         print(f"[2/4] {bootmap.session_start_line(boot_root, rag_dir)}")
     except Exception as exc:  # boot-map is advisory at start; never block the open
         print(f"[2/4] Domain map: unavailable ({exc}).", file=sys.stderr)

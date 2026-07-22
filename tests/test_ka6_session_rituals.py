@@ -132,6 +132,38 @@ def test_session_start_no_gc_skips_scan(tmp_path, monkeypatch, capsys):
     assert "GC: skipped" in capsys.readouterr().out
 
 
+def test_session_start_bootmap_root_is_project_root_not_gcpath(tmp_path, monkeypatch, capsys):
+    # BOOTMAP-BOOTROOT-FIX (S170, E-074): the domain boot-map must diff the live
+    # tree against the PROJECT ROOT (rag_dir.parent) — the same root session-end
+    # seals the baseline against — and NEVER against --gc-path/CWD. The regression:
+    # run per governance_runtime from RAG/ (so --gc-path/CWD = the RAG subdir), the
+    # prior code keyed boot_root off --gc-path, walked RAG/, and reported every
+    # project-root-keyed baseline path as DELETED — a spurious full turnover on an
+    # unchanged tree. This pins boot_root to rag_dir.parent, so --gc-path only
+    # steers the GC scan, never the boot-map root.
+    from rag_kernel import bootmap
+
+    proj = tmp_path
+    rag_dir = proj / "RAG"
+    rag_dir.mkdir()
+    (proj / "README.md").write_text("hi", encoding="utf-8")  # a governed root file
+    rag = _write_rag(rag_dir, "S0")
+    # Seal the baseline against the PROJECT ROOT, exactly like session-end does.
+    bootmap.refresh_baseline(proj, rag_dir, "S0")
+
+    monkeypatch.setattr(m, "_carry_forward_gate", lambda *a, **k: (True, []))
+    # --gc-path points at the RAG subdir — what the documented `cd RAG/` invocation
+    # makes CWD. The boot-map root must NOT follow it.
+    rc = main(["session-start", "S1", "--rag", str(rag),
+               "--gc-path", str(rag_dir), "--no-attest-gate"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Domain map:" in out and "since S0:" in out
+    # The baseline is intact on disk, so nothing is deleted. The bug reported the
+    # whole project-root-keyed baseline as deleted (>=2 here).
+    assert "-0 deleted" in out
+
+
 # --- session-end orchestration --------------------------------------------
 
 def _start_logger(tmp_path: Path, sid: str) -> None:
