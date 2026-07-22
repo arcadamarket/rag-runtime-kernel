@@ -2090,6 +2090,7 @@ def audit_hot(
     hot: dict,
     *,
     root: Optional[Path | str] = None,
+    rag_dir: Optional[Path | str] = None,
     error_log_path: Optional[Path | str] = None,
     doc_paths=None,
     version: Optional[str] = None,
@@ -2145,6 +2146,13 @@ def audit_hot(
         # into the RAG. Filesystem-backed like the side-store scan, so gated by the
         # same ``root`` presence; self-skips clean when no declared-secret file exists.
         findings += check_secrets_boundary(hot, root)
+        # ROOT-FILE-MANIFEST (bootmap S168): fail loud if the sealed domain boot-map
+        # drifts from disk — a mapped file that vanished, or a governed file on disk
+        # the map does not cover. Filesystem-backed like the scans above; self-skips
+        # clean until a baseline exists (fresh deploy) or when rag_dir is unknown.
+        if rag_dir is not None:
+            from rag_kernel import bootmap  # lazy: keep module import graph acyclic
+            findings += bootmap.check_map_coverage(hot, root, rag_dir)
     return AuditReport(tuple(findings))
 
 
@@ -2227,7 +2235,8 @@ def audit_file(
         doc_paths = reconciliation_surfaces(hot, docs_root)
 
     report = audit_hot(
-        hot, root=use_root, error_log_path=elp, doc_paths=doc_paths,
+        hot, root=use_root, rag_dir=(p.parent if use_root is not None else None),
+        error_log_path=elp, doc_paths=doc_paths,
         version=version, module_count=module_count, drift_sha=drift_sha,
         git_head=git_head)
 

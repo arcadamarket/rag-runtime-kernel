@@ -914,6 +914,33 @@ def build_parser() -> argparse.ArgumentParser:
     ctx_list.add_argument("--json", dest="json_output", action="store_true",
                           help="output the summary as JSON")
 
+    # -- bootmap (ROOT-FILE-MANIFEST S168) --
+    # Deterministic domain boot-map: walk the project root, diff vs the sealed
+    # baseline, and (optionally) refresh the baseline. The same walk the
+    # session-start GC step already does — this verb exposes it standalone.
+    bootmap_parser = subparsers.add_parser(
+        "bootmap",
+        help="Domain boot-map: walk the project root, diff vs the sealed baseline (--refresh to reseal).",
+    )
+    bootmap_parser.add_argument(
+        "--rag", type=Path, default=_default_rag_path(),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json) — its dir holds the map sidecar",
+    )
+    bootmap_parser.add_argument(
+        "--root", type=Path, default=None,
+        help="Project root to walk (default: the RAG file's grandparent)",
+    )
+    bootmap_parser.add_argument(
+        "--refresh", action="store_true",
+        help="Reseal the persisted baseline (session-end semantics) instead of a read-only diff.",
+    )
+    bootmap_parser.add_argument(
+        "--session", type=str, default=None,
+        help="Session id stamped on a --refresh reseal (audit trail).",
+    )
+    bootmap_parser.add_argument("--json", dest="json_output", action="store_true",
+                                help="output the map/diff as JSON")
+
     return parser
 
 
@@ -2839,12 +2866,20 @@ def cmd_session_start(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    # 2. gc dry-run (report-before-delete).
+    # 2. gc dry-run (report-before-delete) + domain boot-map (ROOT-FILE-MANIFEST
+    #    S168): the same root walk feeds the deterministic map, diffed against the
+    #    sealed baseline and returned into context so the agent is never boot-blind.
     if not getattr(args, "no_gc", False):
         print("[2/4] GC (dry-run):")
         cmd_gc(argparse.Namespace(path=args.gc_path, dry_run=True))
     else:
         print("[2/4] GC: skipped (--no-gc).")
+    try:
+        from rag_kernel import bootmap
+        boot_root = Path(args.gc_path).resolve() if getattr(args, "gc_path", None) else rag_dir.parent
+        print(f"[2/4] {bootmap.session_start_line(boot_root, rag_dir)}")
+    except Exception as exc:  # boot-map is advisory at start; never block the open
+        print(f"[2/4] Domain map: unavailable ({exc}).", file=sys.stderr)
 
     # 3a. Legacy one-shot bypass (UNSAFE) — kept for CI and emergencies.
     if getattr(args, "no_attest_gate", False):
@@ -3183,6 +3218,20 @@ def _drive_close(
             "[1b] intent-fidelity: next_session_directive persisted + "
             "verbatim-matched (KA-INTENT-FIDELITY inc1)."
         )
+
+    # Step 1c — ROOT-FILE-MANIFEST (bootmap S168): reseal the domain boot-map as
+    # the sealed baseline the NEXT boot diffs against, and set the one-line
+    # meta.rag_files pointer. Runs after the checkpoint (so the map captures
+    # everything banked this session) and before the audit (so check_map_coverage
+    # sees a fresh baseline == disk). Advisory-fail: a map hiccup must never strand
+    # an otherwise-green close, so it warns rather than aborting.
+    try:
+        from rag_kernel import bootmap
+        _bm_path = bootmap.refresh_baseline(rag_dir.parent, rag_dir, sid)
+        bootmap.ensure_meta_pointer(rag_path)
+        print(f"[1c] Domain map resealed: {_bm_path.name} (+.bak parity).")
+    except Exception as _bm_exc:
+        print(f"  WARN: could not reseal domain boot-map: {_bm_exc}", file=sys.stderr)
 
     # Step 2/4 — close the session logger (KA-4 gate satisfied by step 1).
     if not steps.get("logger_close"):
@@ -4935,6 +4984,44 @@ def _dispatch_with_bootstrap_log(
             pass  # never let observability break the command
 
 
+def cmd_bootmap(args: argparse.Namespace) -> int:
+    """ROOT-FILE-MANIFEST (S168) — deterministic domain boot-map verb.
+
+    Default (read-only): walk the project root, diff against the sealed baseline,
+    and print the ``Domain map: N files; since S<last>: ...`` line. ``--refresh``
+    reseals the persisted baseline (session-end semantics) with ``.bak`` parity and
+    sets the one-line ``meta.rag_files`` pointer.
+    """
+    from rag_kernel import bootmap
+
+    rag_path = args.rag.resolve()
+    rag_dir = rag_path.parent
+    root = (args.root.resolve() if getattr(args, "root", None) else rag_path.parent.parent)
+
+    if getattr(args, "refresh", False):
+        sid = args.session or "manual"
+        path = bootmap.refresh_baseline(root, rag_dir, sid)
+        wrote_ptr = bootmap.ensure_meta_pointer(rag_path)
+        manifest = bootmap.read_manifest(rag_dir) or {}
+        if getattr(args, "json_output", False):
+            print(json.dumps({"resealed": str(path), "count": manifest.get("count"),
+                              "session": sid, "meta_pointer_written": wrote_ptr}, indent=2))
+        else:
+            print(f"Domain map resealed: {manifest.get('count', '?')} files "
+                  f"-> {path.name} (+.bak parity){'; meta pointer set' if wrote_ptr else ''}.")
+        return 0
+
+    prior = bootmap.read_manifest(rag_dir)
+    current = bootmap.build_manifest(root, session=(prior or {}).get("session", "?"))
+    if getattr(args, "json_output", False):
+        print(json.dumps({"boot_line": bootmap.boot_line(prior, current),
+                          "diff": bootmap.diff_maps(prior, current),
+                          "count": current["count"]}, indent=2))
+    else:
+        print(bootmap.boot_line(prior, current))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -4971,6 +5058,7 @@ def main(argv: list[str] | None = None) -> int:
         "reuse-check": cmd_reuse_check,
         "verify": cmd_verify,
         "context": cmd_context,
+        "bootmap": cmd_bootmap,
     }
     return _dispatch_with_bootstrap_log(
         args.command, commands[args.command], args
