@@ -264,7 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
         "session-start",
         help="Enforced session-start ritual: carry-forward gate (fail-loud) -> gc dry-run -> open logger.",
     )
-    sstart_parser.add_argument("session_id", type=str, help="Session identifier to open (e.g., S92)")
+    sstart_parser.add_argument(
+        "session_id", type=str, nargs="?", default=None,
+        help="Session identifier to open (e.g., S92). OPTIONAL: when omitted, "
+             "AUTO-SID-DERIVE computes the next id as the increment of "
+             "meta.written_by_session (zero-read boot). Pass an explicit id to override.",
+    )
     sstart_parser.add_argument(
         "--rag", type=Path, default=_default_rag_path(),
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
@@ -706,6 +711,12 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--fix", action="store_true", help="Clear a stale index.lock when provably safe (no git running + aged)")
     doctor_parser.add_argument("--stale-after", dest="stale_after", type=float, default=60.0, help="Seconds before an unheld index.lock counts as stale (default: 60)")
     doctor_parser.add_argument("--emit-runner", dest="emit_runner", type=Path, default=None, help="Write the script-file runner template to this path and exit")
+    doctor_parser.add_argument(
+        "--recover", action="store_true",
+        help="RECOVERY ADVISOR (BOOT-PROSE-TO-SCRIPT): assess a corrupt/unreadable RAG "
+             "and stage the .bak -> COLD -> WAL -> rebuild path. Read-only unless --fix "
+             "is also given, in which case the safe common-case .bak restore is applied.",
+    )
     doctor_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
 
     # -- add (ENV-NORM increment 1: guarded ADD verb — closes the no-ADD-verb gap) --
@@ -2998,6 +3009,26 @@ def cmd_session_start(args: argparse.Namespace) -> int:
     rag_dir = rag_path.parent
     sid = args.session_id
 
+    # AUTO-SID-DERIVE (BOOT-PROSE-TO-SCRIPT / zero-read boot): when the agent
+    # supplies no session id, the kernel derives it as the increment of
+    # meta.written_by_session — the same governed value the PI used to make the
+    # agent read out by hand. Both phase 1 and phase 2 derive identically because
+    # written_by_session only advances at checkpoint (session-end), so the derived
+    # id is stable across the attestation handshake within one session. An explicit
+    # id still overrides. This removes the SID-derivation prose (and its
+    # sandbox-read bait) from the Project Instructions entirely.
+    if sid is None:
+        sid = _derive_next_sid(rag_path)
+        if sid is None:
+            print(
+                "ERROR: could not AUTO-SID-DERIVE the next session id — the RAG is "
+                "unreadable or meta.written_by_session is unset. Pass an explicit "
+                "session id (e.g. `session-start S1`).",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"[AUTO-SID] Derived next session id {sid} from meta.written_by_session.")
+
     # Phase 2 — attestation handshake (no gate/gc/render; the session was already
     # vetted in phase 1, this only verifies the token and opens the logger).
     if getattr(args, "attest", None) is not None:
@@ -3183,6 +3214,26 @@ def _next_session_id(sid: str) -> str:
     digits = m.group(1)
     nxt = str(int(digits) + 1).zfill(len(digits))
     return sid[: m.start(1)] + nxt
+
+
+def _derive_next_sid(rag_path: Path) -> "str | None":
+    """AUTO-SID-DERIVE: the next session id = increment of meta.written_by_session.
+
+    Reads ONLY through the kernel (the governed path — this is not the banned
+    Cowork-sandbox read) and reuses ``_next_session_id`` so the increment rule is
+    single-sourced. Returns ``None`` when the RAG is unreadable or
+    ``written_by_session`` is unset/empty, in which case the caller must require an
+    explicit id rather than guess. Deterministic, stdlib-only.
+    """
+    try:
+        with open(rag_path, "r", encoding="utf-8-sig") as f:
+            rag = json.load(f)
+    except (OSError, ValueError):
+        return None
+    written_by = ((rag.get("meta") or {}).get("written_by_session") or "").strip()
+    if not written_by:
+        return None
+    return _next_session_id(written_by)
 
 
 def _build_close_marker(
@@ -4128,6 +4179,96 @@ def _git_process_running() -> bool:
         return False
 
 
+def _doctor_recover(rag_path: Path, do_fix: bool) -> dict:
+    """RECOVERY ADVISOR — the scripted form of the PI's recovery_protocol.
+
+    Assesses a corrupt/unreadable HOT and stages the ordered recovery path
+    ``.bak -> COLD + WAL -> rebuild``. Assessment is READ-ONLY; ``do_fix`` performs
+    ONLY the safe, common-case ``.bak`` restore, reusing the same persistence
+    primitives (``verify_hashes`` / ``atomic_write_json``) as :meth:`api.KernelAPI.recover`
+    — no second copy of the restore rule (Rule 13). COLD/WAL/rebuild are reported
+    as the ordered next options and never silently reconstructed ("offer rebuild
+    options"). Fail-safe: any read error degrades to a recommendation, never a raise.
+    """
+    from rag_kernel.persistence import verify_hashes, atomic_write_json
+    import json as _json
+
+    rp = Path(rag_path)
+    bak = rp.with_suffix(rp.suffix + ".bak")
+    cold = rp.parent / "RAG_COLD.json"
+    wal = rp.parent / (rp.stem + ".wal")  # best-effort WAL sidecar
+    out: dict = {
+        "hot_ok": False, "bak": {}, "cold": {}, "wal": {},
+        "action": None, "recommended": [],
+    }
+
+    # HOT
+    hot = None
+    try:
+        hot = _json.loads(rp.read_text(encoding="utf-8-sig"))
+        he = verify_hashes(hot)
+        out["hot_ok"] = not he
+        if he:
+            out["hot_hash_errors"] = he
+    except (OSError, ValueError) as e:
+        out["hot_error"] = str(e)
+
+    # .bak
+    bak_obj = None
+    if bak.exists():
+        try:
+            bak_obj = _json.loads(bak.read_text(encoding="utf-8-sig"))
+            be = verify_hashes(bak_obj)
+            out["bak"] = {"present": True, "valid": not be}
+            if be:
+                out["bak"]["hash_errors"] = be
+        except (OSError, ValueError) as e:
+            out["bak"] = {"present": True, "valid": False, "error": str(e)}
+    else:
+        out["bak"] = {"present": False, "valid": False}
+
+    out["cold"] = {"present": cold.exists()}
+    out["wal"] = {"present": wal.exists()}
+
+    # No recovery needed.
+    if out["hot_ok"]:
+        out["action"] = "none"
+        out["recommended"] = ["HOT is readable and hash-clean — no recovery needed."]
+        return out
+
+    # Stage 1 — .bak (the safe common case).
+    if out["bak"].get("valid") and bak_obj is not None:
+        if do_fix:
+            atomic_write_json(rp, bak_obj, mirror_bak=True)
+            out["action"] = "bak_restored"
+            out["recommended"].append("Restored HOT from a valid .bak (hash-verified).")
+        else:
+            out["action"] = "bak_available"
+            out["recommended"].append(
+                "Stage 1: .bak is valid — restore with `doctor --recover --fix`."
+            )
+        return out
+
+    # Stage 2/3 — COLD + WAL, then rebuild (offered, never auto-run).
+    out["action"] = "manual"
+    out["recommended"].append("Stage 1: .bak missing or invalid — cannot auto-restore.")
+    if out["cold"]["present"]:
+        out["recommended"].append(
+            "Stage 2: RAG_COLD.json present — rehydrate HOT from COLD, then replay the WAL."
+        )
+    else:
+        out["recommended"].append("Stage 2: no RAG_COLD.json — COLD rehydrate unavailable.")
+    out["recommended"].append(
+        "Stage 2: WAL " + ("present — replay outstanding entries after COLD hydrate."
+                           if out["wal"]["present"] else "absent — nothing to replay.")
+    )
+    out["recommended"].append(
+        "Stage 3 (offer): if no snapshot is viable, rebuild from the INIT spec "
+        "via `rag_kernel init <spec>` and re-apply session state."
+    )
+    return out
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight the environment + repo before real work (ENV-NORM increment 1).
 
@@ -4161,6 +4302,30 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             pass
         print(f"runner written: {dest}")
         return 0
+
+    # RECOVERY ADVISOR (BOOT-PROSE-TO-SCRIPT): one governed verb absorbs the
+    # Project Instructions' ".bak -> COLD + WAL -> rebuild" recovery prose, so the
+    # PI's RECOVERY EXCEPTION collapses to a single pointer. Covers the common
+    # "kernel intact, RAG corrupt" case (the kernel can still run `doctor`); the
+    # truly-kernel-unreachable case still falls back to raw .bak/COLD/WAL reads.
+    if getattr(args, "recover", False):
+        rag_path = getattr(args, "rag", None) or (project_root / "RAG_MASTER.json")
+        rec = _doctor_recover(Path(rag_path), do_fix=getattr(args, "fix", False))
+        if getattr(args, "json_output", False):
+            print(json_mod.dumps(rec, indent=2))
+        else:
+            print("RAG Runtime Kernel - doctor --recover")
+            print("=" * 50)
+            print(f"HOT      : {'OK (readable, hash-clean)' if rec['hot_ok'] else 'UNREADABLE/CORRUPT'}")
+            print(f".bak     : present={rec['bak'].get('present')} valid={rec['bak'].get('valid')}")
+            print(f"COLD     : present={rec['cold'].get('present')} (RAG_COLD.json)")
+            print(f"WAL      : present={rec['wal'].get('present')}")
+            print(f"ACTION   : {rec['action']}")
+            for line in rec["recommended"]:
+                print(f"  -> {line}")
+        # 0 when nothing is wrong or a restore succeeded; 1 when recovery is
+        # needed and was not (or could not be) applied — fail-loud for callers.
+        return 0 if rec["action"] in ("none", "bak_restored") else 1
 
     report: dict = {"env": {}, "lock": {}, "shell": {}, "blocking": []}
 

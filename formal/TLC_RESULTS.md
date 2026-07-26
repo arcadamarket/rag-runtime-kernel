@@ -118,3 +118,6 @@ All 8 safety invariants from Phase 1 continue to hold across the expanded 168,52
 **Phase 1 (Safety):** The RAG Runtime Kernel state machine is **safety-correct**: all 8 invariants hold across 136,193 explored states (84,261 distinct) with zero violations.
 
 **Phase 2 (Liveness):** WALCompaction action models real-world WAL truncation. Two genuine liveness bugs were caught and fixed: (1) BOOTING↔RECOVERY direct-transition loop (fixed with SF fairness), (2) crash-at-full-WAL deadlock (fixed by allowing compaction during recovery). After fixes, **all 8 safety invariants and all 3 liveness properties pass** across 168,520 distinct states with zero violations. The kernel is **formally verified for both safety and liveness**.
+
+## S173 (2026-07-25) runtime-v0.4.46
+Gate for AUTO-SID-DERIVE + doctor --recover. pytest: 2032 passed. TLC RAGKernel.cfg: full reachable state space explored (505,560 distinct states, 0 left on queue), no invariant/property violation reported. Changes do not touch state_machine.py (modeled surface unchanged). NOTE: new guards (secrets/intent-fidelity/boot-guard/close-seal) are NOT yet modeled — tracked as FV-GATE-RETROVERIFY (F2) for S174.
