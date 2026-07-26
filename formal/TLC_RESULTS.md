@@ -121,3 +121,26 @@ All 8 safety invariants from Phase 1 continue to hold across the expanded 168,52
 
 ## S173 (2026-07-25) runtime-v0.4.46
 Gate for AUTO-SID-DERIVE + doctor --recover. pytest: 2032 passed. TLC RAGKernel.cfg: full reachable state space explored (505,560 distinct states, 0 left on queue), no invariant/property violation reported. Changes do not touch state_machine.py (modeled surface unchanged). NOTE: new guards (secrets/intent-fidelity/boot-guard/close-seal) are NOT yet modeled — tracked as FV-GATE-RETROVERIFY (F2) for S174.
+
+## S174 (2026-07-26) FV-GATE-RETROVERIFY (F1/F2) — hardening characterization proofs
+Closes the S173 gap: the S144–S172 hardenings previously landed WITHOUT TLA/TLC are
+now each backed by a focused characterization-proof module (same pattern as
+ErrlogIdGuard): a GUARD predicate proven sound + complete against ground truth over
+ALL inputs up to a bound, plus a REFUTED naive alternative (counterexample-backed).
+All six proofs PASS and all six naive refutations FAIL as designed:
+
+| Hardening (origin) | Module | Proof (INVARIANT AllProps) | Naive refutation (counterexample) |
+|---|---|---|---|
+| SECRETS-INGEST-GUARD (P1/G2, S144) | SecretsIngestGuard.tla | PASSED — 121 states | `NaiveSound` FAILS: `<<Plain, SecretVal>>` (secret in non-first field) |
+| BOOT-GUARD-FIRST-ACTION (KA-20, S172) | BootGuardFirstAction.tla | PASSED — 63 states | `NaiveSound` FAILS: `<<Work, Boot>>` (work before session-start) |
+| CLOSE-SEAL-ENFORCE (KA-21, S172) | CloseSealEnforce.tla | PASSED — 6 states | `NaivePhaseSound` FAILS: `[phase↦COMPLETE, ready↦FALSE]` (mid-seal crash) |
+| KA-INTENT-FIDELITY (inc1/inc2, S147) | IntentFidelityGate.tla | PASSED — 4 states | `NaiveTextSound` FAILS: `[idBound↦FALSE, restatementExact↦TRUE]` |
+| BOOTMAP-BOOTROOT-FIX (E-074, v0.4.44) | BootmapRootPin.tla | PASSED — 6 states | `NaivePinned` FAILS: `[cwd↦ProjectRoot, gc↦OtherDir]` (cwd/gc-keyed boot_root) |
+| SCHEMA-MIGRATE (migrate verb) | SchemaMigrate.tla | PASSED — 4 states | `NaiveReach` FAILS: `ver=0` (single-step migrator not total) |
+
+Each MASTER theorem is `GuardOK <=> GroundTruth` (P_Equiv), exhaustively checked by TLC.
+SecretsIngestGuard additionally proves `P_BoundaryAgree` (proactive ingest == reactive
+audit boundary, the KA-SECRETS-BOUNDARY single-source-of-truth claim) and `P_Redacted`
+(the guard's diagnostic never carries the secret value). Core RAGKernel.tla state
+machine is unchanged; its S173 full-state-space-clean result (505,560 distinct states)
+remains authoritative.
