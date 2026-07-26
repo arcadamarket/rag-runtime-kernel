@@ -4,6 +4,24 @@ All notable changes to the RAG Runtime Kernel specification and tooling.
 
 ## [Unreleased]
 
+- **FV-GATE-RETROVERIFY (S174)** — the six S144–S172 hardenings that shipped without formal
+backing are now each modeled and machine-checked in `formal/`: `SecretsIngestGuard`,
+`BootGuardFirstAction` (KA-20), `CloseSealEnforce` (KA-21), `IntentFidelityGate`,
+`BootmapRootPin` (E-074), `SchemaMigrate`. Each is an ErrlogIdGuard-style characterization
+proof (GUARD ⇔ ground-truth over all inputs) with a counterexample-refuted naive alternative;
+all 6 TLC proofs pass and all 6 naive refutations fail as designed. Committed with `.out`
+evidence + updated `TLC_RESULTS.md`; full suite 2,032 green. No runtime/schema change.
+
+## [v0.4.46] — 2026-07-26
+
+_AUTO-SID-DERIVE (zero-read boot) + `doctor --recover`. `session-start` derives the next
+session id itself (no direct RAG read at boot) and `doctor --recover` adds a `.bak`/COLD/WAL/
+rebuild recovery advisor. Ships the `formal_verification_gate` governance rule. Runtime
+`__version__` 0.4.45 → 0.4.46, `__spec_version__` unchanged (3.2.7); no new capability module
+(still 20), health 21/21; full suite 2,021 → 2,032 green (+11); TLC `RAGKernel.cfg` full
+reachable state space clean (505,560 distinct states, 0 violations). Tagged `runtime-v0.4.46`
+(commit 8af6ed6), pushed to origin._
+
 ## [v0.4.45] — 2026-07-22
 
 _BOOT-INTEGRITY SPINE (S172) — two fail-loud boot-boundary guards shipped together.
