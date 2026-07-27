@@ -160,6 +160,32 @@ Gate for SPEC-PROMOTION-DRIFT (KA-20/KA-21 promoted into INIT spec v3.2.8) + RUL
   SchemaMigrate (4), ErrlogIdGuard (1,555).
 - **All 7 naive refutations FAIL as designed** (1 invariant violation each, counterexample-backed).
 
+### S175 addendum — GovernancePinProvenance (closes FV-PIN-PROVENANCE-PROOF)
+
+The v0.4.47 gate above ran the SEVEN pre-existing proofs, but the guard this release
+SHIPPED — `drift_audit.check_governance_pin_provenance` — went out with unit tests and no
+formal module, re-opening in miniature the exact gap FV-GATE-RETROVERIFY closed (a hardening
+landing without a characterization proof). Closed here, same session:
+
+| Hardening (origin) | Module | Proof (INVARIANT AllProps) | Naive refutations (counterexamples) |
+|---|---|---|---|
+| RULE19-PIN-REFRESH (F3, S175) | GovernancePinProvenance.tla | **PASSED — 512 states generated, 256 distinct, 0 left on queue** | `NaiveClaimSound` FAILS: `[declared↦{}, claims↦TRUE]` (unverifiable claim escalated to a release blocker) · `NaiveAllTokensSound` FAILS: `[declared↦{}, history↦{OLD}]` (history token drives a false ERROR) |
+
+MASTER theorem `P_Equiv`: `HasError(r) <=> Misstates(r)` — the ERROR verdict is exactly
+"an ANCHORED pin disagrees with `rag_kernel.__version__`", over all 256 rule records
+(`declared`/`history` ∈ SUBSET {LIVE, OLD, STRAY}, `prov`/`claims` ∈ BOOLEAN). Six supporting
+invariants are checked with it: `P_Sound`, `P_Complete`, `P_HistoryIrrelevant` (the verdict is a
+function of `declared` alone), `P_RefreshedIsClean`, `P_UnverifiableWarnsOnly` (severity
+discipline — an unresolvable pin WARNS, never ERRORs) and `P_SelfSkip` (a deployment declaring no
+pin is out of scope).
+
+The refutations pin the two design decisions that a "more thorough" guard would get wrong:
+anchoring on ALL version tokens would cry wolf on the rule's own audit trail, and escalating an
+unverifiable claim to ERROR would block releases on wording. A guard that cries wolf gets muted,
+and a muted guard is how the pin drifted for twenty-two releases in the first place.
+
+Full-suite re-run at this addendum: **8/8 proofs PASS, 8/8 naive refutations FAIL as designed.**
+
 RUN NOTE (E-080, environment not model): the first full-space run was killed mid-liveness with no
 error text and no completion line. TLC's scratch state-graph was being written to the repo under
 `/mnt/c` (a Windows drive mounted into WSL), which is slow enough to stall the liveness phase. Re-run
