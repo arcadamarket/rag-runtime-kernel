@@ -3108,6 +3108,21 @@ def cmd_session_start(args: argparse.Namespace) -> int:
     if getattr(args, "attest", None) is not None:
         return _session_start_attest(rag_path, rag_dir, sid, args.attest)
 
+    # 0. OPERATING FRAME — rendered BEFORE the gate, deliberately.
+    #
+    # S176 defect found by testing the S176 fix: the frame was rendered at step 3c,
+    # AFTER the carry-forward gate. A refusing gate therefore returned early and the
+    # agent got NO roles and NO process discipline — precisely the moment it is most
+    # likely to improvise on broken state. Identity and execution discipline must not
+    # be conditional on the state being clean, so they render first, unconditionally.
+    # The frame is read-only and best-effort: it must never itself block a boot.
+    try:
+        with open(rag_path, "r", encoding="utf-8") as _fh:
+            _frame_rag = json.load(_fh)
+    except Exception:
+        _frame_rag = {}
+    print(_render_agent_frame(_frame_rag, rag_dir=rag_dir))
+
     # 1. Carry-forward gate (fail-loud).
     ok, findings = _carry_forward_gate(
         rag_path, strict=args.strict, git_head=getattr(args, "git_head", None),
@@ -3203,10 +3218,6 @@ def cmd_session_start(args: argparse.Namespace) -> int:
     #     print the E-071-class notice.
     print("[BOOT-GUARD] Boot-state briefing (canonical — no direct RAG read needed):")
     print(_render_boot_briefing(rag, current_sid=sid))
-    # BOOT-RENDER-POV-ROLES (S176) — identity + process discipline + asset registry.
-    # Rendered on the SAME governed boot path as the state briefing so the agent
-    # never depends on operator-owned Project Instructions prose to know who it is.
-    print(_render_agent_frame(rag, rag_dir=os.path.dirname(os.path.abspath(rag_path))))
     print(_BOOT_GUARD_NOTICE)
     _write_top_level_field(
         rag_path,

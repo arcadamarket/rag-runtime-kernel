@@ -84,4 +84,25 @@ def test_frame_is_wired_into_the_boot_path():
     import rag_kernel.__main__ as m
 
     src = Path(m.__file__).read_text(encoding="utf-8")
-    assert "_render_agent_frame(rag" in src, "boot path no longer calls _render_agent_frame"
+    assert "_render_agent_frame(_frame_rag" in src, "boot path no longer calls _render_agent_frame"
+
+
+def test_frame_renders_before_the_carry_forward_gate():
+    """S176 regression guard.
+
+    The frame was originally rendered AFTER the carry-forward gate, so a REFUSING
+    boot returned early and handed the agent no roles and no process discipline --
+    exactly when it is most likely to improvise on broken state. Identity must not
+    be conditional on clean state.
+    """
+    from pathlib import Path
+
+    import rag_kernel.__main__ as m
+
+    src = Path(m.__file__).read_text(encoding="utf-8")
+    frame_at = src.index("print(_render_agent_frame(_frame_rag")
+    gate_at = src.index("ok, findings = _carry_forward_gate(")
+    assert frame_at < gate_at, (
+        "operating frame must render BEFORE the carry-forward gate; a refusing "
+        "gate would otherwise strip the agent of its roles and discipline"
+    )
