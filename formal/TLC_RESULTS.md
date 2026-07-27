@@ -144,3 +144,27 @@ audit boundary, the KA-SECRETS-BOUNDARY single-source-of-truth claim) and `P_Red
 (the guard's diagnostic never carries the secret value). Core RAGKernel.tla state
 machine is unchanged; its S173 full-state-space-clean result (505,560 distinct states)
 remains authoritative.
+
+## S175 (2026-07-26) runtime-v0.4.47 / spec v3.2.8
+Gate for SPEC-PROMOTION-DRIFT (KA-20/KA-21 promoted into INIT spec v3.2.8) + RULE19-PIN-REFRESH
+(`drift_audit.check_governance_pin_provenance`). pytest: **2,050 passed** (+18). Health 21/21.
+`guardgen --check`: `generated_guards.py` matches `RAGKernel.tla` (sha `268149294421`, unchanged).
+
+- **RAGKernel.cfg** — re-verified from scratch, full reachable state space: `Model checking
+  completed. No error has been found.` 389,522 states generated, **168,520 distinct**, 0 left on
+  queue; liveness checked over the complete **505,560**-state graph; search depth 19. Matches the
+  S173 baseline exactly (the modeled surface is untouched — this release changes `drift_audit`,
+  `__init__` version constants, the INIT spec, docs and tests only).
+- **All 7 characterization proofs re-run and PASSED**: SecretsIngestGuard (121 states),
+  BootGuardFirstAction (63), CloseSealEnforce (6), IntentFidelityGate (4), BootmapRootPin (6),
+  SchemaMigrate (4), ErrlogIdGuard (1,555).
+- **All 7 naive refutations FAIL as designed** (1 invariant violation each, counterexample-backed).
+
+RUN NOTE (E-080, environment not model): the first full-space run was killed mid-liveness with no
+error text and no completion line. TLC's scratch state-graph was being written to the repo under
+`/mnt/c` (a Windows drive mounted into WSL), which is slow enough to stall the liveness phase. Re-run
+with `-metadir` pointed at the Linux filesystem and an explicit `-Xmx4g`, the identical model
+completed in **42 s**. Standing guidance for this host: always run `RAGKernel.cfg` as
+`java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config RAGKernel.cfg RAGKernel.tla`
+with output redirected to a file, and treat an ABSENT "Model checking completed" line as a FAILED
+gate — never as a pass by omission.

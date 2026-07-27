@@ -2,15 +2,44 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
-## [Unreleased]
+## [v0.4.47] — 2026-07-26
 
-- **FV-GATE-RETROVERIFY (S174)** — the six S144–S172 hardenings that shipped without formal
+_SPEC-PROMOTION-DRIFT + RULE19-PIN-REFRESH — the boot-integrity spine is promoted into
+the universal spec, and the Rule 19 governance pin is bound to reality._
+
+- **SPEC-PROMOTION-DRIFT (E-063, spec-promotion half)** — `INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.8.md`.
+§50 gains **BOOT-GUARD-FIRST-ACTION (KA-20)** — `session-start` is the VERY FIRST action of
+every session; the canonical RAG is never read directly to load or report boot state (the
+command renders a complete deterministic boot-state briefing); the start is two-phase and
+token-attested (`BOOT → RULES_LOADED(attested) → READY`) with a `boot_guard` first-action
+marker; the session id is optional from v0.4.46 (AUTO-SID-DERIVE, zero-read boot) — and
+**CLOSE-SEAL-ENFORCE (KA-21)** — the carry-forward gate refuses to open over an UNSEALED
+predecessor (sealed = `transfer_ready` **and** the attested `AUDIT_CANONICAL_REPORT_<sid>.md`
+present), names its recoveries (`session-resume` / `session-end <prior sid>`), leaves legacy
+RAGs untouched and keeps `--force` as a sanctioned logged override. The session-end ritual
+gains the matching explicit **seal** step (5). Both `session_start_protocol` and
+`session_end_protocol` rag-config strings updated, so a fresh `init --spec` deploy now
+*inherits* the boot spine instead of re-authoring it (+6 tests).
+- **RULE19-PIN-REFRESH (F3 residual)** — new `drift_audit.check_governance_pin_provenance`
+binds the Rule 19 `governance_runtime` pin to the live `rag_kernel.__version__` authority, so
+the rule declaring WHICH runtime enforces the rules can no longer drift silently (it sat at
+`v0.4.23/c140137` against code at `v0.4.45` for twenty-two releases while every audit read
+clean). Declared pins that disagree are ERRORs; a pin with no release provenance, or an
+unparseable pin claim, is a WARNING rather than a silent pass. History tokens inside the rule
+are deliberately not anchored, and the pinned commit is deliberately NOT compared to git HEAD
+(the pin names the release commit, which is by design behind HEAD). Always-on in `audit_hot`
+(+12 tests).
+- Runtime `__version__` 0.4.46 → 0.4.47, `__spec_version__` 3.2.7 → **3.2.8** (a byte change
+to the deployed backbone, so this is a full runtime release, not a spec-only bump); no new
+capability module (still 20), health 21/21, drift gate `268149294421` unchanged; full suite
+2,032 → 2,050 green (+18).
+- **FV-GATE-RETROVERIFY (S174, carried into this release)** — the six S144–S172 hardenings that shipped without formal
 backing are now each modeled and machine-checked in `formal/`: `SecretsIngestGuard`,
 `BootGuardFirstAction` (KA-20), `CloseSealEnforce` (KA-21), `IntentFidelityGate`,
 `BootmapRootPin` (E-074), `SchemaMigrate`. Each is an ErrlogIdGuard-style characterization
 proof (GUARD ⇔ ground-truth over all inputs) with a counterexample-refuted naive alternative;
 all 6 TLC proofs pass and all 6 naive refutations fail as designed. Committed with `.out`
-evidence + updated `TLC_RESULTS.md`; full suite 2,032 green. No runtime/schema change.
+evidence + updated `TLC_RESULTS.md`. No runtime/schema change of its own; released here.
 
 ## [v0.4.46] — 2026-07-26
 

@@ -2075,6 +2075,130 @@ def check_policy_initprompt_coherence(hot: dict) -> list[AuditFinding]:
 
 
 # ---------------------------------------------------------------------------
+# governance-runtime pin provenance (Rule 19 / RULE19-PIN-REFRESH F3)
+# ---------------------------------------------------------------------------
+
+#: The DECLARED-PIN anchors inside the ``governance_runtime`` rule. Each captures a
+#: runtime version the rule CLAIMS the deployed backbone is pinned to. Deliberately
+#: anchored on the two load-bearing phrases ("pinned vX.Y.Z runtime", "byte-identical
+#: copy of the runtime-vX.Y.Z") and NOT on every version token in the string: the
+#: rule also carries HISTORY ("pin refreshed S173->v0.4.46@8af6ed6"), which is
+#: supposed to name an older version and must not be flagged.
+_PIN_VERSION_RES = (
+    re.compile(r"pinned\s+v?(\d+\.\d+\.\d+)\s+runtime", re.IGNORECASE),
+    re.compile(r"byte-identical\s+copy\s+of\s+the\s+runtime-v?(\d+\.\d+\.\d+)",
+               re.IGNORECASE),
+)
+#: ``runtime-vX.Y.Z / commit <sha>`` — the release provenance the pin must name.
+_PIN_COMMIT_RE = re.compile(
+    r"runtime-v?\d+\.\d+\.\d+\s*/\s*commit\s+([0-9a-f]{7,40})", re.IGNORECASE)
+#: Phrases that mean "this deployment declares a pinned governance backbone", used
+#: only to decide whether an UNRESOLVABLE pin is worth a warning.
+_PIN_PRESENT_TOKENS = ("pinned", "deployed backbone")
+
+
+def _governance_pin_text(hot: dict) -> Optional[str]:
+    """The ``governance_runtime`` rule as one searchable string, or None.
+
+    Accepts both rule shapes: a flat string, or a dict rule whose string values are
+    joined (``update-rule`` supports either), so the guard does not depend on how a
+    given deployment chose to structure the rule.
+    """
+    op = hot.get("operating_protocol") if isinstance(hot, dict) else None
+    if not isinstance(op, dict):
+        return None
+    raw = op.get("governance_runtime")
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, dict):
+        return "\n".join(v for v in raw.values() if isinstance(v, str)) or None
+    return None
+
+
+def check_governance_pin_provenance(
+    hot: dict,
+    *,
+    version: Optional[str] = None,
+) -> list[AuditFinding]:
+    """ERROR if the ``governance_runtime`` pin disagrees with the live runtime
+    authority ``rag_kernel.__version__`` (Rule 19; RULE19-PIN-REFRESH F3).
+
+    Rule 19 makes a *self-hosted* claim: governance runs on the deployment's OWN
+    pinned runtime, named in the rule as a version + release commit. Nothing bound
+    that claim to reality, so the pin drifted silently for twenty-two releases
+    (v0.4.23/c140137 in the rule while the code was at v0.4.45) and every audit read
+    clean — the same prose-drift class as E-043 / KA-CS-PROSE-DRIFT, one layer up:
+    the rule that declares WHICH runtime enforces the rules was itself unenforced.
+
+    Contract:
+
+    1. **version binding (ERROR).** Every DECLARED pin version — "pinned vX.Y.Z
+       runtime" and "byte-identical copy of the runtime-vX.Y.Z" — must equal the live
+       ``rag_kernel.__version__`` (or the ``version`` passed in). History tokens
+       inside the rule ("pin refreshed S173->v0.4.46@…") are deliberately NOT
+       anchored: they are supposed to name older versions.
+    2. **release provenance (WARNING).** A rule that names a pinned backbone must
+       also name the release commit (``runtime-vX.Y.Z / commit <sha>``). The commit
+       is intentionally NOT compared to git HEAD: the pin names the RELEASE commit,
+       which is by design behind HEAD as soon as any doc commit lands — HEAD-equality
+       would be a false invariant that trains the operator to ignore the guard.
+    3. **unresolvable pin (WARNING).** A rule that claims a pin but exposes no
+       parseable version is not an error (another deployment may word it differently)
+       but it IS unverifiable, and says so out loud rather than passing silently.
+
+    Pure over the in-memory HOT plus one kernel introspection; self-skips clean when
+    the deployment declares no ``governance_runtime`` rule (not every deploy
+    self-hosts) or when no live version authority can be resolved.
+    """
+    findings: list[AuditFinding] = []
+    text = _governance_pin_text(hot)
+    if not text:
+        return findings
+
+    live = version
+    if live is None:
+        try:
+            import rag_kernel
+            live = getattr(rag_kernel, "__version__", None)
+        except Exception:
+            live = None
+    if not isinstance(live, str) or not live.strip():
+        return findings
+    live = live.strip().lstrip("v")
+
+    declared: list[str] = []
+    for rx in _PIN_VERSION_RES:
+        for m in rx.finditer(text):
+            declared.append(m.group(1))
+
+    for got in declared:
+        if got != live:
+            findings.append(AuditFinding(
+                check="governance_pin_provenance", severity=ERROR,
+                detail=(f"operating_protocol.governance_runtime pins the deployed "
+                        f"backbone at v{got} but the live runtime authority "
+                        f"rag_kernel.__version__ is {live} — refresh the Rule 19 pin "
+                        f"(governed `update-rule`) after redeploying, or redeploy the "
+                        f"pinned version (RULE19-PIN-REFRESH)")))
+
+    lowered = text.lower()
+    claims_pin = any(tok in lowered for tok in _PIN_PRESENT_TOKENS)
+    if declared and not _PIN_COMMIT_RE.search(text):
+        findings.append(AuditFinding(
+            check="governance_pin_provenance", severity=WARNING,
+            detail=("operating_protocol.governance_runtime names a pinned runtime "
+                    "but no release provenance (expected `runtime-vX.Y.Z / commit "
+                    "<sha>`) — the pin cannot be traced back to a released package")))
+    elif not declared and claims_pin:
+        findings.append(AuditFinding(
+            check="governance_pin_provenance", severity=WARNING,
+            detail=("operating_protocol.governance_runtime claims a pinned governance "
+                    "backbone but declares no parseable version — the Rule 19 pin is "
+                    "unverifiable against rag_kernel.__version__")))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Aggregate runners
 # ---------------------------------------------------------------------------
 
@@ -2127,6 +2251,11 @@ def audit_hot(
     # init_prompt version token so a policy advance that leaves the pointer behind
     # fails loud. Pure over HOT, always-on; self-skips when either token is absent.
     findings += check_policy_initprompt_coherence(hot)
+    # RULE19-PIN-REFRESH (F3): bind the Rule 19 governance_runtime pin to the live
+    # rag_kernel.__version__ so the rule that declares WHICH runtime enforces the
+    # rules cannot itself drift silently. Pure over HOT + one introspection;
+    # self-skips when the deployment declares no governance_runtime rule.
+    findings += check_governance_pin_provenance(hot, version=version)
     # FIX-1 integrity invariants over the in-memory state (each self-skips when its
     # source is absent): unsubstituted placeholders, leaked template keys, empty
     # written_by_session, malformed session ids.
