@@ -2875,6 +2875,80 @@ _BOOT_GUARD_NOTICE = (
 )
 
 
+def _render_agent_frame(rag: dict, *, rag_dir: "str | None" = None) -> str:
+    """BOOT-RENDER-POV-ROLES (S176) — render the agent's OPERATING FRAME at boot.
+
+    Root cause (S176): the boot path rendered 40 operating_protocol rules and the
+    state briefing, but never rendered ``pov_roles`` / ``pov_mandate``. The dual-POV
+    identity therefore lived in the RAG *unread*, reaching the agent only through
+    operator-owned Project Instructions prose — a single point of failure on text
+    the operator has to maintain by hand. Same failure family as E-071: the state
+    exists, but has no delivery path at boot.
+
+    Renders three things the agent otherwise re-learns (or fails to re-learn) every
+    session, all sourced FROM the RAG so nothing is duplicated into code:
+
+      (1) pov_roles + pov_mandate — who the agent reasons as, and how strictly;
+      (2) the process-discipline tail of ``token_economy`` (Rule 17) plus the
+          E-081 detached-execution discipline — the rules most often loaded and
+          then ignored under time pressure;
+      (3) the baked-asset registry count (REUSE-REGISTRY-GUARD / Rule 25), so
+          prior hardening is DISCOVERABLE instead of re-derived by grep.
+    """
+    roles = rag.get("pov_roles", []) or []
+    mand = rag.get("pov_mandate", {}) or {}
+    count = mand.get("count", len(roles))
+    mode = str(mand.get("mode", "strict"))
+    out = [
+        f"[BOOT-FRAME] Operating frame — POV mandate: {count} role(s), mode {mode.upper()}:"
+    ]
+    if roles:
+        for i, r in enumerate(roles, 1):
+            out.append(f"  ROLE {i}: {r}")
+        if mode.lower() == "strict":
+            out.append(
+                "  STRICT: reason EVERY deliverable from ALL the roles above, not one."
+            )
+    else:
+        out.append("  (no pov_roles in this RAG — identity is UNDEFINED, fail loud)")
+
+    out.append("  PROCESS DISCIPLINE (loaded every boot because it is the most re-learned):")
+    out.append("    - Long jobs run DETACHED to a file; check ONCE after a single long")
+    out.append("      wait. NEVER poll a running command (E-081).")
+    out.append("    - Two consecutive uninformative/malformed emissions toward one goal")
+    out.append("      = STOP, diagnose, report with options (Rule 17 / circuit_breaker).")
+    out.append("    - Bounded emissions only: pipe verbose output to a file, read back a")
+    out.append("      capped slice (tail/head/grep/wc). Tool round-trips are the")
+    out.append("      operator's metered resource, not free.")
+
+    n_assets = None
+    try:
+        ctx_dir = rag_dir or "."
+        ctx_path = os.path.join(ctx_dir, "RAG_CONTEXT.json")
+        if os.path.isfile(ctx_path):
+            with open(ctx_path, "r", encoding="utf-8") as fh:
+                ctx = json.load(fh)
+            part = (ctx.get("baked_assets") or {}) if isinstance(ctx, dict) else {}
+            n_assets = len(part.get("assets", []) or [])
+    except Exception:
+        n_assets = None
+    if n_assets is None:
+        out.append("  BAKED ASSETS: registry unreadable — run `rag_kernel reuse-check`.")
+    elif n_assets == 0:
+        out.append(
+            "  BAKED ASSETS: registry EMPTY — nothing prior is discoverable. Register"
+        )
+        out.append(
+            "    kernel-owned assets with `rag_kernel register-asset` (Rule 25)."
+        )
+    else:
+        out.append(
+            f"  BAKED ASSETS: {n_assets} registered — run `rag_kernel reuse-check` BEFORE"
+        )
+        out.append("    authoring anything new (REUSE-BEFORE-REWRITE, Rule 25).")
+    return "\n".join(out)
+
+
 def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None) -> str:
     """Deterministic boot-state briefing from the RAG — every state fact the agent
     needs at boot, so it never has to open RAG_MASTER.json itself (KA-20).
@@ -3129,6 +3203,10 @@ def cmd_session_start(args: argparse.Namespace) -> int:
     #     print the E-071-class notice.
     print("[BOOT-GUARD] Boot-state briefing (canonical — no direct RAG read needed):")
     print(_render_boot_briefing(rag, current_sid=sid))
+    # BOOT-RENDER-POV-ROLES (S176) — identity + process discipline + asset registry.
+    # Rendered on the SAME governed boot path as the state briefing so the agent
+    # never depends on operator-owned Project Instructions prose to know who it is.
+    print(_render_agent_frame(rag, rag_dir=os.path.dirname(os.path.abspath(rag_path))))
     print(_BOOT_GUARD_NOTICE)
     _write_top_level_field(
         rag_path,
