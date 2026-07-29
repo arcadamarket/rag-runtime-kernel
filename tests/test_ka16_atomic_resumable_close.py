@@ -83,11 +83,17 @@ def test_session_end_sets_complete_transfer_ready_marker(tmp_path, monkeypatch):
 # --- S139 WIRE-CLOSE: the close MACHINE-RENDERS the canonical report ---------
 
 def test_session_end_machine_renders_close_report(tmp_path, monkeypatch, capsys):
-    """The close emits the deterministic 7-section report verbatim (Rule 12).
+    """The close renders the deterministic report and hands over a POINTER.
 
     Rendering it from the just-checkpointed RAG is what makes hand-authoring
     impossible (the S136 close-drift root cause) — and the render itself IS the
     report_rendered attestation, no --report-rendered flag needed.
+
+    S178 CONTRACT CHANGE (XFER-PRESENT-GATE, operator directive): the close no
+    longer echoes the report BODY into the transcript. Generating a file and
+    then reprinting it into the context window bills the operator twice for one
+    artifact (token_economy / Rule 17). The close emits a reference — path,
+    digest, verify command — and the operator opens the file.
     """
     rag = _write_rag(tmp_path, "S0", seq=1)
     _start_logger(tmp_path, "S1")
@@ -99,11 +105,18 @@ def test_session_end_machine_renders_close_report(tmp_path, monkeypatch, capsys)
     assert rc == 0
 
     out = capsys.readouterr().out
-    assert "=== Canonical status report (Rule 12 — machine-rendered at close) ===" in out
-    assert "### 1 · At a glance" in out
-    assert "### 7 · Verification & handoff" in out
+    # the transfer surface is announced by reference
+    assert "AUDIT-XFER-SURFACE-ATTEST" in out
+    assert "AUDIT_CANONICAL_REPORT_S1.md" in out
+    assert "sha256" in out
+    assert "report --verify" in out
+    # ...and the BODY is not reprinted into the transcript
+    assert "### 1 · At a glance" not in out
+    assert "### 7 · Verification & handoff" not in out
     # the machine render satisfies the attestation step
     assert _marker(rag)["steps"]["report_rendered"] is True
+    # and emission of the reference satisfies the presentation gate
+    assert _marker(rag)["steps"]["report_presented"] is True
 
 
 def test_session_end_no_report_suppresses_render(tmp_path, monkeypatch, capsys):

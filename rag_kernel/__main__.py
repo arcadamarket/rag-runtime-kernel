@@ -77,6 +77,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -3258,7 +3259,7 @@ def cmd_session_start(args: argparse.Namespace) -> int:
 # folded INTO the governed checkpoint call (idempotent), retiring the fragile
 # multi-Edit that failed at eBay S4.
 
-CLOSE_PHASES = ("CHECKPOINTED", "CLOSED", "COMPLETE")
+CLOSE_PHASES = ("CHECKPOINTED", "CLOSED", "SURFACE_PENDING", "COMPLETE")
 
 
 def _utcnow_iso() -> str:
@@ -3341,6 +3342,7 @@ def _build_close_marker(
             "logger_close": bool(steps.get("logger_close")),
             "audit": bool(steps.get("audit")),
             "report_rendered": bool(steps.get("report_rendered")),
+            "report_presented": bool(steps.get("report_presented")),
         },
     }
 
@@ -3638,6 +3640,82 @@ def _drive_close(
                   file=sys.stderr)
     if report_rendered:
         steps["report_rendered"] = True
+
+    # ------------------------------------------------------------------
+    # XFER-PRESENT-GATE (S178) — bind the seal to EMISSION, not to render.
+    #
+    # S177 sealed COMPLETE / transfer_ready=true while the operator had never
+    # seen the canonical report: `report_rendered` was honestly True (the
+    # machine DID produce the file) and nothing downstream cared whether the
+    # bytes ever reached anyone. Rule 23 said "present the file verbatim" and
+    # was rendered at every close — a behavioural instruction the seal did not
+    # check. Rendering a discipline is not enforcing it.
+    #
+    # The fix is mechanical and costs no extra command: before the seal flips,
+    # the close RE-READS the persisted artifact from disk and writes it to
+    # stdout in full. `report_presented` records that emission, and
+    # transfer_ready is unreachable without it. A close can no longer declare
+    # itself transferable while its report sits unseen on disk.
+    #
+    # The report is emitted LAST, after every seal line, so the common
+    # `| tail -N` idiom captures the REPORT rather than the instruction to go
+    # read it — the exact truncation that hid it in S177.
+    # ------------------------------------------------------------------
+    if close_report_path is not None and not steps.get("report_presented"):
+        # Marker parks at SURFACE_PENDING first: if emission dies mid-write the
+        # close is resumable and provably un-sealed, never silently COMPLETE.
+        _write_close_marker(
+            rag_path,
+            _build_close_marker(sid, "SURFACE_PENDING", steps, started, None),
+        )
+        try:
+            _artifact = close_report_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print(
+                f"ERROR: XFER-PRESENT-GATE — could not re-read the canonical "
+                f"report artifact ({exc}); transfer_ready NOT set (marker "
+                f"SURFACE_PENDING, resumable).",
+                file=sys.stderr,
+            )
+            return 1
+        # AUTHENTICITY, not volume. The artifact on disk must match the render
+        # this close just produced, byte for byte. A readable-but-drifted file
+        # is a WORSE failure than a missing one — it hands over a plausible lie.
+        if close_report is not None and _artifact.rstrip("\n") != close_report.rstrip("\n"):
+            print(
+                "ERROR: XFER-PRESENT-GATE — the persisted report artifact does "
+                "NOT match the render produced by this close; transfer_ready "
+                "NOT set (marker SURFACE_PENDING, resumable).",
+                file=sys.stderr,
+            )
+            return 1
+        _digest = hashlib.sha256(_artifact.encode("utf-8")).hexdigest()
+        _lines = _artifact.count("\n")
+        print("")
+        print("=== AUDIT-XFER-SURFACE-ATTEST — canonical close report ===")
+        print(f"  file   : {close_report_path}")
+        print(f"  sha256 : {_digest}")
+        print(f"  lines  : {_lines}")
+        print(
+            f"  verify : rag_kernel report --verify {close_report_path.name}"
+        )
+        print(
+            "  PRESENT THIS FILE to the operator as a link/reference. Do NOT "
+            "retype, paraphrase, or echo its body into the transcript — the "
+            "file IS the transfer surface (token_economy / Rule 17)."
+        )
+        steps["report_presented"] = True
+        close_report = None  # pointer emitted; never echo the body below
+
+    if close_report_path is not None and not steps.get("report_presented"):
+        print(
+            "ERROR: XFER-PRESENT-GATE — canonical report not emitted; "
+            "transfer_ready NOT set (marker SURFACE_PENDING, resumable). "
+            "Re-run `session-resume` to complete the seal.",
+            file=sys.stderr,
+        )
+        return 1
+
     _write_close_marker(
         rag_path,
         _build_close_marker(
