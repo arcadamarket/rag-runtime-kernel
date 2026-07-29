@@ -1585,6 +1585,125 @@ def check_asset_registry(
     return findings
 
 
+_SPEC_GLOB = "INIT_UNIVERSAL_RUNTIME_KERNEL_v*.md"
+_SPEC_SEARCH_DEPTH = 3
+
+
+def _locate_spec(
+    hot: dict,
+    rag_dir: Optional[Path | str],
+    project_root: Optional[Path | str],
+) -> Optional[Path]:
+    """Best-effort resolution of the INIT spec this deployment was built against.
+
+    Order: ``meta.rag_files.init_prompt`` beside the RAG, then beside the project
+    root, then a bounded glob for the spec matching ``meta.policy_version``. The
+    glob exists because a deployment does not have to keep the spec next to its
+    RAG — this project keeps it in the git worktree — and a check that only works
+    in one layout is a check that silently stops working.
+    """
+    named = ((hot.get("meta") or {}).get("rag_files") or {}).get("init_prompt")
+    # Bases are the DEPLOYMENT's own directories only. Resolving against the
+    # auditing kernel's directory was tried and reverted in S180: it applied
+    # whatever spec sat beside the running kernel to every RAG being audited,
+    # including synthetic fixtures, and produced 25 false ERRORs on a toy RAG.
+    # A deployment is measured against ITS spec or against none.
+    bases = [Path(b) for b in (rag_dir, project_root) if b is not None]
+    if named:
+        for base in bases:
+            cand = base / named
+            if cand.is_file():
+                return cand
+    version = (hot.get("meta") or {}).get("policy_version")
+    if version:
+        exact = f"INIT_UNIVERSAL_RUNTIME_KERNEL_v{version}.md"
+        for base in bases:
+            for depth in range(_SPEC_SEARCH_DEPTH + 1):
+                pattern = "/".join(["*"] * depth + [exact]) if depth else exact
+                try:
+                    hit = next(iter(sorted(base.glob(pattern))), None)
+                except OSError:  # pragma: no cover - unreadable tree
+                    hit = None
+                if hit is not None and hit.is_file():
+                    return hit
+    return None
+
+
+def check_spec_completeness(
+    hot: dict,
+    rag_dir: Optional[Path | str] = None,
+    project_root: Optional[Path | str] = None,
+    spec_path: Optional[Path | str] = None,
+) -> list[AuditFinding]:
+    """ERROR for every spec-universal rule missing from ``operating_protocol``
+    (AUDIT-SPEC-COVERAGE).
+
+    WHY THIS EXISTS
+    ---------------
+    Every other invariant in this module compares a RENDER against the CANONICAL
+    store. None of them compares the CANONICAL store against the SPEC that
+    declares what it must contain. That blind spot let **eight spec-universal
+    rules stay absent from this kernel's own RAG across 178 sessions** while
+    ``audit`` reported clean every time — and it was found not by a gate but by
+    a human reading a runbook (S179, §0.3). The kernel is deployed onto other
+    projects and births clones from this same set; a source that does not
+    implement its own spec cannot classify its own content, and
+    ``plan_transplant`` raises ``SourceIncompleteError`` the moment it tries.
+
+    The absence was fixed in S179. **This check is what stops it reopening.**
+
+    Severity choices, deliberately:
+
+    * A **missing universal key is an ERROR.** It is a decidable predicate over
+      the spec's own authority, not a judgement call.
+    * An **unresolvable spec SELF-SKIPS CLEAN**, matching every other optional
+      check in this module. The first S180 draft made it a WARNING on the
+      argument that a silent skip is how the class hid — but the class hid
+      because there was *no check at all*, and a warning here breaks the
+      governed FIX-9 contract that a fresh ``init --auto-ready`` audits
+      ``--strict`` clean. The residual is real and tracked separately: ``init``
+      does not leave the spec discoverable from the RAG it writes, so this
+      invariant is silent exactly where a newborn deployment would most benefit
+      from it. See ``SPEC-DISCOVERABILITY-AT-INIT``.
+    * A **spec/policy version mismatch is a WARNING** — the coverage answer is
+      still computed, but against a different version than ``meta`` claims, and
+      the reader deserves to know which.
+    """
+    findings: list[AuditFinding] = []
+    op = hot.get("operating_protocol")
+    if not isinstance(op, dict):
+        return findings
+
+    resolved = Path(spec_path) if spec_path is not None else _locate_spec(
+        hot, rag_dir, project_root)
+    if resolved is None or not resolved.is_file():
+        return findings  # self-skip: no spec beside this deployment to measure against
+
+    try:
+        from rag_kernel.transplant import universal_keys_from_spec
+        universal, spec_version = universal_keys_from_spec(resolved)
+    except Exception:  # unparseable spec — not this check's invariant to enforce
+        return findings
+
+    declared = (hot.get("meta") or {}).get("policy_version")
+    if declared and spec_version and str(declared) != str(spec_version):
+        findings.append(AuditFinding(
+            check="spec_completeness", severity=WARNING,
+            detail=(f"coverage computed against spec v{spec_version} while "
+                    f"meta.policy_version claims v{declared} — versions disagree")))
+
+    for key in sorted(universal):
+        if key not in op:
+            findings.append(AuditFinding(
+                check="spec_completeness", severity=ERROR,
+                detail=(f"spec-universal rule {key!r} declared by "
+                        f"v{spec_version} is ABSENT from operating_protocol — this "
+                        f"deployment does not implement its own spec; `transplant` "
+                        f"and any birth adoption will fail on it. Author it with "
+                        f"`rag_kernel add-rule {key} ...`")))
+    return findings
+
+
 def check_template_keys(hot: dict) -> list[AuditFinding]:
     """ERROR for any ``_``-prefixed template key leaked into operating_protocol (K5).
 
@@ -2383,6 +2502,12 @@ def audit_file(
     # the RAG dir (= p.parent); project root = use_root (default: the grandparent).
     extra += check_asset_registry(
         p.parent, use_root if use_root is not None else p.parent.parent)
+    # AUDIT-SPEC-COVERAGE: canonical-vs-SPEC coverage. Every other invariant here
+    # compares a render to the canonical store; this one is the only thing that
+    # asks whether the canonical store implements the spec it claims to. Its
+    # absence hid 8 missing universal rules for 178 sessions (S179 §0.3).
+    extra += check_spec_completeness(
+        hot, p.parent, use_root if use_root is not None else p.parent.parent)
     # KA-1: ran-but-never-checkpointed — a completed session log (RAG/session_log_
     # <sid>.jsonl) newer than meta.written_by_session is the governance-freeze
     # signature the auditor previously missed. RAG dir = p.parent; self-skips clean.

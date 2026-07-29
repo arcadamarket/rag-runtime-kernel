@@ -870,6 +870,42 @@ def build_parser() -> argparse.ArgumentParser:
                                     help="project root for portable relative-path storage (default: parent of rag-dir)")
     reuse_check_parser.add_argument("--json", dest="json_output", action="store_true",
                                     help="output matches as JSON instead of text")
+    reuse_check_parser.add_argument("--fleet", action="store_true",
+                                    help="also search the persisted fleet view "
+                                         "(sibling deployments) — see `inventory fleet`")
+
+    # -- inventory (FLEET-INVENTORY: know what exists, here and next door) ------
+    # MANDATORY, not optional. This kernel's registry sat empty for 178 sessions
+    # while the runbook told every clone to register what it ships; the eBay clone
+    # meanwhile shipped 47 unregistered scripts and reinvented this registry as
+    # capability_ledger.py. An inventory that sees only its own deployment cannot
+    # stop clone #3 rewriting what clone #1 already shipped.
+    inv_parser = subparsers.add_parser(
+        "inventory",
+        help="Classify every file in a deployment root, list what is not yet registered, "
+             "and merge the reusable surface of sibling deployments into one searchable "
+             "view. Read-only except `backfill`. FLEET-INVENTORY.",
+    )
+    inv_parser.add_argument("mode", choices=["scan", "backfill", "fleet"],
+                            help="scan: classify a root (read-only) · "
+                                 "backfill: register what scan found unregistered · "
+                                 "fleet: merge sibling deployments into the fleet view")
+    inv_parser.add_argument("--root", type=Path, default=None,
+                            help="deployment root to walk (default: the RAG dir's parent)")
+    inv_parser.add_argument("--rag-dir", type=Path, default=_default_rag_path().parent,
+                            help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
+    inv_parser.add_argument("--deployment", action="append", default=None,
+                            metavar="NAME=ROOT",
+                            help="sibling deployment for `fleet` mode; repeatable. "
+                                 "Omit to use the `fleet` context partition.")
+    inv_parser.add_argument("--session", type=str, default=None,
+                            help="session id recorded on backfilled asset records")
+    inv_parser.add_argument("--limit", type=int, default=40,
+                            help="cap on listed entries (Rule 17 bounded emission)")
+    inv_parser.add_argument("--dry-run", action="store_true",
+                            help="backfill/fleet: render the plan without writing")
+    inv_parser.add_argument("--json", dest="json_output", action="store_true",
+                            help="Output as JSON instead of text")
 
     # -- verify (FIX-2: deterministic post-init self-version coherence gate) --
     verify_parser = subparsers.add_parser(
@@ -889,6 +925,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional spec MD to assert HOT/COLD versions equal the spec's own version.",
     )
     verify_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
+
+    # -- wait-for (WAIT-PRIMITIVE: the sanctioned blocking wait, S176 -> S180) --
+    # Long jobs run DETACHED to a file (E-081). This is how you wait for one:
+    # server-side, inside the sanctioned transport, zero agent round-trips.
+    # Closes the hole that produced E-082b/E-085/E-086/E-089/E-090 -- five
+    # consecutive sessions of polling or banned-sandbox sleeping, all because a
+    # discipline with no mechanism is only advice.
+    wait_parser = subparsers.add_parser(
+        "wait-for",
+        help="Block until a sentinel file exists (or contains a token), then return "
+             "a bounded tail of it. Exit 0 found / 1 timeout / 2 usage. Touches no "
+             "state and needs no RAG, so it works at session zero. WAIT-PRIMITIVE.",
+    )
+    wait_parser.add_argument("path", type=Path,
+                             help="sentinel file to watch (its parent need not exist yet)")
+    wait_parser.add_argument("--timeout", type=float, required=True,
+                             help="hard upper bound in seconds, measured on the monotonic clock")
+    wait_parser.add_argument("--poll-ms", dest="poll_ms", type=int, default=250,
+                             help="internal stat interval in ms (default: 250). The MACHINE "
+                                  "polls here, not the agent: this costs zero tool round-trips "
+                                  "and is not the E-081 polling that is banned.")
+    wait_parser.add_argument("--contains", type=str, default=None,
+                             help="require this token inside the file, not merely its existence. "
+                                  "PREFER THIS: shell redirection creates the file before the job "
+                                  "writes anything, so bare existence races the writer. Have the "
+                                  "job echo a DONE marker last and wait on that.")
+    wait_parser.add_argument("--emit", dest="emit_lines", type=int, default=0,
+                             help="on success, print the last N lines of the sentinel file so one "
+                                  "round-trip returns both completion AND result (Rule 17).")
+    wait_parser.add_argument("--json", dest="json_output", action="store_true",
+                             help="Output as JSON instead of text")
 
     # -- context (FIX-11 inc2 / U3: CLI group over the sanctioned RAG_CONTEXT.json store) --
     # A governed path to land project-specific context into the sanctioned,
@@ -2916,6 +2983,12 @@ def _render_agent_frame(rag: dict, *, rag_dir: "str | None" = None) -> str:
     out.append("  PROCESS DISCIPLINE (loaded every boot because it is the most re-learned):")
     out.append("    - Long jobs run DETACHED to a file; check ONCE after a single long")
     out.append("      wait. NEVER poll a running command (E-081).")
+    out.append("    - THE WAIT IS A VERB, NOT A JUDGEMENT CALL (WAIT-PRIMITIVE, S180):")
+    out.append("        rag_kernel wait-for <file> --timeout N --contains DONE --emit 20")
+    out.append("      It blocks server-side and returns the tail in ONE round-trip.")
+    out.append("      Use it in a SECOND pane (Rule 27) while the job runs in the first.")
+    out.append("      There is now no reason to poll and no reason to reach for the")
+    out.append("      banned Cowork sandbox as a sleep timer (E-082b/E-086/E-089/E-090).")
     out.append("    - Two consecutive uninformative/malformed emissions toward one goal")
     out.append("      = STOP, diagnose, report with options (Rule 17 / circuit_breaker).")
     out.append("    - Bounded emissions only: pipe verbose output to a file, read back a")
@@ -5198,15 +5271,190 @@ def cmd_reuse_check(args: argparse.Namespace) -> int:
         print(_json.dumps({"ok": not hits, "hits": [h.to_dict() for h in hits]}, indent=2))
         return 1 if hits else 0
 
-    if not hits:
+    fleet_hits = []
+    if getattr(args, "fleet", False) and args.purpose:
+        from rag_kernel.inventory import fleet_reuse_check
+        fleet_hits = fleet_reuse_check(rag_dir, args.purpose)
+
+    if not hits and not fleet_hits:
         crit = args.path if args.path is not None else args.purpose
-        print(f"reuse-check: CLEAR -- no baked asset covers {str(crit)!r}; safe to author.")
+        suffix = "" if getattr(args, "fleet", False) else \
+            " (local only — add --fleet to search sibling deployments)"
+        print(f"reuse-check: CLEAR -- no baked asset covers {str(crit)!r}; "
+              f"safe to author.{suffix}")
         return 0
+
+    if not hits and fleet_hits:
+        print(f"reuse-check: FLEET REUSE -- {len(fleet_hits)} artifact(s) in SIBLING "
+              f"deployments already cover this. Read them before authoring:")
+        for h in fleet_hits[:20]:
+            mark = "" if h.registered else "  [unregistered at home]"
+            print(f"  - [{h.deployment}] {h.rel}{mark}"
+                  + (f"  purpose: {h.purpose}" if h.purpose else ""))
+        return 1
     print(f"reuse-check: REUSE -- {len(hits)} baked asset(s) already cover this "
           f"(do NOT rewrite; reuse):")
     for h in hits:
         print(f"  - {h.asset_id}  [{h.path}]  purpose: {h.purpose}  sha256:{h.sha256[:12]}")
     return 1
+
+
+def cmd_inventory(args: argparse.Namespace) -> int:
+    """FLEET-INVENTORY: scan / backfill / fleet.
+
+    Exit 0 on success. ``scan`` exits 1 when reusable work is unregistered —
+    fail-loud, because an unregistered asset is capability that ``reuse-check``
+    cannot see, which is how it gets rewritten.
+    """
+    import json as _json
+    from rag_kernel import inventory as inv
+
+    rag_dir = _resolve_context_dir(args.rag_dir)
+    root = args.root.resolve() if args.root else Path(rag_dir).parent
+
+    if args.mode == "scan":
+        report = inv.scan(root)
+        pending = inv.unregistered(root, rag_dir)
+        if args.json_output:
+            payload = report.to_dict(limit=args.limit)
+            payload["unregistered"] = [f.to_dict() for f in pending[:args.limit]]
+            print(_json.dumps(payload, indent=2))
+        else:
+            print(report.render(limit=args.limit))
+            if pending:
+                print(f"\n  UNREGISTERED reusable work: {len(pending)} "
+                      f"— invisible to reuse-check, therefore liable to be rewritten:")
+                for f in pending[:args.limit]:
+                    print(f"    [{f.cls}] {f.rel}")
+                if len(pending) > args.limit:
+                    print(f"    … {len(pending) - args.limit} more")
+                print("  Fix: `rag_kernel inventory backfill --session <SID>`")
+            else:
+                print("\n  All reusable work is registered.")
+        return 1 if pending else 0
+
+    if args.mode == "backfill":
+        if not args.session:
+            print("inventory backfill: --session is required (audit trail)",
+                  file=sys.stderr)
+            return 2
+        from rag_kernel.asset_registry import AssetRegistryError, register_asset
+        pending = inv.unregistered(root, rag_dir)
+        if not pending:
+            print("inventory backfill: nothing to do — registry already complete.")
+            return 0
+        if args.dry_run:
+            print(f"[DRY RUN] would register {len(pending)} asset(s):")
+            for f in pending[:args.limit]:
+                print(f"  [{f.cls}] {f.rel}")
+            if len(pending) > args.limit:
+                print(f"  … {len(pending) - args.limit} more")
+            return 0
+        done = failed = 0
+        for f in pending:
+            try:
+                register_asset(
+                    rag_dir,
+                    asset_id=f.rel,
+                    path=Path(root) / f.rel,
+                    purpose=(f"BACKFILLED {args.session}: {f.cls} "
+                             f"{Path(f.rel).stem.replace('_', ' ')} — purpose not yet "
+                             f"described; refine with register-asset when its intent "
+                             f"is confirmed."),
+                    session=args.session, project_root=root)
+                done += 1
+            except AssetRegistryError as ex:
+                failed += 1
+                print(f"  SKIP {f.rel}: {ex}", file=sys.stderr)
+        print(f"inventory backfill: registered {done}, skipped {failed}, "
+              f"of {len(pending)} candidate(s).")
+        return 0 if failed == 0 else 1
+
+    # -- fleet -------------------------------------------------------------- #
+    deployments: list[dict] = []
+    for spec in (args.deployment or []):
+        name, _, path = spec.partition("=")
+        if not path:
+            print(f"inventory fleet: expected NAME=ROOT, got {spec!r}", file=sys.stderr)
+            return 2
+        p = Path(path).resolve()
+        deployments.append({
+            "name": name,
+            "root": str(p),
+            "rag_dir": str(p / "RAG") if (p / "RAG").is_dir() else str(p),
+        })
+    if not deployments:
+        deployments = inv.fleet_config(rag_dir)
+    if not deployments:
+        print("inventory fleet: no deployments given and no `fleet` context "
+              "partition declared. Pass --deployment NAME=ROOT.", file=sys.stderr)
+        return 2
+
+    entries = inv.fleet_scan(deployments)
+    unregistered_n = sum(1 for e in entries if not e.registered)
+    if args.dry_run or args.json_output:
+        payload = {
+            "deployments": [d["name"] for d in deployments],
+            "entries": len(entries), "unregistered": unregistered_n,
+            "sample": [e.to_dict() for e in entries[:args.limit]],
+        }
+        print(_json.dumps(payload, indent=2))
+        return 0
+
+    from rag_kernel.cold_manager import ProjectContextManager
+    mgr = ProjectContextManager.default(Path(rag_dir))
+    mgr.path.parent.mkdir(parents=True, exist_ok=True)
+    mgr.update_partition(inv.FLEET_PARTITION, {
+        "_protocol": ("FLEET-INVENTORY. The reusable surface of every declared sibling "
+                      "deployment. Search it with `reuse-check --fleet` BEFORE authoring: "
+                      "a sibling's unregistered script is still prior art. Regenerate "
+                      "with `rag_kernel inventory fleet`."),
+        "entries": [e.to_dict() for e in entries],
+    })
+    print(f"inventory fleet: {len(entries)} reusable artifact(s) across "
+          f"{len(deployments)} deployment(s) -> RAG_CONTEXT.json[{inv.FLEET_PARTITION}]")
+    print(f"  {unregistered_n} of them are UNREGISTERED in their own deployment "
+          f"— visible here, invisible at home.")
+    for e in entries[:args.limit]:
+        print(f"    [{e.deployment}] {e.rel}")
+    if len(entries) > args.limit:
+        print(f"    … {len(entries) - args.limit} more")
+    return 0
+
+
+def cmd_wait_for(args: argparse.Namespace) -> int:
+    """WAIT-PRIMITIVE: block on a sentinel, return a bounded tail, fail loud.
+
+    The sanctioned answer to "the job is detached, now what". Reads nothing but
+    the sentinel file, writes nothing at all, and imports no kernel state -- so
+    it is usable before a RAG exists, which is precisely when a clone-birth
+    runbook needs to wait on a long init.
+    """
+    import json as _json
+    from rag_kernel.wait_primitive import EXIT_USAGE, WaitError, wait_for
+
+    try:
+        result = wait_for(
+            args.path,
+            args.timeout,
+            poll_ms=args.poll_ms,
+            contains=args.contains,
+            emit_lines=args.emit_lines,
+        )
+    except WaitError as ex:
+        print(f"wait-for: usage error: {ex}", file=sys.stderr)
+        return EXIT_USAGE
+    except KeyboardInterrupt:
+        # An interrupted wait is NOT a completed job. Say so, loudly.
+        print("wait-for: INTERRUPTED -- the job was not observed to finish.",
+              file=sys.stderr)
+        return EXIT_USAGE
+
+    if getattr(args, "json_output", False):
+        print(_json.dumps(result.to_dict(), indent=2))
+    else:
+        print(result.render(), file=sys.stdout if result.ok else sys.stderr)
+    return result.exit_code
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -5579,6 +5827,8 @@ def main(argv: list[str] | None = None) -> int:
         "transplant": cmd_transplant,
         "register-asset": cmd_register_asset,
         "reuse-check": cmd_reuse_check,
+        "inventory": cmd_inventory,
+        "wait-for": cmd_wait_for,
         "verify": cmd_verify,
         "context": cmd_context,
         "bootmap": cmd_bootmap,
