@@ -1,0 +1,2394 @@
+{
+  "leaned_rules": {
+    "garbage_collector": "RUN AT SESSION START. Execute RAG/scripts/session_cleanup.sh via wsl-exec. Scan ONLY within root_project. Report findings to user before deleting. Covers: TLC artifacts, Python cache, .pyc files, .tmp files within root_project ONLY. S57 (user directive): ALSO run periodically in DRY-RUN during a session (report-before-delete) -- `python -m rag_kernel gc --dry-run` or session_cleanup.sh dry -- not only at session start; never delete without surfacing findings and getting user go-ahead.",
+    "tmux_dedup_protocol": "Rule 18 (TMUX-DEDUP -- S112 operator-confirmed root cause + standing fix; encoded via the governed add-rule verb, NOT a hand-edit; SUPERSEDES the one-time TMUX-DEDUP-INSTANCE \"restart/reconnect the connector\" framing). ROOT CAUSE (E-048): Claude Desktop does NOT reap its tmux-mcp MCP child process on exit, so every relaunch spawns a NEW tmux-mcp instance beside the stale one. Two (or more) \"npm exec tmux-mcp\" instances then race over the socket /tmp/tmux-1000/default; only one owns/creates the tmux server, so any tmux-mcp call routed to the other instance hits a dead server (\"no server running on /tmp/tmux-1000/default\"). This is a recurring per-relaunch artifact, NOT a Cowork connector mis-registration -- there is no operator config to change and no operator action required. STANDING FIX (apply at session start, or on the first tmux \"no server\"/race symptom): (1) pgrep -af tmux-mcp -- if more than one \"npm exec tmux-mcp\" process tree exists, duplication is present. (2) ps -o pid,ppid,etimes,lstart,cmd -p <pids> -- the OLDER tree (larger etimes / earlier lstart) is the stale leftover from the previous Desktop exit; the NEWEST tree is the live one the current MCP connection routes to. (3) kill the OLDER full tree ONLY (kill the node + sh + npm PIDs of that tree); NEVER kill the newest/active tree. (4) verify exactly one instance remains (pgrep) and tmux-mcp responds (list-sessions). EDGE CASE: if tmux-mcp reports \"no server\" with a SINGLE instance present, that is merely an empty server with no sessions -- create one (wsl-exec: tmux new-session -d -s main, or tmux-mcp create-session) rather than killing anything. wsl-exec is the reliable ATOMIC fallback transport throughout (it ran 100% clean while tmux raced; mind its operator-stripping gotchas in known_issues_registry). Established S112: the immediate duplicate (older tree) was killed, one live instance confirmed, and this procedure baked in so no future session re-diagnoses E-048.",
+    "github_deploy_method": "tmux-mcp (PRIMARY): `git push origin main` from the worktree in a real interactive WSL bash (credential store configured S30 — ~/.git-credentials in both Windows and WSL; tmux runs composed commands verbatim, no operator mangling). FALLBACK: wsl-exec as an ATOMIC single command; if the WSL transport is down, ask the user to run it in PowerShell. NEVER read the PAT file or write temp push scripts.",
+    "github_metadata_ops": "S33/S66: GitHub-side metadata (About description, topics, releases, Discussions) is NOT a git operation — git push cannot touch it. Use gh CLI via tmux-mcp (PRIMARY — a real interactive WSL bash runs composed gh commands, --jq pipes, $() and quoting VERBATIM), NOT the browser. gh v2.62.0 at /home/pakhol/.local/bin/gh (no sudo, official binary), authenticated as arcadamarket from the existing ~/.git-credentials token (gh auth login --with-token fed via stdin — token never echoed or placed in argv). Releases: gh release create/edit/view. Topics/About: gh api repos/{o}/{r} (PATCH) and /topics (PUT). Discussions: gh api graphql ONLY (REST has no Discussions API); fetch node IDs then updateDiscussion mutation. Browser (Claude in Chrome) is FALLBACK ONLY. NOTE (ENV-NORM S66): the old 'WSL-EXEC GOTCHAS' (strips & | $() backticks and ; , mangles escaped quotes) are a wsl-exec-ONLY wrapper-tax — under tmux-mcp (now primary) gh pipes, --jq, $() and quoting run verbatim, so the -F query=@file / -F body=@file / script-FILE workarounds are needed ONLY when falling back to wsl-exec (ATOMIC). Either way run from a path the transport can see (/mnt/c/... project tree; the Cowork sandbox outputs dir is invisible to real WSL).",
+    "github_pat_location": "DEPRECATED (S30) — credential store at ~/.git-credentials in both Windows and WSL. Do NOT read the PAT file.",
+    "known_issues_registry": {
+      "cmd_parentheses": "Desktop Commander CMD cannot handle parentheses in folder paths. KNOWN since S10/S11. Do NOT attempt CMD with this project path. Use .bat file written via Filesystem MCP then executed, OR ask user.",
+      "powershell_utf8": "NEVER use PowerShell Set-Content for UTF-8 files with special characters (em dashes, arrows, box drawing). Use Filesystem MCP write_file instead.",
+      "sandbox_git": "Sandbox bash mount has no git repo context. Use wsl-exec with working_dir, or .bat file via Desktop Commander, or ask user.",
+      "powershell_git_path": "PowerShell default PATH may not include git. Full path: C:\\Program Files\\Git\\cmd\\git.exe",
+      "git_worktree_location": "Git repo is NOT at project root. It is at GIT WORKTREES\\rag-runtime-kernel\\. ALWAYS check RAG git_worktree_path before any git command.",
+      "pat_outside_workspace": "PAT file is outside connected workspace folder. Cannot be read by Filesystem MCP. Use wsl-exec /mnt/c/ path (established S11/S19).",
+      "wsl_exec_ampersand": "wsl-exec strips && from commands. Use separate commands or working_dir param instead of cd && cmd chains.",
+      "wsl_exec_tilde": "wsl-exec does not expand ~ in paths. Use full absolute paths.",
+      "sandbox_mount_truncation": "CRITICAL (S22+S23). SANDBOX IS PERMANENTLY BANNED. Cowork sandbox bash mount: (1) silently truncates large files, (2) caches stale .pyc bytecode that CANNOT be deleted (read-only mount), (3) even Python -B flag cannot override stale .pyc on this mount. S22 burned ~30% context on truncation. S23 burned ~30% context on stale .pyc (E-031). RULE: NEVER use sandbox for ANY purpose in this project. wsl-exec with working_dir is the ONLY permitted test/shell runner. pytest is installed at /home/pakhol/.local/bin/pytest (S23). If wsl-exec fails: ASK USER. Do NOT fall back to sandbox.",
+      "wsl_exec_subshell": "CRITICAL. wsl-exec strips backticks, $(), and pipe | characters. NEVER pass subshell expansion inline. Use temp bash script for commands requiring subshell operators (e.g., git push with $(cat PAT)). Violations caused credential leaks E-011, E-032.",
+      "python314_pip": "Windows has ONLY Python 3.14 (C:\\Python314\\python.exe). pip is broken on 3.14 (rich NamedTuple crash). WSL has Python 3.12.3 with working pip 26.1.1 at /usr/bin/python3. RULE: Before ANY install attempt, run an environment audit — enumerate ALL available tools in both AI env (MCPs, connectors, custom scripts) and OS env (all Python versions, pip/pip3/uv variants, package managers across Windows + WSL) and their versions. Establish ground truth BEFORE acting. Do NOT panic-switch environments on first failure. Current default: ALL Python execution via wsl-exec. nvm-windows is for Node.js only (24.15.0/22.22.2), cannot help with Python.",
+      "curl_cffi_headers": "curl_cffi: NEVER pass custom headers= when using impersonate=. Custom headers override the impersonated TLS/header fingerprint and break the bypass. Discovered in eBay S1 — get_headers() function broke curl_cffi impersonation, re-triggering 403."
+    },
+    "report_before_transfer": "Rule 12 (S45 origin; RE-SETTLED S47 per user-approved Task 5/6 — full revision + R/A/G thresholds). RAG is the SINGLE SOURCE OF TRUTH so this rule lives HERE. BLOCKING GATE: on EVERY substantial completion (milestone shipped, commit+checkpoint done, end of a unit of work) the assistant MUST AUTOMATICALLY RENDER THE FULL STATUS REPORT IN CHAT as the response itself — NEVER written to disk, NEVER a file or present_files card (a report file pollutes root_project; cf. the reconciliation-audit reprimand). DESIGN PRINCIPLE (S47): the report is a DETERMINISTIC RENDER of the RAG canonical fields, not hand-authored prose — it RENDERS state, never re-proses or re-authors operating_protocol/backlog text (DRY; pre-aligns with DRIFT-ELIM where docs are renders never authorities). Dashboard-first / inverted-pyramid: verdict and health at the top. Borrows ISO/IEC/IEEE 15288 (assessment+control: planned-vs-actual + corrective action), 15289 (report identification metadata) and PM highlight-report practice (R/A/G + objective thresholds + Road-to-Green); borrows their INTENT but NOT their ~10-20pp length — a chat-rendered, LLM-re-ingested report must stay compact to protect the context budget (the no-compaction hard rule). CANONICAL FORMAT = 7 sections; heading '## RAG Runtime Kernel — Status Report (S<NN> close)', then: (1) AT-A-GLANCE markdown table | Overall | Milestone | Release-ready | Tests/Health | Drift gate | Context% | RAG seq | with R/A/G glyphs, immediately followed by '**Verdict:**' one honest line (say UNRELEASED/not-deployable when true, per Rule 14 increment-status-honesty); (2) BUILD planned-vs-actual table | # | Increment | Plan | Status | RAG | Commit·S | covering every increment + the release row; (3) THIS SESSION — what changed, <=5 bullets, no prose wall; (4) BACKLOG rendered from the RAG (Open / Blocked-or-user-gated / Deferred), IDs + one line each, never re-prosed; (5) RISKS & DEVIATIONS (Road-to-Green) — ONLY Amber/Red items: risk -> impact -> corrective action; (6) LEDGER & ERRORS — N OPEN + open E-### one-liners; (7) VERIFICATION & HANDOFF — latest commit, tests, health, drift-gate sha, RAG seq + written_by + bytes + .bak, next/handoff. R/A/G THRESHOLDS (objective, not subjective): RED = failing tests OR health < full OR drift-gate red OR a published repo-claim contradicts reality (Rule 11) OR context forced compaction; AMBER = feature-complete but UNRELEASED/not-deployable, OR an open user-gated blocker, OR within tolerance but trending; GREEN = released AND tests/health/drift all green AND repo-claims reconciled. Recurring operational gotchas are REFERENCE (they live in operating_protocol) — include them in the report ONLY if something changed this session, else omit. TRIGGERS (S47 user-clarified): (a) AUTOMATIC on completion of a significant task OR batch of tasks / milestone-commit — any commit-worthy/checkpoint-worthy unit — AND, CRITICALLY, PROACTIVELY whenever context is approaching a level that could provoke Cowork compaction/compression or ANY context-loss procedure: the report render + RAG checkpoint IS the state-preservation act and MUST happen BEFORE any such loss can occur (works in concert with context_window_management's ~70% halt + session_scope_discipline — never wait until compaction is imminent; render+checkpoint early enough that zero state is at risk). Calibrate firing to context risk, not to every trivial task — do not over-fire on micro-edits when no context pressure / transfer / request exists. (b) AUTOMATIC before ANY advisal/mention/recommendation to transfer to a new session (report first, transfer second). (c) ON-DEMAND at ANY time the user asks, phrased any way — ANY message SEMANTICALLY perceived as a call for the canonical/full 'Status Report' settled here MUST render THIS exact format regardless of wording. REPORT-INTENT CLASSIFICATION (S47 dual-POV design — canonical-report call vs ANY other interim report): intent recognition with ONE designated POSITIVE class. POSITIVE (=canonical) signals: the request's semantic target is the OVERALL PROJECT DEV-STATUS — 'status', 'where are we', 'the report', 'full report', 'rundown', 'state of the project', progress/health/release-readiness/tests/RAG-state, or a session-close/pre-transfer context. NEGATIVE (=some OTHER report) signals: the request is SCOPED to a narrower/different subject/artifact — e.g. 'report on the eBay deliverables', 'a comparison/benchmark report', 'summarize this file', 'an error report for E-040', 'a research report on vector DBs'. DECISION RULE: classify CANONICAL iff target is overall dev-status AND NOT scoped to a different artifact; a scope qualifier naming another subject flips it to OTHER; the bare unqualified word 'report' in a project-dev context DEFAULTS to canonical (it is the project's primary report). AMBIGUITY RESOLUTION (S47 — replaces 'just ask' with DECLARE-AND-PROCEED): because rendering the canonical report is CHEAP, SAFE and REVERSIBLE, do NOT block on a clarifying question by default. When intent cannot be recognized strictly/distinctly, render the MOST-LIKELY report (defaulting to canonical whenever a dev-status reading is plausible) PREFIXED with ONE explicit declared-assumption line naming which report you are producing and how to redirect (e.g. 'Reading this as the canonical Status Report — say so if you meant a different report'). This keeps momentum (no round-trip) while making the interpretation OBSERVABLE and one-line-CORRECTABLE — same fail-loud/cheap-error philosophy as the DRIFT-ELIM auditor. RESERVE a true blocking AskUserQuestion ONLY when (i) the subject itself is unidentifiable, OR (ii) the candidate interpretations diverge EXPENSIVELY (a costly/irreversible action hangs on the guess). POV tension resolved: AI/ML lens wants flexible semantic matching, CS lens wants deterministic fail-safe low-cost-error handling; convergence = explicit signal lists + a safe canonical DEFAULT + a declared, correctable assumption (LLM proposes intent; declared-default-plus-cheap-correction decides; render+checkpoint persists state). SCOPE GUARD: this canonical format governs ONLY the project-DEV-STATUS report; OTHER project reports unrelated to dev status are legitimately articulated/formatted differently — do NOT force them into this template. ENFORCEMENT: the assistant may NOT offer, mention, or recommend a session transfer unless this full report is already rendered IN THE SAME MESSAGE, ABOVE the transfer suggestion — report first, transfer second; the user must NEVER have to ask. WHY: promised pre-S45 but mis-stored in Cowork memory and violated in S45 (E-039); moved into operating_protocol so it loads as authoritative state every session start; re-settled S47 to fix the redundancy/readability gaps (3-4x duplicated facts, buried verdict, binary status) found in the S46 specimen.",
+    "token_economy": "Rule 17 (TOKEN-ECONOMY / CONTEXT-EMISSION DISCIPLINE — KA-15, S108; source: eBay Session-Zero field incident, triaged UNIVERSAL per deployment_test_result_triage / Rule 15). A three-in-one backpressure rule that guards the no-compaction hard rule (context_window_management) and the one-milestone discipline (session_scope_discipline). (1) BOUNDED TOOL-OUTPUT: NEVER capture whole panes or unbounded command/log/test output into the context window — a single oversized emission can spike the token budget and provoke the forbidden Cowork compaction. Pipe verbose output to a file and read back ONLY a bounded slice — e.g. `cmd >/tmp/out.txt 2>&1; tail -n 40 /tmp/out.txt` (or grep/head/wc -l) — cap dumps, prefer counts and heads over full bodies, and request the smallest emission that answers the question. (2) MALFORMED-EMISSION IS A FIRST-CLASS CIRCUIT_BREAKER STRIKE: a garbled, truncated, or malformed tool emission is a STRIKE under the Two-Strike Rule (circuit_breaker / Rule 5), not noise to retry blindly. On the second malformed or non-advancing emission toward one goal, HALT, diagnose root cause, log to ERROR_LOG.md, and switch to the cheapest bounded fallback — re-firing the same unbounded call is a NEW failure, not a new attempt. (3) KNOWN-ISSUE malformed_emission: under context bloat a harness can emit malformed/garbled tool output (observed eBay S0, where harness mangling compounded with the agent never loading HOT rule bodies into cognition and a non-atomic close that stranded the operator); treat any malformed emission as a fail-loud signal. WHY: established S108 (KA-15) from the eBay Session-Zero audit where context-bloat + whole-pane captures + malformed harness emission compounded into a stranded session; this is the universal backpressure so it cannot recur on any deployment. SPEC-SEED follow-up (TRACKED, DEFERRED): INIT-spec seeding — §15 token_economy bounded-output clause, §21 circuit-breaker malformed-emission strike, and the §41 known_issues_registry malformed_emission entry (universal; both the human-readable table and the rag-config block) — is bundled into the KA-14..17 arc release, sibling to the KA-13 / KA-14 spec-wiring follow-ups; until that release lands this live-RAG rule is authoritative for this deployment.",
+    "inference_ledger_protocol": "Rule 10 — INFERENCE CAPTURE. (1) TRIGGER: When reasoning yields a solution, idea, design decision, optimization, or follow-up that is NOT being implemented in the current session, it MUST be appended to inference_ledger IMMEDIATELY — not at session close, not retroactively. The trigger is involuntary: if you verbalize it, you log it. (2) ENTRY FORMAT: {id, session, type, summary, context, disposition, scheduled_as, superseded_by}. Types: solution | idea | design_decision | optimization | follow_up. Dispositions: OPEN → SCHEDULED | DEFERRED | SUPERSEDED | DISCARDED. (3) REVIEW: At session close, scan all OPEN items. Each MUST get a disposition with a one-line reason. SCHEDULED items get moved to open_tasks with a concrete ID. DEFERRED items stay in ledger with a reason. SUPERSEDED items link to what replaced them. DISCARDED items get a reason. (4) SESSION START: After loading RAG, scan ledger for OPEN items. Report count to user. If any OPEN items are stale (>2 sessions old without review), flag as overdue. (5) RELATIONSHIP TO OTHER STORES: inference_ledger is the INTAKE buffer. open_tasks is the COMMITTED backlog. deferred_items is the PARKED backlog. The ledger feeds both — items flow from ledger to tasks/deferred via SCHEDULED/DEFERRED disposition. Nothing enters open_tasks or deferred_items without first passing through the ledger (except user-directed additions). (6) WHY THIS EXISTS: Session summaries compress ideas into narrative prose. Narrative is not a commitment. The ledger converts ephemeral LLM output into tracked state. Established S24 to prevent idea loss across session boundaries (the SessionLogger KernelApp wiring gap was the triggering incident).",
+    "governance_runtime": "Rule 19 (SELF-HOSTED RUNTIME -- S112 MIGRATION-V0423; encoded via the governed add-rule verb). This project's GOVERNANCE now runs on its OWN deployed, pinned v0.4.23 runtime, NOT the dev worktree. DEPLOYED BACKBONE: RAG/rag_kernel/ -- a byte-identical copy of the runtime-v0.4.23 / commit c140137 package (19 modules + __init__ + __main__ + generated_guards; stdlib-only, zero-token), diff-verified against the worktree source at deploy time. INVOCATION (ALL governance ops -- session-start/session-end, checkpoint, render, audit, verify, health, gc, items, and the lifecycle verbs start/resolve/defer/reopen/discard/supersede/note/add/add-rule): run FROM the RAG/ directory against the local package, e.g. `cd \"<root_project>/RAG\" && python3 -m rag_kernel <cmd> --rag RAG_MASTER.json`, using WSL Python 3.12 through tmux-mcp (PRIMARY) or wsl-exec (atomic fallback) per the transport rules; the Cowork sandbox stays PERMANENTLY BANNED. RATIONALE: the project is propped by a STABLE pinned runtime so its governance is unaffected by in-progress kernel development; the LLM role is assignor / checker / orchestrator / script-result analyzer / decision-maker ONLY (\"if a task can be a Python script it MUST be a script\") -- the founding token-efficiency + deterministic-output concept, now enforced structurally rather than by reminder. SEPARATION OF CONCERNS: GIT WORKTREES/rag-runtime-kernel/ remains the place for kernel DEVELOPMENT (editing rag_kernel, running the test suite, git push to GitHub, cutting releases); tool_hierarchy / github_deploy_method / pytest_and_testing continue to govern that dev workflow and are NOT superseded. UPGRADING the backbone: after a future runtime release is cut + verified in the worktree, re-deploy its pinned package into RAG/rag_kernel/ (diff-verify, then re-run the in-situ gate). Established S112; supersedes the prior ad-hoc practice of invoking governance from the dev worktree.",
+    "authoritative_sources_only": "Rule 13 (S45, user directive — emphatic). THE ONLY AUTHORITATIVE SOURCES/VAULTS ARE: (a) the Project Instructions tab, and (b) the RAG (RAG_MASTER.json) plus the environmental files it explicitly references — RAG_MASTER.json.bak, ERROR_LOG.md, TO-DO PLANs, RAG_COLD.json, RAG/scripts/, and the INIT prompt. COWORK BUILT-IN MEMORY IS FORBIDDEN for this project as a source or store of ANY rule, preference, or project state: do NOT read it as authority, do NOT write to it, and do NOT create or maintain MEMORY.md or any feedback_*.md / project_*.md side-running files (next to the RAG or anywhere else). Every rule or piece of state belongs IN THE RAG (operating_protocol / current_status / open_tasks / inference_ledger / deferred_items) — never in Cowork memory or a side .md. THE DRIFT THAT TRIGGERED THIS (E-039, S45): the assistant created and edited Cowork memory (MEMORY.md + feedback_report_before_transfer.md) to store the report-before-transfer rule instead of putting it in the RAG; it now lives in RAG Rule 12. REMEDIATION OWED, assigned to the S46 drift audit: enumerate and reconcile every existing Cowork memory file against the RAG, migrate any unique content into the RAG, then PURGE the Cowork memory store and any stray side .md so no parallel rule/state store survives; confirm nothing authoritative lives outside the RAG ecosystem.",
+    "repo_claim_reality_invariant": "Rule 11 (S33, user directive). REPO-CLAIM ↔ REALITY ↔ RECORD INVARIANT. Every status claim in published repo content (README, release notes, Discussions, docs, About blurb) — anything marked under-development / known-issue / deferred / planned / unresolved / verified / shipped — MUST (a) correspond to reality and (b) have a tracking record somewhere in the project (open_tasks, deferred_items, inference_ledger, or ERROR_LOG). When a tracked item is resolved, the resolution MUST be mapped back onto the repo so the public is kept current. A repo claim with no tracking record is a control gap = the exact memory loss the RAG exists to prevent. ENFORCEMENT: at session close, and whenever editing any published repo content, audit that (1) every public status-claim has a matching record and (2) every resolved record is reflected in public content. Triggered by E-033: Discussion #2 asserted 'liveness deferred / one bug' with zero tracking record while formal/TLC_RESULTS.md had long since proven all 3 liveness properties and fixed both bugs. Slated to harden into the INIT spec via INS-018.",
+    "deployment_test_result_triage": "Rule 15 (S59, user directive). The RAG Runtime Kernel is a UNIVERSAL system deployed ONTO other projects (e.g., the eBay seller project). When the user raises anything about a deployed project DURING a kernel session, treat it as TEST-RESULT INPUT -- real field evidence for improving/fixing the kernel. TRIAGE every finding into two lanes, NEVER conflated: (A) UNIVERSAL bugs/improvements (would reproduce on ANY deployment) -> checkpoint + schedule in THIS kernel project's ledger / ERROR_LOG / tracked_items / TO-DO, fix here, and ship via the kernel release cycle so all deployments benefit. (B) PROJECT-SPECIFIC issues (pertain only to that one deployment, e.g. its own void RAG) -> track and treat SEPARATELY within the kernel dev session's own lane, routed to that project's operational remediation; cite in the kernel ledger only as the source incident, do NOT treat as a kernel deliverable. Established S59 from the eBay S0 audit: universal lane = INS-042..046 (KERNEL-HARDENING); project lane = INS-047 (EBAY-PROJECT-REINIT).",
+    "strict_obey": "Rule 16 (STRICT-OBEY — S70 operator directive; encoded S79 via the governed add-rule verb, NOT a hand-edit; rendering-discipline clause added S79). Obey EXACTLY what the operator instructs: no guesswork, no improvisation, no scope creep, no unrequested work, and never substitute your own preference for the operator's literal instruction. NEVER report work as done / shipped / resolved / complete unless it actually is (reinforces Rule 14 increment-status-honesty). HALT-AND-ASK IS BOUNDED — ask the operator ONLY when an instruction is genuinely ambiguous OR it blocks on a decision the operator alone can make (e.g. the S74 .bak-contract choice). Do NOT bounce back decisions you are equipped to make yourself, choices trivially resolvable from the RAG / Project Instructions / code, or matters where a safe default exists; over-asking is itself a STRICT-OBEY violation, just like over-doing. When the operator delegates discretion (\"do whatever is necessary / I don't care how\"), EXERCISE that discretion and deliver. RENDERING DISCIPLINE (an inherent part of STRICT-OBEY): every status / backlog / report render MUST enumerate each item LINE BY LINE, by ID, with a one-line plain-language description — the Open, Blocked/user-gated, and Deferred sections ALIKE — and MUST NEVER collapse a section into a bare count (e.g. \"Deferred: 6\"), an arrow/glyph shorthand, or any compressed form that forces the operator to guess whether items were lost, drifted, or merely abbreviated. Plain words over cipher symbols; full enumeration over summary. This mirrors the canonical report format (Rule 12 §4: \"IDs + one line each, never re-prosed\") and the DRIFT-ELIM principle that a render LISTS state, it does not summarize it. A count-only or abbreviated backlog/status render is itself a STRICT-OBEY violation. WHY: established S70 after the assistant repeatedly improvised beyond and around operator instructions and presented developer checkpoints as finished features; reinforced S79 after the assistant (a) over-asked on a decision the operator had already delegated and (b) rendered the backlog as a bare \"Deferred: 6\", forcing the operator to diff it against a prior report to confirm nothing had been lost. The last open item of the eBay-audit FIX backlog; encoded into operating_protocol so it loads as authoritative state every session.",
+    "session_scope_discipline": "HARD RULE (S22). ONE major milestone per session. A milestone = one commit-worthy unit of work (one feature, one fix, one cleanup batch). Do NOT stack multiple features/tasks into a single session. After every git commit+push: (1) checkpoint RAG_MASTER.json with full session summary, (2) offer user transfer to a new session. The RAG carries 100% of state — zero loss on transfer. A clean session with full context is ALWAYS better than a long session risking compaction. Cowork's automatic compaction fires at a platform level and cannot be queried or prevented programmatically — the only defense is finishing before it triggers. This rule exists because S22 stacked cleanup + version scheme + commit + ENH-006 + tests + push, hit 95% context, and compaction fired despite the 70% halt rule. Prevention > reaction.",
+    "increment_status_honesty": "Rule 14 (migrated S46 from purged Cowork memory; codifies a principle Rule 12 only REFERENCED but never defined). For any multi-increment build, NEVER describe a mid-build increment as shipped/released/done/approved-as-a-feature; state status plainly every time as 'increment X of N — NOT deployable/usable yet'. Distinguish 'approve my commit/checkpoint' from 'approve a usable feature' explicitly and say which is meant. Do NOT write deploy/usage guides for capabilities not yet releasable; if asked, lead with readiness/gate status. When the user wants to see it work, prefer a live demo over prose. Triggered by S38-S40 where GRAPH-ORCH increments were repeatedly called SHIPPED/released and approval was solicited for what were only developer checkpoints, misleading a non-developer user into believing a finished, deployable product existed.",
+    "tool_hierarchy": {
+      "file_read_write_list": "File tools (primary for file CONTENT read/write) > tmux-mcp (real WSL shell for listing/scan) > wsl-exec (atomic). Cowork sandbox bash PERMANENTLY BANNED.",
+      "file_copy_move_git_shell": "tmux-mcp (PRIMARY -- real interactive WSL bash; runs &&, ;, |, $(), 2>&1 VERBATIM with NO operator mangling and NO orphan '1' file, proven S64 against the parenthesized project path) > wsl-exec (FALLBACK -- ATOMIC single commands ONLY; it strips &&/;/|/$(), mangles 2>&1 into an orphan file named '1', and collapses ../.. into //) > PowerShell (LAST RESORT -- Windows-host ops, or when the WSL transport is down). Desktop Commander EXCLUDED (cmd_parentheses + dc_start_process_quotes with this path). Cowork sandbox bash PERMANENTLY BANNED.",
+      "pytest_and_testing": "tmux-mcp (PRIMARY) running PYTHONPATH=. /home/pakhol/.local/bin/pytest tests/ from the worktree in a real WSL bash; wsl-exec with working_dir is the ATOMIC-command fallback. SANDBOX PERMANENTLY BANNED (stale .pyc, truncation, read-only mount). If BOTH WSL transports fail, ASK USER -- never fall back to sandbox."
+    }
+  },
+  "baked_assets": {
+    "_protocol": "REUSE-BEFORE-REWRITE. Register baked assets with `rag_kernel register-asset <path> --purpose \"...\"`; run `rag_kernel reuse-check` before authoring. Lean-RAG: this inventory is bulk and lives here (non-loaded); RAG_MASTER holds only the reuse_registry_guard pointer rule. Empty until genuinely kernel-owned baked assets are registered (operator ruling S165: do NOT register operator-owned personal scripts here).",
+    "assets": [
+      {
+        "asset_id": "WAIT-PRIMITIVE",
+        "path": "RAG/rag_kernel/wait_primitive.py",
+        "purpose": "Sanctioned blocking wait: block until a sentinel file exists or contains a token, then return a bounded tail. CLI: rag_kernel wait-for. Replaces polling (E-081) and Cowork-sandbox sleep timers (E-082b). Stateless, no RAG dependency, usable at session zero.",
+        "sha256": "840c5f990cf2943dd0656b187a4839ec27b1a27b66dcd41864c79f8ca2b96e6c",
+        "session": "S180",
+        "registered_utc": "2026-07-29T11:42:44+00:00"
+      },
+      {
+        "asset_id": "BLUEPRINT_ONLINE_BIZ_CLONE.md",
+        "path": "BLUEPRINT_ONLINE_BIZ_CLONE.md",
+        "purpose": "BACKFILLED S180: doc BLUEPRINT ONLINE BIZ CLONE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "fa03fa78bde54159a0e88d575c14b57ed9c53ced8e6a8558ca2588ad6178665f",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:34+00:00"
+      },
+      {
+        "asset_id": "EBAY_FIRST_PROMPT.md",
+        "path": "EBAY_FIRST_PROMPT.md",
+        "purpose": "BACKFILLED S180: doc EBAY FIRST PROMPT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "281f914619d234f1708c97a6bdf4db6a137a56a7124db0505b674ac6c23e7c19",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:34+00:00"
+      },
+      {
+        "asset_id": "EBAY_QUICK_START_GUIDE.md",
+        "path": "EBAY_QUICK_START_GUIDE.md",
+        "purpose": "BACKFILLED S180: doc EBAY QUICK START GUIDE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "fd9ba83d0af93d6125ca5f5ffa770b66ca1faab1cf6e6ed605916753d5913bba",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:34+00:00"
+      },
+      {
+        "asset_id": "EBAY_SESSION_ZERO_MESSAGE.md",
+        "path": "EBAY_SESSION_ZERO_MESSAGE.md",
+        "purpose": "BACKFILLED S180: doc EBAY SESSION ZERO MESSAGE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "7f7f611ff9325c44289d1a18f0b17d0a034f8bc695f6e385a185a3f63f1ae4c7",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:35+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/.github/ISSUE_TEMPLATE/bug_report.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/.github/ISSUE_TEMPLATE/bug_report.md",
+        "purpose": "BACKFILLED S180: doc bug report — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "89dcb6734796bc5a4dd762a585885a7e5fde5895b8a4493cf60c2ce594760cd2",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:35+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/.github/ISSUE_TEMPLATE/feature_request.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/.github/ISSUE_TEMPLATE/feature_request.md",
+        "purpose": "BACKFILLED S180: doc feature request — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "28d8a5ca56ed49ea331ad29d26b1d34829b6d7ecbbc9d11ffb442399a011baf2",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:35+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/CHANGELOG.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/CHANGELOG.md",
+        "purpose": "BACKFILLED S180: doc CHANGELOG — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "21e9d6500682c8622fdfe829e4a549bd45391511bd377fec4465aff0f64fb9e0",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:36+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/CONTRIBUTING.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/CONTRIBUTING.md",
+        "purpose": "BACKFILLED S180: doc CONTRIBUTING — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "4eb289a80e10a6afcd9376056207b513b736ab2297d304124ceb955c383dd183",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:36+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.1.6 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "c4e23f39cc67548d2619fd210886d3f89661cd986f232978e9c8e874f6c2837e",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:36+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.1.7 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "c1586cb475087964ae58503578a337c7231f76aa8706131dc356486a3cec08fe",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:37+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.1.8 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "74b175a64f0886ecf489b41c9ec86c3456613831b7e42400e9e38519e1e67150",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:37+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.0 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "aadac4c3b52f0e8f64550e5402234e481730f0f308af4cb144729365750a502e",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:37+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.1 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "874ea8964399b829c28fa675cbb0325d8c203dd5da9a4242d6d862eee74583f2",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:38+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.2 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "8d5a3c88b4a6d853c6e1597b5159cb1dd7068e0dc65afc1c12e93ab05dae1402",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:38+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.3 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "9b3d2a1c61777c754624f3ebaa1225fd65b650d82aea677d133430d443e1aa7a",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:39+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.4 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "b8b6f22b5813f35e783f702d7e05b2485df72b5e39f93210d90735045c81ed02",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:40+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.5.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.5.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.5 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "4618deca119beb0fe7b2d1201e9d7b101be7d3c20e50ece72ac0efa6b2cd0c3b",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:40+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.6 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "2996363af9666cdc2e56da9fbddec19d0268a4eda7ac06ad2326b76bbbc90666",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:40+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.7 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "35474f877ab9d9a3ac0edd20c30d5586afd973ca4a24fc60c6ab12196b52653f",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:41+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.8.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.8.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.8 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "ecbbbfa35f0cc0208e709c23e8b78c41a1341c7a2fda772619ccea2205ffd4a1",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:41+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/README.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/README.md",
+        "purpose": "BACKFILLED S180: doc README — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "7fa2e78fb582128ee1ec83f3f96595a2fa33284991eadd2ba1a65e7eceb6b6ee",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:41+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/DESIGN_SCAFFOLD_TRANSPLANT.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/DESIGN_SCAFFOLD_TRANSPLANT.md",
+        "purpose": "BACKFILLED S180: doc DESIGN SCAFFOLD TRANSPLANT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "4376f8cfa0b2af90cc5e72ee53617daf272b38fe0666996b16c1fe23acf16f78",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:42+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/LAUNCH_MANUAL.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/LAUNCH_MANUAL.md",
+        "purpose": "BACKFILLED S180: doc LAUNCH MANUAL — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "34cd933df8d8071fe9de3e415587e596608cbe5f67dddae10267a729b1a981d6",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:42+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/LOCAL_TESTING_GUIDE.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/LOCAL_TESTING_GUIDE.md",
+        "purpose": "BACKFILLED S180: doc LOCAL TESTING GUIDE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "db38696adeaed1fd4dade18efba60da3b2c5d837bd886b9e8edfc6575b664d56",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:43+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/ROADMAP.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/ROADMAP.md",
+        "purpose": "BACKFILLED S180: doc ROADMAP — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "9d5ae40ad04d1425b2b93dc847cd8d08653bd99630b739579fa8d0d0a9720bb2",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:43+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/architecture.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/architecture.md",
+        "purpose": "BACKFILLED S180: doc architecture — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "5d7a87574a7888ce82ad6973e1d2943027acce95f667bbc6091a4713bd8497df",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:43+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/benchmark_comparison.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/benchmark_comparison.md",
+        "purpose": "BACKFILLED S180: doc benchmark comparison — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "88c61a9666a5bbbf28307e5dec0d170b3704ef2da6d41fdc8113b04feffb4968",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:44+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/design_principles.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/design_principles.md",
+        "purpose": "BACKFILLED S180: doc design principles — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "f80c0f6c6450fe961011c7f52f76311189fa3f46b07e27f4a27041c84a866709",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:44+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/docs/v3.2_ARCHITECTURE_DESIGN.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/docs/v3.2_ARCHITECTURE_DESIGN.md",
+        "purpose": "BACKFILLED S180: doc v3.2 ARCHITECTURE DESIGN — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "18dcc6593d99858cd6fa68f0e2b3e42318976d37eab37863cf3c779c4da5dbf3",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:45+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/formal/README.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/formal/README.md",
+        "purpose": "BACKFILLED S180: doc README — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "9da71d20bce4b2fb7634dc532f2932f9c349e7fd4b4a9101e7bfe09d0b1dac76",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:45+00:00"
+      },
+      {
+        "asset_id": "GIT WORKTREES/rag-runtime-kernel/formal/TLC_RESULTS.md",
+        "path": "GIT WORKTREES/rag-runtime-kernel/formal/TLC_RESULTS.md",
+        "purpose": "BACKFILLED S180: doc TLC RESULTS — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "2cbb0dd25a770b6d4ebdec7ceb7dd082779b1507e9a2d4305477843f64f690bd",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:45+00:00"
+      },
+      {
+        "asset_id": "GRAPH-ORCH_DEPLOYMENT_GUIDE.md",
+        "path": "GRAPH-ORCH_DEPLOYMENT_GUIDE.md",
+        "purpose": "BACKFILLED S180: doc GRAPH-ORCH DEPLOYMENT GUIDE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "7ff0858faf7d18a345c831e5bd390e2adbbf2180229e29c01525fda21f907523",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:46+00:00"
+      },
+      {
+        "asset_id": "INIT_PROJECT_2_INTAKE_QUIZ.md",
+        "path": "INIT_PROJECT_2_INTAKE_QUIZ.md",
+        "purpose": "BACKFILLED S180: doc INIT PROJECT 2 INTAKE QUIZ — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "badf365a6bd186ce3ce999ebc567c0e84f2e54b41a036ad8ba7e464457d993d8",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:46+00:00"
+      },
+      {
+        "asset_id": "MIGRATION_GUIDE.md",
+        "path": "MIGRATION_GUIDE.md",
+        "purpose": "BACKFILLED S180: doc MIGRATION GUIDE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "2aba2a2617c0fe6ee32280e338de2f1f890987d19cf738ea6cf0dd5a4672967c",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:46+00:00"
+      },
+      {
+        "asset_id": "RAG/COMMUNITY_POSTS_DRAFTS.md",
+        "path": "RAG/COMMUNITY_POSTS_DRAFTS.md",
+        "purpose": "BACKFILLED S180: doc COMMUNITY POSTS DRAFTS — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "9a717a36b81eb024782bc8bc9956a08c6055729f28e22dd95b276a85747012ce",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:47+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.1.6 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "fe1774dbdadcc4f1c979453060d7dc16971b6747155ea6ef51d4cc4df9c10979",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:47+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.1.7 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "c1586cb475087964ae58503578a337c7231f76aa8706131dc356486a3cec08fe",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:48+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.1.8 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "8b194638418e81bce52e77011cd886e6362c9e80394cb58355f338373e0e1791",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:48+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.0 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "aadac4c3b52f0e8f64550e5402234e481730f0f308af4cb144729365750a502e",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:48+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.1 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "874ea8964399b829c28fa675cbb0325d8c203dd5da9a4242d6d862eee74583f2",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:49+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.2 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "8d5a3c88b4a6d853c6e1597b5159cb1dd7068e0dc65afc1c12e93ab05dae1402",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:49+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.3 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "9b3d2a1c61777c754624f3ebaa1225fd65b650d82aea677d133430d443e1aa7a",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:49+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.4 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "b8b6f22b5813f35e783f702d7e05b2485df72b5e39f93210d90735045c81ed02",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:49+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.5.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.5.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.5 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "4618deca119beb0fe7b2d1201e9d7b101be7d3c20e50ece72ac0efa6b2cd0c3b",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:50+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.6 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "2996363af9666cdc2e56da9fbddec19d0268a4eda7ac06ad2326b76bbbc90666",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:50+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.7 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "35474f877ab9d9a3ac0edd20c30d5586afd973ca4a24fc60c6ab12196b52653f",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:51+00:00"
+      },
+      {
+        "asset_id": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.8.md",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.8.md",
+        "purpose": "BACKFILLED S180: doc INIT UNIVERSAL RUNTIME KERNEL v3.2.8 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "ecbbbfa35f0cc0208e709c23e8b78c41a1341c7a2fda772619ccea2205ffd4a1",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:51+00:00"
+      },
+      {
+        "asset_id": "RAG/_gen_inventory.py",
+        "path": "RAG/_gen_inventory.py",
+        "purpose": "BACKFILLED S180: script  gen inventory — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "19e137417bf1cb1a7343d2996b57f3abc2760ac78e5731a7ea86f65466a47861",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:51+00:00"
+      },
+      {
+        "asset_id": "RAG/migrate_inc6_INS039.py",
+        "path": "RAG/migrate_inc6_INS039.py",
+        "purpose": "BACKFILLED S180: script migrate inc6 INS039 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "403ce502f52d01aafe873393e4a5b881296717c30f0a285675cf3897d324b7ee",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:51+00:00"
+      },
+      {
+        "asset_id": "RAG/scripts/CLEANUP_MANUAL.md",
+        "path": "RAG/scripts/CLEANUP_MANUAL.md",
+        "purpose": "BACKFILLED S180: doc CLEANUP MANUAL — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "4d3abb61cec474cf554c89926def85b3bc923b7ebe23af4707e4719ca5b193ed",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:52+00:00"
+      },
+      {
+        "asset_id": "RUNBOOK_CLONE_INIT_S179.md",
+        "path": "RUNBOOK_CLONE_INIT_S179.md",
+        "purpose": "BACKFILLED S180: doc RUNBOOK CLONE INIT S179 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "181e9a1b8d6d9b2cab8b1366dad9b69402bb12600f80a4a1bbeb18bdcd7da2f2",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:52+00:00"
+      },
+      {
+        "asset_id": "S157_CANONICAL_REPORT.txt",
+        "path": "S157_CANONICAL_REPORT.txt",
+        "purpose": "BACKFILLED S180: doc S157 CANONICAL REPORT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "e37660cd07e766c3d5efce2a7c3c6fe668d724eb511b37fa981d41f941ba5efa",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:52+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/CLAUDE_CODE_ENV_PROFILE.md",
+        "path": "_INGEST_S177/CLAUDE_CODE_ENV_PROFILE.md",
+        "purpose": "BACKFILLED S180: doc CLAUDE CODE ENV PROFILE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "0d324a7542dc4e5972b4717fcab7205dbf6a342d9e07d02dd6a0cdb705bff53e",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:53+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/Claude SEO Project-d80877ac.txt",
+        "path": "_INGEST_S177/Claude SEO Project-d80877ac.txt",
+        "purpose": "BACKFILLED S180: doc Claude SEO Project-d80877ac — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "8fb332114312bbd9584a639eab01da126505302f7cb6001fc6561a876f82b368",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:53+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/Claude SEO Project.txt",
+        "path": "_INGEST_S177/Claude SEO Project.txt",
+        "purpose": "BACKFILLED S180: doc Claude SEO Project — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:53+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/Claude SMM TRANSCRIPT.txt",
+        "path": "_INGEST_S177/Claude SMM TRANSCRIPT.txt",
+        "purpose": "BACKFILLED S180: doc Claude SMM TRANSCRIPT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "19486f106eb53a0eb6f12df83c5a9befe2e74f75e9db5d56ffe0ad23ce9bb7fc",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:54+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/Combined SEO + SMM automation system (Claude Code).txt",
+        "path": "_INGEST_S177/Combined SEO + SMM automation system (Claude Code).txt",
+        "purpose": "BACKFILLED S180: doc Combined SEO + SMM automation system (Claude Code) — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "602678579cf0daf657b7082b6fcd9d4daed07c88ecc5d78338e75581b392ff75",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:54+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/Hermes Agent in NVIDIA Cloud.md",
+        "path": "_INGEST_S177/Hermes Agent in NVIDIA Cloud.md",
+        "purpose": "BACKFILLED S180: doc Hermes Agent in NVIDIA Cloud — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "5b710cbcaa40a696cf5f70509abf5fac3e08f3b4c57bb7f45cf07eaf37915072",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:54+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/LiteLLM.txt",
+        "path": "_INGEST_S177/LiteLLM.txt",
+        "purpose": "BACKFILLED S180: doc LiteLLM — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "35de58f0839522e2de8e76243f53b3439fc5256d28d27a8eedcb6ac6845808c5",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:55+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/MY CLOUDFLARE ACCOUNT.txt",
+        "path": "_INGEST_S177/MY CLOUDFLARE ACCOUNT.txt",
+        "purpose": "BACKFILLED S180: doc MY CLOUDFLARE ACCOUNT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "6ed5fde0b662a845da510e78229b321d68831655a0102142d3d163104ef650e0",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:55+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/NVIDIA NIM API.txt",
+        "path": "_INGEST_S177/NVIDIA NIM API.txt",
+        "purpose": "BACKFILLED S180: doc NVIDIA NIM API — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "79ba4171b623c784cc587cf65310b8b89db5de816b4cdab9c345a3765cb6b988",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:55+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/PRIOR_WORK_SURVEY.md",
+        "path": "_INGEST_S177/PRIOR_WORK_SURVEY.md",
+        "purpose": "BACKFILLED S180: doc PRIOR WORK SURVEY — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "4d81ffb4755cca992f07ed38bccf8762368413af16ac7a56934ffb73a7bc1aa0",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:56+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/SEO_TOOLING_ASSESSMENT.md",
+        "path": "_INGEST_S177/SEO_TOOLING_ASSESSMENT.md",
+        "purpose": "BACKFILLED S180: doc SEO TOOLING ASSESSMENT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "ecbed2cf4514c34dd0318cd7c19d96b817c0b88673f9d5bcbac2f32b5a828beb",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:56+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/SOURCE10_SEO_WORKFLOW_TRANSCRIPT.md",
+        "path": "_INGEST_S177/SOURCE10_SEO_WORKFLOW_TRANSCRIPT.md",
+        "purpose": "BACKFILLED S180: doc SOURCE10 SEO WORKFLOW TRANSCRIPT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "afa33997768cce59356d466cdc17cd6bdc7ae1e06880d3c7c72ea0a8f94a16e3",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:56+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/SOURCE11_CLAUDE_SEO_PROJECT_SCAFFOLD.md",
+        "path": "_INGEST_S177/SOURCE11_CLAUDE_SEO_PROJECT_SCAFFOLD.md",
+        "purpose": "BACKFILLED S180: doc SOURCE11 CLAUDE SEO PROJECT SCAFFOLD — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "144831cfd25db1149108f972a1313c5cb6c3bac78bc63d12b6f4c93e045b156c",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:57+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/SOURCE12-13_SMM_AND_COMBINED_ENGINE.md",
+        "path": "_INGEST_S177/SOURCE12-13_SMM_AND_COMBINED_ENGINE.md",
+        "purpose": "BACKFILLED S180: doc SOURCE12-13 SMM AND COMBINED ENGINE — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "e034adba498aa11e061263df396f7aca3f61ca315077b255b6ee0d2519b35beb",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:57+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/TRIAGE_LEDGER.md",
+        "path": "_INGEST_S177/TRIAGE_LEDGER.md",
+        "purpose": "BACKFILLED S180: doc TRIAGE LEDGER — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "173a9b09e966ee0f8142050caf63b355cee2ffa1835bd2a9912295a3adf87fbf",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:57+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/_CLAUDE-CODE SETUP.md",
+        "path": "_INGEST_S177/_CLAUDE-CODE SETUP.md",
+        "purpose": "BACKFILLED S180: doc  CLAUDE-CODE SETUP — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "1cbc4c8e35618a2a07fe735a3e540416546223a379dafaa0f249b1d5c3534f76",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:58+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/claude-ai-tools.md",
+        "path": "_INGEST_S177/claude-ai-tools.md",
+        "purpose": "BACKFILLED S180: doc claude-ai-tools — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "767ff1c55a819eb31727d4f7cc15df95619faabb70b9ea5a6e365f2b0470723e",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:58+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/cloud--emergencycomputerhelp.txt",
+        "path": "_INGEST_S177/cloud--emergencycomputerhelp.txt",
+        "purpose": "BACKFILLED S180: doc cloud--emergencycomputerhelp — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "29e13dd973e3aa13232289dcac2a36a6abb9aceb08ed69c7b9e9891d539e14a3",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:58+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/how to create Google LSA profile.md",
+        "path": "_INGEST_S177/how to create Google LSA profile.md",
+        "purpose": "BACKFILLED S180: doc how to create Google LSA profile — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "d2044b7ff29e54d0713131c3d09b20d024f4626c8e73bd4f1d3e2a1fa276b2a6",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:59+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S177/✅ Reconstructed Transcript (High‑Ac.txt",
+        "path": "_INGEST_S177/✅ Reconstructed Transcript (High‑Ac.txt",
+        "purpose": "BACKFILLED S180: doc ✅ Reconstructed Transcript (High‑Ac — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "7af3362d82ba99b867d76a27aff9aa7279892afed814d3575df92860bea4fed1",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:59+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/Cursor and Hermes -- Hybrid Stack.txt",
+        "path": "_INGEST_S178/Cursor and Hermes -- Hybrid Stack.txt",
+        "purpose": "BACKFILLED S180: doc Cursor and Hermes -- Hybrid Stack — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "7c873812cd4cfec2fd8edf9d46b6018f02cb2933de09a396a29ac2a83b8ef3d4",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:55:59+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #1.txt",
+        "path": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #1.txt",
+        "purpose": "BACKFILLED S180: doc EXAMLE OF MY PROMPT AND EXPECTED RESULT #1 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "7e00c504b95167711c43a73e25bdbc5d3ce927926e34e7a637fbacf2e4b8aead",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:00+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #2.txt",
+        "path": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #2.txt",
+        "purpose": "BACKFILLED S180: doc EXAMLE OF MY PROMPT AND EXPECTED RESULT #2 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "98c401cc535ebbffb2a9bc8fa22d92ccdd7694226c268c2a79ac09ff7bd50c01",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:00+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #3.txt",
+        "path": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #3.txt",
+        "purpose": "BACKFILLED S180: doc EXAMLE OF MY PROMPT AND EXPECTED RESULT #3 — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "f22829456584a19712d13859e32968963a8376edc88828782e8588a1d4c45612",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:00+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/EXAMLE OF MY Profile Content.txt",
+        "path": "_INGEST_S178/EXAMLE OF MY Profile Content.txt",
+        "purpose": "BACKFILLED S180: doc EXAMLE OF MY Profile Content — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "084e8cfe5481910642b46c5fc3801adc6a1d2c1ddb6096aa9234d96038d0f695",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:01+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/EXAMPLE OF MY PROMPT TO ANALYSE NICHE AND COMPS.txt",
+        "path": "_INGEST_S178/EXAMPLE OF MY PROMPT TO ANALYSE NICHE AND COMPS.txt",
+        "purpose": "BACKFILLED S180: doc EXAMPLE OF MY PROMPT TO ANALYSE NICHE AND COMPS — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "a74c1d4b751a3ce73263f3d8a9aa3f89e0b8ef7c9f1ac39d20ac070d58cb26ae",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:01+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/HITL ISSUE -- PROJECT.md",
+        "path": "_INGEST_S178/HITL ISSUE -- PROJECT.md",
+        "purpose": "BACKFILLED S180: doc HITL ISSUE -- PROJECT — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "3c7a091611ac31f390966896e000225dffa40b7aaa64cf26b20ca8149734ca90",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:01+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/HOW to USE Claude Design AND Daily included routine runs.txt",
+        "path": "_INGEST_S178/HOW to USE Claude Design AND Daily included routine runs.txt",
+        "purpose": "BACKFILLED S180: doc HOW to USE Claude Design AND Daily included routine runs — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "3b25d1fdec70dfe6eff1db13c3cb5c8eaa0c8faf47eb7ad3640977bffb44ca64",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:01+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/WHAT ACTUALLY WORKS (Proven & Bulletproof).txt",
+        "path": "_INGEST_S178/WHAT ACTUALLY WORKS (Proven & Bulletproof).txt",
+        "purpose": "BACKFILLED S180: doc WHAT ACTUALLY WORKS (Proven & Bulletproof) — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "17e16e131cf7d366bc92b0acc7ba828eb5b69b309172186d2caa43ad184bceb8",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:02+00:00"
+      },
+      {
+        "asset_id": "_INGEST_S178/_extract_yelp.py",
+        "path": "_INGEST_S178/_extract_yelp.py",
+        "purpose": "BACKFILLED S180: script  extract yelp — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "04eeb8ff1a3e56e5f8c024f0573a892272bd5408cb3cca180c737d2955150e59",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:02+00:00"
+      },
+      {
+        "asset_id": "docs/LEAN_TAXONOMY_SPEC.md",
+        "path": "docs/LEAN_TAXONOMY_SPEC.md",
+        "purpose": "BACKFILLED S180: doc LEAN TAXONOMY SPEC — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "c0dcd39ea53aa8ffd80b99bd1dd9177e424eca60d99e207fc288f806af96811a",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:03+00:00"
+      },
+      {
+        "asset_id": "migration/EBAY_CLONE_PROJECT_INSTRUCTIONS.md",
+        "path": "migration/EBAY_CLONE_PROJECT_INSTRUCTIONS.md",
+        "purpose": "BACKFILLED S180: doc EBAY CLONE PROJECT INSTRUCTIONS — purpose not yet described; refine with register-asset when its intent is confirmed.",
+        "sha256": "63611482e86b8c9275974f1f58cb8f3c020ac0de68a69b091ebdd9f7fc8825a2",
+        "session": "S180",
+        "registered_utc": "2026-07-29T13:56:03+00:00"
+      },
+      {
+        "asset_id": "FLEET-INVENTORY",
+        "path": "RAG/rag_kernel/inventory.py",
+        "purpose": "Fleet-scoped inventory: classify every file in a deployment root (kernel/test/script/doc/report/data/mirror/scratch), list reusable work not yet registered, and merge sibling deployments into a searchable fleet view. CLI: rag_kernel inventory scan|backfill|fleet, and reuse-check --fleet.",
+        "sha256": "a3a4570fa6e86d4d394a4b2afdaed56d5821fed35fad51f3e13ab785702bf8da",
+        "session": "S180",
+        "registered_utc": "2026-07-29T14:01:02+00:00"
+      },
+      {
+        "asset_id": "RAG/scripts/s181_spec_identical.py",
+        "path": "RAG/scripts/s181_spec_identical.py",
+        "purpose": "Identify operating_protocol rules still holding verbatim INIT-spec text (unhardened universal rules); read-only spec-vs-RAG comparator",
+        "sha256": "3cd3503d37bea5c13714b7bbc85ed4ffb6d17083956012f2cfb2d8b28a6d61d4",
+        "session": "S181",
+        "registered_utc": "2026-07-29T14:57:09+00:00"
+      },
+      {
+        "asset_id": "RAG/scripts/s181_apply_hardening.py",
+        "path": "RAG/scripts/s181_apply_hardening.py",
+        "purpose": "Apply hardened rule values through the governed update-rule verb, one key at a time, via --value-file; dry-run by default",
+        "sha256": "062ff01eccd5c98fd8983d2373cc1d158624d43b95b0e215569de5bec3c9f9c0",
+        "session": "S181",
+        "registered_utc": "2026-07-29T14:57:10+00:00"
+      },
+      {
+        "asset_id": "RAG/scripts/s181_hardened_rules.json",
+        "path": "RAG/scripts/s181_hardened_rules.json",
+        "purpose": "S181 hardened values for the 8 formerly verbatim-spec universal rules (data, consumed by s181_apply_hardening.py)",
+        "sha256": "3f9d07ffac06bbaf734f2c7d1c0ed5efb9a3fa46b8c8675a6af54ef5baa3cff9",
+        "session": "S181",
+        "registered_utc": "2026-07-29T14:57:11+00:00"
+      },
+      {
+        "asset_id": "RAG/scripts/s181_rule30.txt",
+        "path": "RAG/scripts/s181_rule30.txt",
+        "purpose": "S181 re-pointed Rule 30 design_asset_routing value (route moved from Claude Design to the reachable ui-ux-pro-max MCP)",
+        "sha256": "2403391828ccd4bacf782bee8d84f17b9467d9dfff6d7ad20c43d4efb5ecb03c",
+        "session": "S181",
+        "registered_utc": "2026-07-29T14:57:12+00:00"
+      },
+      {
+        "asset_id": "RAG/rag_kernel/birth_adopt.py",
+        "path": "RAG/rag_kernel/birth_adopt.py",
+        "purpose": "BIRTH-ADOPT verb: diff/adopt/update universal rule VALUES between deployments, with rule provenance and spec-as-third-reference direction resolution",
+        "sha256": "4c1c4f9435a5010037b2c61a1ccd58b2c9867a996f7b4847d61d0b45b668fe16",
+        "session": "S181",
+        "registered_utc": "2026-07-29T15:16:28+00:00"
+      },
+      {
+        "asset_id": "RAG/rag_kernel/ingest.py",
+        "path": "RAG/rag_kernel/ingest.py",
+        "purpose": "INGEST verb: route a document into governed state with a decidable exit predicate (deployment answers it without the document)",
+        "sha256": "6275a10624ff3e7d3875401218f6769b6857195537efd723cdf4c93902837bf2",
+        "session": "S181",
+        "registered_utc": "2026-07-29T15:16:29+00:00"
+      },
+      {
+        "asset_id": "RAG/rag_kernel/decision_ledger.py",
+        "path": "RAG/rag_kernel/decision_ledger.py",
+        "purpose": "DECISION LEDGER: operator rulings as first-class governed records with alternatives, binds and supersede chain",
+        "sha256": "f9bc4ff0fa2231f1a225e7f9903f360efa9a6371ddf057ea1845b2c8263f4885",
+        "session": "S181",
+        "registered_utc": "2026-07-29T15:16:31+00:00"
+      },
+      {
+        "asset_id": "RAG/scripts/s181_py_mandate.txt",
+        "path": "RAG/scripts/s181_py_mandate.txt",
+        "purpose": "S181 py_script_mandate (Rule 31) rule text",
+        "sha256": "2bf780d5bdfe07d9d95c9aa93acd9ca57ae6b99a7119fd6984a229755030423b",
+        "session": "S181",
+        "registered_utc": "2026-07-29T15:16:32+00:00"
+      }
+    ]
+  },
+  "capability_inventory": {
+    "_paths": {
+      "_why": "S177: a successor session ran `git rev-parse` from RAG/ and from ~, found no repository, and reported the S176 release and formal artifacts as UNVERIFIED CLAIMS. They were real and on origin. The repo is a SIBLING of RAG/, under a directory whose name contains a SPACE, which defeats naive find/glob searches. The RAG recorded WHAT shipped and never WHERE the worktree lives. Recorded here.",
+      "project_root": "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)",
+      "deployed_backbone": "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG/rag_kernel",
+      "git_worktree": "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/GIT WORKTREES/rag-runtime-kernel",
+      "formal_dir": "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/GIT WORKTREES/rag-runtime-kernel/formal",
+      "git_toplevel_check": "cd \"/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/GIT WORKTREES/rag-runtime-kernel\" && git rev-parse --show-toplevel",
+      "note": "RAG/ is NOT inside the git repo. Always cd to git_worktree for any git op."
+    },
+    "_protocol": "CAPABILITY INVENTORY (S176) — what already exists and how to invoke it. Generated from the LIVE kernel by RAG/_gen_inventory.py, never hand-written. Read this BEFORE authoring anything (REUSE-BEFORE-REWRITE, Rule 25). Regenerate after any release: python3 _gen_inventory.py > /tmp/inv.json && rag_kernel context set capability_inventory --value-file /tmp/inv.json",
+    "runtime_version": "0.4.49",
+    "verbs": {
+      "serve": {
+        "invoke": "cd RAG && python3 -m rag_kernel serve",
+        "args": [
+          "--project",
+          "--port",
+          "--host",
+          "--session-id"
+        ],
+        "help": ""
+      },
+      "mcp": {
+        "invoke": "cd RAG && python3 -m rag_kernel mcp",
+        "args": [
+          "--project",
+          "--session-id"
+        ],
+        "help": ""
+      },
+      "init": {
+        "invoke": "cd RAG && python3 -m rag_kernel init",
+        "args": [
+          "--spec",
+          "--output",
+          "--root-project",
+          "--root-deliverables",
+          "--root-rag",
+          "--project-name",
+          "--dry-run",
+          "--auto-ready",
+          "--session",
+          "--path-style",
+          "--requirements",
+          "--allow-void"
+        ],
+        "help": ""
+      },
+      "configure": {
+        "invoke": "cd RAG && python3 -m rag_kernel configure",
+        "args": [
+          "--rag",
+          "--context",
+          "--reconciliation-docs-root",
+          "--dry-run",
+          "--consume"
+        ],
+        "help": ""
+      },
+      "health": {
+        "invoke": "cd RAG && python3 -m rag_kernel health",
+        "args": [
+          "--path"
+        ],
+        "help": ""
+      },
+      "session": {
+        "invoke": "cd RAG && python3 -m rag_kernel session",
+        "args": [
+          "<session_action>"
+        ],
+        "help": ""
+      },
+      "session-start": {
+        "invoke": "cd RAG && python3 -m rag_kernel session-start",
+        "args": [
+          "<session_id>",
+          "--rag",
+          "--gc-path",
+          "--strict",
+          "--git-head",
+          "--no-gc",
+          "--force",
+          "--attest",
+          "--no-attest-gate"
+        ],
+        "help": ""
+      },
+      "session-end": {
+        "invoke": "cd RAG && python3 -m rag_kernel session-end",
+        "args": [
+          "--rag",
+          "--session",
+          "--summary",
+          "--tasks",
+          "--status",
+          "--strict",
+          "--git-head",
+          "--error-log-entry",
+          "--error-log-id",
+          "--error-log-path",
+          "--report-rendered",
+          "--tests",
+          "--tests-failing",
+          "--released",
+          "--unreleased",
+          "--release-ref",
+          "--claims-ok",
+          "--claims-broken",
+          "--context-pct",
+          "--milestone",
+          "--handoff",
+          "--no-report",
+          "--docs-root",
+          "--no-reconcile"
+        ],
+        "help": ""
+      },
+      "session-resume": {
+        "invoke": "cd RAG && python3 -m rag_kernel session-resume",
+        "args": [
+          "--rag",
+          "--session",
+          "--summary",
+          "--tasks",
+          "--status",
+          "--strict",
+          "--git-head",
+          "--error-log-entry",
+          "--error-log-id",
+          "--error-log-path",
+          "--report-rendered",
+          "--docs-root",
+          "--no-reconcile"
+        ],
+        "help": ""
+      },
+      "checkpoint": {
+        "invoke": "cd RAG && python3 -m rag_kernel checkpoint",
+        "args": [
+          "--rag",
+          "--session",
+          "--summary",
+          "--tasks",
+          "--status",
+          "--dry-run",
+          "--handoff",
+          "--error-log-entry",
+          "--error-log-id",
+          "--error-log-path",
+          "--no-require-session-log"
+        ],
+        "help": ""
+      },
+      "gc": {
+        "invoke": "cd RAG && python3 -m rag_kernel gc",
+        "args": [
+          "--path",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "graph": {
+        "invoke": "cd RAG && python3 -m rag_kernel graph",
+        "args": [
+          "<graph_action>"
+        ],
+        "help": ""
+      },
+      "audit-env": {
+        "invoke": "cd RAG && python3 -m rag_kernel audit-env",
+        "args": [
+          "--path",
+          "--json"
+        ],
+        "help": ""
+      },
+      "resolve": {
+        "invoke": "cd RAG && python3 -m rag_kernel resolve",
+        "args": [
+          "<item_id>",
+          "--rag",
+          "--session",
+          "--reason",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "defer": {
+        "invoke": "cd RAG && python3 -m rag_kernel defer",
+        "args": [
+          "<item_id>",
+          "--rag",
+          "--session",
+          "--reason",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "reopen": {
+        "invoke": "cd RAG && python3 -m rag_kernel reopen",
+        "args": [
+          "<item_id>",
+          "--rag",
+          "--session",
+          "--reason",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "start": {
+        "invoke": "cd RAG && python3 -m rag_kernel start",
+        "args": [
+          "<item_id>",
+          "--rag",
+          "--session",
+          "--reason",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "discard": {
+        "invoke": "cd RAG && python3 -m rag_kernel discard",
+        "args": [
+          "<item_id>",
+          "--rag",
+          "--session",
+          "--reason",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "supersede": {
+        "invoke": "cd RAG && python3 -m rag_kernel supersede",
+        "args": [
+          "<item_id>",
+          "--rag",
+          "--session",
+          "--reason",
+          "--dry-run",
+          "--by"
+        ],
+        "help": ""
+      },
+      "items": {
+        "invoke": "cd RAG && python3 -m rag_kernel items",
+        "args": [
+          "--rag",
+          "--status",
+          "--kind",
+          "--json"
+        ],
+        "help": ""
+      },
+      "intent-audit": {
+        "invoke": "cd RAG && python3 -m rag_kernel intent-audit",
+        "args": [
+          "--rag",
+          "--plan",
+          "--plan-decisions"
+        ],
+        "help": ""
+      },
+      "render": {
+        "invoke": "cd RAG && python3 -m rag_kernel render",
+        "args": [
+          "--rag",
+          "--what",
+          "--apply",
+          "--json"
+        ],
+        "help": ""
+      },
+      "report": {
+        "invoke": "cd RAG && python3 -m rag_kernel report",
+        "args": [
+          "--rag",
+          "--session",
+          "--verify",
+          "--context-pct",
+          "--tests",
+          "--tests-failing",
+          "--released",
+          "--unreleased",
+          "--release-ref",
+          "--claims-ok",
+          "--claims-broken",
+          "--milestone",
+          "--handoff",
+          "--git-head",
+          "--no-live"
+        ],
+        "help": ""
+      },
+      "note": {
+        "invoke": "cd RAG && python3 -m rag_kernel note",
+        "args": [
+          "<item_id>",
+          "<note>",
+          "--rag",
+          "--session",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "priority": {
+        "invoke": "cd RAG && python3 -m rag_kernel priority",
+        "args": [
+          "<item_id>",
+          "<priority_group>",
+          "--rag",
+          "--session",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "dedup-sessions": {
+        "invoke": "cd RAG && python3 -m rag_kernel dedup-sessions",
+        "args": [
+          "--rag",
+          "--keep",
+          "--session",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "audit": {
+        "invoke": "cd RAG && python3 -m rag_kernel audit",
+        "args": [
+          "--rag",
+          "--strict",
+          "--no-scan-root",
+          "--docs-root",
+          "--error-log",
+          "--git-head",
+          "--json"
+        ],
+        "help": ""
+      },
+      "doctor": {
+        "invoke": "cd RAG && python3 -m rag_kernel doctor",
+        "args": [
+          "--path",
+          "--rag",
+          "--fix",
+          "--stale-after",
+          "--emit-runner",
+          "--recover",
+          "--json"
+        ],
+        "help": ""
+      },
+      "add": {
+        "invoke": "cd RAG && python3 -m rag_kernel add",
+        "args": [
+          "<item_id>",
+          "<title>",
+          "--rag",
+          "--status",
+          "--kind",
+          "--session",
+          "--note",
+          "--by",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "un-add": {
+        "invoke": "cd RAG && python3 -m rag_kernel un-add",
+        "args": [
+          "<item_id>",
+          "--rag",
+          "--session",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "add-rule": {
+        "invoke": "cd RAG && python3 -m rag_kernel add-rule",
+        "args": [
+          "<key>",
+          "<value>",
+          "--value-file",
+          "--rag",
+          "--session",
+          "--allow-overwrite",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "update-rule": {
+        "invoke": "cd RAG && python3 -m rag_kernel update-rule",
+        "args": [
+          "<key>",
+          "<value>",
+          "--value-file",
+          "--subkey",
+          "--json",
+          "--create",
+          "--rag",
+          "--session",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "refresh-current-status": {
+        "invoke": "cd RAG && python3 -m rag_kernel refresh-current-status",
+        "args": [
+          "--rag",
+          "--session",
+          "--version",
+          "--git-head",
+          "--tests",
+          "--strict",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "migrate": {
+        "invoke": "cd RAG && python3 -m rag_kernel migrate",
+        "args": [
+          "--rag",
+          "--session",
+          "--spec-version",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "transplant": {
+        "invoke": "cd RAG && python3 -m rag_kernel transplant",
+        "args": [
+          "--rag",
+          "--source",
+          "--spec",
+          "--session",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "register-asset": {
+        "invoke": "cd RAG && python3 -m rag_kernel register-asset",
+        "args": [
+          "<path>",
+          "--purpose",
+          "--id",
+          "--session",
+          "--rag-dir",
+          "--project-root",
+          "--dry-run"
+        ],
+        "help": ""
+      },
+      "reuse-check": {
+        "invoke": "cd RAG && python3 -m rag_kernel reuse-check",
+        "args": [
+          "--path",
+          "--purpose",
+          "--rag-dir",
+          "--project-root",
+          "--json"
+        ],
+        "help": ""
+      },
+      "verify": {
+        "invoke": "cd RAG && python3 -m rag_kernel verify",
+        "args": [
+          "--rag",
+          "--cold",
+          "--spec",
+          "--json"
+        ],
+        "help": ""
+      },
+      "context": {
+        "invoke": "cd RAG && python3 -m rag_kernel context",
+        "args": [
+          "<context_action>"
+        ],
+        "help": ""
+      },
+      "bootmap": {
+        "invoke": "cd RAG && python3 -m rag_kernel bootmap",
+        "args": [
+          "--rag",
+          "--root",
+          "--refresh",
+          "--session",
+          "--json"
+        ],
+        "help": ""
+      }
+    },
+    "deployed_modules": [
+      "agent_supervisor",
+      "api",
+      "asset_registry",
+      "bootmap",
+      "cold_manager",
+      "concurrency",
+      "conflict_engine",
+      "context_policy",
+      "drift_audit",
+      "drift_control",
+      "drift_render",
+      "drift_store",
+      "generated_guards",
+      "graph_orchestrator",
+      "guardgen",
+      "mcp_transport",
+      "persistence",
+      "schema_migrate",
+      "schemas",
+      "session_logger",
+      "spec_parser",
+      "state_machine",
+      "transplant"
+    ],
+    "formal_modules": {
+      "BootGuardFirstAction": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config BootGuardFirstAction.cfg BootGuardFirstAction.tla"
+      },
+      "BootmapRootPin": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config BootmapRootPin.cfg BootmapRootPin.tla"
+      },
+      "CloseSealEnforce": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config CloseSealEnforce.cfg CloseSealEnforce.tla"
+      },
+      "ErrlogIdGuard": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config ErrlogIdGuard.cfg ErrlogIdGuard.tla"
+      },
+      "GovernancePinProvenance": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config GovernancePinProvenance.cfg GovernancePinProvenance.tla"
+      },
+      "IntentFidelityGate": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config IntentFidelityGate.cfg IntentFidelityGate.tla"
+      },
+      "RAGKernel": {
+        "proof_evidence": "MISSING",
+        "refutation_evidence": "MISSING",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config RAGKernel.cfg RAGKernel.tla"
+      },
+      "SchemaMigrate": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config SchemaMigrate.cfg SchemaMigrate.tla"
+      },
+      "SecretsIngestGuard": {
+        "proof_evidence": "PASS",
+        "refutation_evidence": "FAILS-AS-DESIGNED",
+        "invoke": "cd 'GIT WORKTREES/rag-runtime-kernel/formal' && java -Xmx4g -jar ~/tla2tools.jar -metadir /tmp/tlcmeta -workers 2 -config SecretsIngestGuard.cfg SecretsIngestGuard.tla"
+      }
+    },
+    "shipped_capabilities": {
+      "AUDIT-CONTINUITY-COMPLETE": {
+        "title": "Complete the S160-S164 transcript-vs-RAG continuity diff (only self-reported close-narratives sparse-read so far)",
+        "session": "S166"
+      },
+      "AUDIT-CS-FRESHNESS": {
+        "title": "Audit invariant: current_status facts must match meta/version/git HEAD (E-043)",
+        "session": "S68"
+      },
+      "AUDIT-S173-DRIFT-FORENSICS": {
+        "title": "S173 deep drift-forensics audit: TLA+-gate drift origin S141, findings F1-F6",
+        "session": "S173"
+      },
+      "AUDIT-TAG-FETCH": {
+        "title": "GitHub release tags not fetched into local worktree after gh release create (git log/tag lag remote)",
+        "session": "S138"
+      },
+      "AUDIT-XFER-SURFACE-ATTEST": {
+        "title": "Transfer-surface attestation gap - agent chat-relay of close report not bound to kernel verbatim render (S152 bare-count root cause)",
+        "session": "S154"
+      },
+      "AUTO-SID-DERIVE": {
+        "title": "session-start auto-derives the next SID from meta.written_by_session so the agent supplies/reads nothing at boot",
+        "session": "S175"
+      },
+      "BOOT-GUARD-FIRST-ACTION": {
+        "title": "Out-of-band boot guard enforcing session-start-before-first-action (E-071/E-072 recurrence)",
+        "session": "S172"
+      },
+      "BOOT-RENDER-POV-ROLES": {
+        "title": "session-start renders the 40-rule digest but never renders pov_roles/pov_mandate, so the dual-POV mandate lives in the RAG unread and depends entirely on operator-owned Project Ins",
+        "session": "S176"
+      },
+      "BOOTMAP-BOOTROOT-FIX": {
+        "title": "bootmap boot_root derives from --gc-path (CWD) not project root, causing spurious boot-line churn",
+        "session": "S171"
+      },
+      "CLOSE-SEAL-ENFORCE": {
+        "title": "S157 never ran session-end: zero close events in its log and no AUDIT_CANONICAL_REPORT_S157.md (Rule 23 transfer surface absent); nothing enforces that a session is formally sealed",
+        "session": "S172"
+      },
+      "DEEP-AUDIT-S124-S136": {
+        "title": "Deep comprehensive forensic audit of the last ~12 sessions (S124-S136) — fresh-session milestone",
+        "session": "S137"
+      },
+      "DRIFT-ELIM": {
+        "title": "v0.4.0 drift-elimination layer",
+        "session": "S53"
+      },
+      "EBAY-CLONE-MIGRATION": {
+        "title": "eBay clone-governance migration: rehab the drifted eBay deploy via governance transplant + verified-value migration",
+        "session": "S132"
+      },
+      "EBAY-DELIVERABLES-INVENTORY": {
+        "title": "eBay deliverable inventory",
+        "session": "S56"
+      },
+      "EBAY-UPGRADE-v0.4.37": {
+        "title": "Upgrade the EBAY_SELLER_CLONE deployment to runtime-v0.4.37 (redeploy pinned package + governed schema/version migration) preserving user-data integrity",
+        "session": "S161"
+      },
+      "EBAY-V030-GUIDE": {
+        "title": "Fresh eBay seller spin-up incl. DAG orchestrator",
+        "session": "S56"
+      },
+      "EBAY-V0423-FIELDFAIL": {
+        "title": "v0.4.23 + spec hardening failed in the field on the rebuilt eBay deploy",
+        "session": "S124"
+      },
+      "ERRLOG-ID-GUARD": {
+        "title": "Auditor guard: ERROR_LOG error-ID uniqueness + cross-store (RAG<->ERROR_LOG) error-ID coherence",
+        "session": "S141"
+      },
+      "FIX-1": {
+        "title": "Integrity auditor + WAL hardening (K1+K2)",
+        "session": "S71"
+      },
+      "FIX-10": {
+        "title": "configure must mirror .bak for byte-parity (K6/FIX-4 gap; cmd_configure/SpecParser.write_rag never wired mirror_bak)",
+        "session": "S82"
+      },
+      "FIX-11": {
+        "title": "stop deploy guide seeding a RAG-dir side-store; add sanctioned project-context partition (U3)",
+        "session": "S85"
+      },
+      "FIX-12": {
+        "title": "make bootstrap session log capture real events incl. close (U4; logger open/close are separate one-shot procs, CLI verbs log nothing)",
+        "session": "S86"
+      },
+      "FIX-2": {
+        "title": "Spec/guide reconcile (K4+K8)",
+        "session": "S72"
+      },
+      "FIX-3": {
+        "title": "Init/configure hygiene (K3+K5+K7)",
+        "session": "S73"
+      },
+      "FIX-4": {
+        "title": "bak contract (K6)",
+        "session": "S74"
+      },
+      "FIX-5": {
+        "title": "Kernel ergonomics: add-rule verb + side-store scan (P3+P2)",
+        "session": "S75"
+      },
+      "FIX-6": {
+        "title": "Layout-aware audit default (K9)",
+        "session": "S76"
+      },
+      "FIX-7": {
+        "title": "Live drift guard + web protocol (T1+T3)",
+        "session": "S78"
+      },
+      "FIX-8": {
+        "title": "CLI checkpoint parity-mirror .bak (E-045)",
+        "session": "S78"
+      },
+      "FIX-9": {
+        "title": "init --auto-ready must yield a stamped, audit-clean RAG (K7 residual; --auto-ready bypasses the session-stamping checkpoint)",
+        "session": "S81"
+      },
+      "FV-GATE-RETROVERIFY": {
+        "title": "F1/F2: extend RAGKernel.tla to model S144-S172 guards + run TLC gate retroactively",
+        "session": "S175"
+      },
+      "FV-PHASE3": {
+        "title": "TLA+ -> Python guard generator",
+        "session": "S35"
+      },
+      "FV-PHASE4": {
+        "title": "Generated guards enforced in runtime",
+        "session": "S36"
+      },
+      "FV-PIN-PROVENANCE-ARTIFACT": {
+        "title": "GovernancePinProvenance shipped .tla/.cfg with no TLC .out evidence while TLC_RESULTS.md claimed 8/8 -- artifact-level instance of the unverifiable-claim gap the module itself prov",
+        "session": "S176"
+      },
+      "FV-PIN-PROVENANCE-PROOF": {
+        "title": "TLA+/TLC characterization proof for check_governance_pin_provenance (the S175 guard shipped without one)",
+        "session": "S175"
+      },
+      "GC-ORPHAN-FIX": {
+        "title": "session_cleanup.sh: detect single-digit orphan files",
+        "session": "S60"
+      },
+      "GRAPH-ORCH": {
+        "title": "v4.0 Graph Orchestrator build",
+        "session": "S53"
+      },
+      "INC5": {
+        "title": "RAG-LEAN-PROSE inc5: vault C tails of strict_obey + session_scope_discipline + increment_status_honesty",
+        "session": "S116"
+      },
+      "KA-1": {
+        "title": "Audit fail-loud on ran-but-never-checkpointed (session-log id or meta.last_updated newer than last checkpoint)",
+        "session": "S99"
+      },
+      "KA-10": {
+        "title": "GOVERNANCE-DETERMINISM initiative (prose->code/spec/deliverable)",
+        "session": "S104"
+      },
+      "KA-11": {
+        "title": "Universalize the claim-reconciliation pass into the INIT spec as a generic TierB session-close step + per-project TierC surface declaration + TierA auditor on-ramp",
+        "session": "S104"
+      },
+      "KA-12": {
+        "title": "Strip kernel-project-specific surface names (README/CHANGELOG/ROADMAP/Discussions) from the universal INIT spec + seeded operating_protocol so a fresh deploy does not inherit them",
+        "session": "S100"
+      },
+      "KA-13": {
+        "title": "Runtime-wire the claim-reconciliation pass into the session-end command",
+        "session": "S134"
+      },
+      "KA-14": {
+        "title": "Session-start rule-load attestation gate",
+        "session": "S110"
+      },
+      "KA-15": {
+        "title": "Context-bloat backpressure + malformed-emission catalog",
+        "session": "S122"
+      },
+      "KA-16": {
+        "title": "Atomic, resumable session close (priority)",
+        "session": "S110"
+      },
+      "KA-17": {
+        "title": "Supported-Python matrix (3.12/3.13/3.14)",
+        "session": "S110"
+      },
+      "KA-18": {
+        "title": "Permanent guard against the recurring session-start ordering slip",
+        "session": "S127"
+      },
+      "KA-19": {
+        "title": "Word-boundary fix for check_repo_claim_reconciliation id matching",
+        "session": "S134"
+      },
+      "KA-2": {
+        "title": "sessions_recent<->session_log coherence (unique/monotonic ids, one entry per log, no duplicate-bootstrap rows)",
+        "session": "S97"
+      },
+      "KA-3": {
+        "title": "current_status internal coherence (session==written_by_session; last_updated==date of meta.last_updated_utc)",
+        "session": "S95"
+      },
+      "KA-4": {
+        "title": "Checkpoint-to-close enforcement: guides+spec explicit; kernel refuses to mark a session closeable without a checkpoint",
+        "session": "S91"
+      },
+      "KA-5": {
+        "title": "Single-source @rag-kernel-manifest version/spec_version in rag_kernel/__init__.py (E-046)",
+        "session": "S98"
+      },
+      "KA-6": {
+        "title": "Single machine-enforced session-start/session-end commands",
+        "session": "S92"
+      },
+      "KA-7": {
+        "title": "Observability-coherence auditor invariant",
+        "session": "S100"
+      },
+      "KA-8": {
+        "title": "Bake GC-first + carry-forward gate into the universal INIT spec",
+        "session": "S93"
+      },
+      "KA-9": {
+        "title": "Placeholder gate: fail-loud on residual <...> in project_context",
+        "session": "S94"
+      },
+      "KA-CKPT-PARITY-GATE": {
+        "title": "Checkpoint must fail-loud/auto-render on stale render-parity at seal (E-049)",
+        "session": "S127"
+      },
+      "KA-CS-PROSE-DRIFT": {
+        "title": "current_status secondary version/release narrative drifts below the E-043 freshness guard",
+        "session": "S142"
+      },
+      "KA-CS-REFRESH": {
+        "title": "Governed current_status HEAD/version refresh verb — mid-session dev commit has no reconciliation path",
+        "session": "S128"
+      },
+      "KA-CTX-RAGFLAG": {
+        "title": "context set mis-routes when given --rag file path",
+        "session": "S127"
+      },
+      "KA-CUTOVER-GATE": {
+        "title": "record_coverage cutover gate + no governed un-add make a mis-kinded ERROR item unrecoverable",
+        "session": "S123"
+      },
+      "KA-INTENT-FIDELITY": {
+        "title": "Intent-fidelity guardrail: verify a session plan against settled decisions + carry-forward loads the SOURCE decision not the compressed handoff line",
+        "session": "S152"
+      },
+      "KA-RECON-DECLARE": {
+        "title": "Governed way to declare meta.reconciliation_docs_root (no writer exists; declaring needs a forbidden hand-edit) — blocks dogfooding KA-13",
+        "session": "S135"
+      },
+      "KA-RECON-PROXIMITY": {
+        "title": "check_repo_claim_reconciliation false-positives when a pending-word co-occurs on the same long line as a RESOLVED id",
+        "session": "S135"
+      },
+      "KA-SCHEMA-MIGRATE": {
+        "title": "Governed deployment-facing schema/version migration verb (bring an older deploy's RAG meta up to current + re-stamp)",
+        "session": "S159"
+      },
+      "KA-SECRETS-BOUNDARY": {
+        "title": "Universal secrets_boundary guard: declare secret paths (config/), auditor refuses to ingest secret values / fails loud",
+        "session": "S144"
+      },
+      "LEAN-RAG-STORAGE-RULE": {
+        "title": "Boot-load lean-RAG storage placement as operating_protocol.lean_rag_storage rule",
+        "session": "S165"
+      },
+      "LEAN-TAXONOMY-SPEC": {
+        "title": "A/B/C lean+harness taxonomy spec (docs/LEAN_TAXONOMY_SPEC.md) - plan of record",
+        "session": "S115"
+      },
+      "M-009": {
+        "title": "Kernel-enforced context-truncation policy (v0.3.0)",
+        "session": "S37"
+      },
+      "MIGRATE-INITPROMPT-PAIRING": {
+        "title": "migrate reconciles meta.policy_version but leaves the paired meta.rag_files.init_prompt pointer stale, so a migrated deployment claims one spec version while pointing at another sp",
+        "session": "S160"
+      },
+      "MIGRATE-INITPROMPT-REPAIR-PATH": {
+        "title": "The v0.4.39 init_prompt pairing only fires on a policy_version ADVANCE, so a deployment already at the correct policy_version but carrying a stale init_prompt pointer is unreachabl",
+        "session": "S161"
+      },
+      "MIGRATION-GUIDE-S32": {
+        "title": "Secure migration guideline onto rag_kernel backbone",
+        "session": "S57"
+      },
+      "MIGRATION-V0423": {
+        "title": "Migrate this project onto its own v0.4.23 zero-token runtime",
+        "session": "S112"
+      },
+      "PI-BOOT-BLOCK-RECONCILE": {
+        "title": "Project Instructions boot block still routes SID discovery through a governed pre-read and cites AUTO-SID-DERIVE as tracked/unshipped - operator-owned text, now stale",
+        "session": "S176"
+      },
+      "RAG-LEAN-PROSE": {
+        "title": "Lean the RAG: factor recurring deterministic protocols out of LLM-loaded prose into deployed scripts",
+        "session": "S118"
+      },
+      "RECONCILE-PASS-RECURRING": {
+        "title": "Recurring repo-claim<->reality<->record reconciliation",
+        "session": "S134"
+      },
+      "REDEPLOY-P1-RUNTIME": {
+        "title": "Cut P1 tagged release + redeploy pinned runtime into RAG/rag_kernel (ships drift_audit 1.12.0 / drift_store 1.5.0, incl. KA-CS-PROSE-DRIFT)",
+        "session": "S146"
+      },
+      "REDEPLOY-V0425": {
+        "title": "Redeploy runtime-v0.4.25 pinned package into RAG/rag_kernel (diff-verify byte-identical + in-situ health gate)",
+        "session": "S124"
+      },
+      "RELEASE-REDEPLOY-v0.4.33": {
+        "title": "Cut runtime-v0.4.33 (bundles SECRETS-INGEST-GUARD) + redeploy pinned package into RAG/rag_kernel — ships P1 as a tagged release (Rule 21 diversion trigger)",
+        "session": "S148"
+      },
+      "RELEASE-v0.3.0": {
+        "title": "runtime-v0.3.0 GitHub release/tag",
+        "session": "S38"
+      },
+      "RELEASE-v0.4.12": {
+        "title": "runtime-v0.4.12 GitHub release/tag (bundles FIX-9..FIX-12)",
+        "session": "S87"
+      },
+      "RELEASE-v0.4.31": {
+        "title": "runtime-v0.4.31 GitHub release/tag (REPORT-VERB-FIDELITY + WIRE-CLOSE)",
+        "session": "S139"
+      },
+      "RELEASE-v0.4.32": {
+        "title": "runtime-v0.4.32 GitHub release/tag (P1 control-integrity batch + priority-group render)",
+        "session": "S146"
+      },
+      "RELEASE-v0.4.33": {
+        "title": "runtime-v0.4.33 GitHub release/tag (SECRETS-INGEST-GUARD P1/G2 ingest-time secrets block)",
+        "session": "S148"
+      },
+      "RELEASE-v0.4.34": {
+        "title": "runtime-v0.4.34 GitHub release/tag (REPORT-RENDER-ATTEST report provenance guard + KA-INTENT-FIDELITY inc1 handoff-persistence gate)",
+        "session": "S151"
+      },
+      "RELEASE-v0.4.35": {
+        "title": "runtime-v0.4.35 GitHub release/tag (KA-INTENT-FIDELITY inc2 — plan-vs-settled ID-bound audit; completes the intent-fidelity milestone)",
+        "session": "S152"
+      },
+      "RELEASE-v0.4.36": {
+        "title": "runtime-v0.4.36 GitHub release/tag @ 8d487a8 (AUDIT-XFER-SURFACE-ATTEST / Rule 23 transfer-surface attestation, P1-F1)",
+        "session": "S159"
+      },
+      "RELEASE-v0.4.37": {
+        "title": "runtime-v0.4.37 GitHub release/tag @ 6535ded (REPORT-RULE21-FIDELITY + BACKLOG-DEDUP + PRIORITY-COMPLETE: section-4 renderer fidelity)",
+        "session": "S159"
+      },
+      "RELEASE-v0.4.38": {
+        "title": "runtime-v0.4.38 GitHub release/tag @ c5412df (KA-SCHEMA-MIGRATE: governed deployment-facing schema/version migration verb; 20th capability module)",
+        "session": "S159"
+      },
+      "RELEASE-v0.4.39": {
+        "title": "runtime-v0.4.39 - spec v3.2.7 self-adoption + migrate init_prompt pairing",
+        "session": "S160"
+      },
+      "RELEASE-v0.4.40": {
+        "title": "runtime-v0.4.40 GitHub release/tag @ 80542d5 (MIGRATE-INITPROMPT-REPAIR-PATH: unconditional init_prompt/policy coherence + auditor invariant check_policy_initprompt_coherence)",
+        "session": "S161"
+      },
+      "RELEASE-v0.4.41": {
+        "title": "runtime-v0.4.41 GitHub release/tag @ f5f37f1 - scaffold transplant verb on Authority A",
+        "session": "S163"
+      },
+      "RELEASE-v0.4.42": {
+        "title": "runtime-v0.4.42 GitHub release/tag @ ebcc8ae (REUSE-REGISTRY-GUARD -- baked-asset registry + reuse-before-rewrite guard)",
+        "session": "S171"
+      },
+      "RELEASE-v0.4.43": {
+        "title": "runtime-v0.4.43 GitHub release/tag @ 1895755 (ROOT-FILE-MANIFEST -- deterministic domain boot-map / bootmap verb)",
+        "session": "S171"
+      },
+      "RELEASE-v0.4.44": {
+        "title": "runtime-v0.4.44 GitHub release/tag @ 59ca14e (BOOTMAP-BOOTROOT-FIX / E-074 -- boot_root pinned to project root, decoupled from --gc-path)",
+        "session": "S171"
+      },
+      "REPORT-BACKLOG-DEDUP": {
+        "title": "Section 4 duplicates whole backlog - Open/Blocked/Deferred lists plus burn-down re-list same items",
+        "session": "S155"
+      },
+      "REPORT-PRIORITY-COMPLETE": {
+        "title": "priority_group completeness - EBAY-UPGRADE active but unassigned yields Unassigned bucket",
+        "session": "S155"
+      },
+      "REPORT-PRIORITY-GROUPS": {
+        "title": "Group backlog by settled P1-P5 priorities in the canonical report plus machine-render per-group progress at session close",
+        "session": "S147"
+      },
+      "REPORT-RENDER-ATTEST": {
+        "title": "Report render attestation: report emits report-attest sha256 of canonical source fields + report --verify re-derives and fails loud on mismatch; governed rule makes any canonical r",
+        "session": "S151"
+      },
+      "REPORT-RULE21-FIDELITY": {
+        "title": "Priority burn-down misses Rule 21 content - no empty P1 row, no shipped-this-session, no active-group/what-remains",
+        "session": "S155"
+      },
+      "REPORT-VERB": {
+        "title": "Deterministic report kernel verb: 7-section canonical status render (A; collapses report_before_transfer)",
+        "session": "S136"
+      },
+      "REPORT-VERB-FIDELITY": {
+        "title": "REPORT-VERB v0.4.30 render diverges from the canonical 7-section format spec",
+        "session": "S139"
+      },
+      "REPORT-VERB-WIRE-CLOSE": {
+        "title": "Wire the report verb into session-end so the close ritual auto-emits the deterministic canonical report",
+        "session": "S139"
+      },
+      "REUSE-REGISTRY-GUARD": {
+        "title": "Baked-asset registry + reuse-before-rewrite guard (anti-redundancy)",
+        "session": "S165"
+      },
+      "ROOT-FILE-MANIFEST": {
+        "title": "RAG holds no manifest/bare-ref of governed root files -- operator file-orders vanish across boundaries (S164 CLEANUP v3 lost, S165 booted blind)",
+        "session": "S168"
+      },
+      "RULE19-PIN-REFRESH": {
+        "title": "F3: governance_runtime pin says v0.4.23/c140137 but code is v0.4.45; refresh + add provenance auditor",
+        "session": "S175"
+      },
+      "S160-D3-CLONE-READONLY": {
+        "title": "D3 (operator-settled, S159->S160): S160 is READ-ONLY against the EBAY_SELLER_CLONE - no writes, no migrate execution; supersedes the persisted next_session_directive STEP 3 migrate",
+        "session": "S160"
+      },
+      "S160-D4-SPEC-ADOPT-v327": {
+        "title": "D4 (operator-settled): self-adopt INIT spec v3.2.7 BEFORE the transplant build - precondition for the transplant verb reading the spec as classification authority",
+        "session": "S160"
+      },
+      "S173-RELEASE-COHERENCE": {
+        "title": "F5: complete-or-revert the S173 AUTO-SID + doctor --recover + version-bump worktree release",
+        "session": "S175"
+      },
+      "SECRETS-INGEST-GUARD": {
+        "title": "Ingest-time secrets block: refuse ingesting declared-secret paths at the INGESTING transition (fast-follow to audit-time KA-SECRETS-BOUNDARY)",
+        "session": "S147"
+      },
+      "SPEC-PROMOTION-DRIFT": {
+        "title": "Mechanize rule-promotion (kernel add-rule -> universal spec) + spec-adoption (new spec -> kernel RAG) into the release cycle; close bidirectional spec<->RAG governance drift (E-063",
+        "session": "S175"
+      },
+      "SPEC-V326-SUSPECT": {
+        "title": "INIT spec v3.2.6 prose suspected defective (eBay glitched ingesting it)",
+        "session": "S121"
+      },
+      "STRICT-OBEY": {
+        "title": "Encode STRICT-OBEY operator directive into operating_protocol",
+        "session": "S79"
+      },
+      "TMUX-DEDUP-INSTANCE": {
+        "title": "Remove the duplicate tmux-mcp connector instance (E-048 root cause)",
+        "session": "S112"
+      },
+      "TRANSPLANT-CLASSIFY-AUTHORITY": {
+        "title": "Build the transplant verb on classification Authority A (spec-derived): a rule is universal iff it appears in the named INIT spec; operator-ratified S160",
+        "session": "S163"
+      },
+      "UPDATE-RULE-VERB": {
+        "title": "Governed update-rule verb to cleanly re-set dict/string operating_protocol rules; unblocks tool_hierarchy dict-trim",
+        "session": "S116"
+      },
+      "V33-BOOTSTRAP": {
+        "title": "v3.3 zero-touch bootstrap",
+        "session": "S21"
+      },
+      "V33-LINKAGE": {
+        "title": "v3.3 kernel linkage",
+        "session": "S21"
+      },
+      "V33-UX": {
+        "title": "v3.3 UX (POV / delta / conflict auto-cat)",
+        "session": "S29"
+      }
+    }
+  },
+  "fleet_assets": {
+    "_protocol": "FLEET-INVENTORY. The reusable surface of every declared sibling deployment. Search it with `reuse-check --fleet` BEFORE authoring: a sibling's unregistered script is still prior art. Regenerate with `rag_kernel inventory fleet`.",
+    "entries": [
+      {
+        "deployment": "ebay",
+        "path": "P4_LIGHTWEIGHT_AUTOPARTS.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "RAG/ERROR_LOG.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S14_AUDIT_AND_UPGRADE_PLAN.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S14_ITEM3_STORE_SUBSCRIPTION.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S14_ITEM4_VIEWS_SEO_BRIEF.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S14_ITEM6_TEMU_BLUEPRINT.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S15_ITEM5_BESTSELLER_LIST.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S15_PHOTO_AUDIT.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S15_REPRICE_PROPOSAL.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "S15_TEMU_QUESTIONNAIRE.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "config/Arcada Inc -- eBay Dev App IDs.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "config/ebay_refresh_token.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "config/gemini_api_key.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "config/merchant_location_key.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "intake/S15_bestseller_queries.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "intake/S15_reprice_queries.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "intake/S15_reprice_queries_rest.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "intake/S15_temu_validation_queries.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "intake/lightweight_new.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "intake/queries_p4.txt",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "intake/rank_p4.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "inventory/active/SONY-SSTS72-260618/listing.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "inventory/sold/2004-2007BMWE60E61E-260707/SHIP_AND_MESSAGE.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/aggregate_intake.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/batch_drafts.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/bestseller_rank.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/capability_ledger.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/catalog_cover.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/category.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/cleanup.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/comps.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/contact_sheet.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/db_fix_orphans.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/db_pnl.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_active_listings.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_auth_check.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_consent.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_eps_upload.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_image_search.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_orders.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_publish.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ebay_push.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/evaluate.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/filter_comps.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/fix_skus.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/gallery.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/group_by_time.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/harvest_build.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/identify.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/identify_parts.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/lib_ebay.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/media_mail.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/motors_list.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/next_action.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/ocr_parts.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/preflight.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/qa_selfcheck.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/render_todo.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/run_intake.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/schedule_all.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/schedule_offer.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/session.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/sku.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/sold_comps.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/stage_parts.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/sync.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/sync_photos.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "scripts/wipe_tags.py",
+        "class": "script",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "ebay",
+        "path": "templates/CANONICAL_REPORT_TEMPLATE.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": ".claude/mcp-servers/ui-ux-pro-max-mcp/README.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": ".ignore/RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": "README.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": "brand/copy.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": "docs/OPERATOR_INTAKE_QUIZ.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": "web/AGENTS.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": "web/CLAUDE.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      },
+      {
+        "deployment": "onlinebiz",
+        "path": "web/README.md",
+        "class": "doc",
+        "purpose": null,
+        "registered": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,2153 @@
+{
+  "schema_version": "1.0",
+  "generated_utc": "2026-07-29T15:16:40.206808+00:00",
+  "session": "S181",
+  "root": "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)",
+  "count": 268,
+  "files": [
+    {
+      "path": "AUDIT_CANONICAL_REPORT_S173_DRIFT_FORENSICS.md",
+      "sha256": "c2e1839eab44ec4b1a391a5aa923d0bb27f88c25a4f054c683f8e312950ad499",
+      "size": 8164,
+      "mtime": 1785033369,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "BACKUP/6-29-2026/GitHub Project (RAG Runtime Kernel).zip",
+      "sha256": "4c5ab85a8052046029f771ec540251b151a6534ae55b6a66cae7e0065847f6ff",
+      "size": 22022442,
+      "mtime": 1782762657,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "BLUEPRINT_ONLINE_BIZ_CLONE.md",
+      "sha256": "fa03fa78bde54159a0e88d575c14b57ed9c53ced8e6a8558ca2588ad6178665f",
+      "size": 31059,
+      "mtime": 1785328674,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "CF_AUDITOR_HANDOFF_S164.md",
+      "sha256": "ee43a43e4a064e15c8da1bfa5f8d93beb6df122c54cd247942274da9db3bb8dc",
+      "size": 5026,
+      "mtime": 1784541895,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "EBAY_FIRST_PROMPT.md",
+      "sha256": "281f914619d234f1708c97a6bdf4db6a137a56a7124db0505b674ac6c23e7c19",
+      "size": 13726,
+      "mtime": 1782288152,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "EBAY_QUICK_START_GUIDE.md",
+      "sha256": "fd9ba83d0af93d6125ca5f5ffa770b66ca1faab1cf6e6ed605916753d5913bba",
+      "size": 26441,
+      "mtime": 1782288152,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "EBAY_SESSIONZERO_DEPLOY_AUDIT_S80.md",
+      "sha256": "6d9aa815a3f40a8a9754daa41453b8cb742fb9232de2d126e7dd93e57e9c4fc1",
+      "size": 19027,
+      "mtime": 1781525603,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "EBAY_SESSION_ZERO_MESSAGE.md",
+      "sha256": "7f7f611ff9325c44289d1a18f0b17d0a034f8bc695f6e385a185a3f63f1ae4c7",
+      "size": 20038,
+      "mtime": 1782288152,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "GRAPH-ORCH_DEPLOYMENT_GUIDE.md",
+      "sha256": "7ff0858faf7d18a345c831e5bd390e2adbbf2180229e29c01525fda21f907523",
+      "size": 16916,
+      "mtime": 1780792771,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "INIT_PROJECT_2_INTAKE_QUIZ.md",
+      "sha256": "badf365a6bd186ce3ce999ebc567c0e84f2e54b41a036ad8ba7e464457d993d8",
+      "size": 6939,
+      "mtime": 1785143033,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "MARKETING/RAG-Kernel_Logo.png",
+      "sha256": "15b72f64bd13d8af179bb69fb9633fc78385dcbea90ca3505992a4a651c5a952",
+      "size": 479343,
+      "mtime": 1777982134,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "MARKETING/rag-runtime-kernel_logo.png",
+      "sha256": "726f02f49e9194770bb1d08c5720631c5976f30e5bf7d878daa52ab4ca82bc6d",
+      "size": 1134521,
+      "mtime": 1777975859,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "MIGRATION_GUIDE.md",
+      "sha256": "2aba2a2617c0fe6ee32280e338de2f1f890987d19cf738ea6cf0dd5a4672967c",
+      "size": 11522,
+      "mtime": 1780899430,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "PROJECT_INSTRUCTIONS_S172_reconciled.md",
+      "sha256": "b7d4c90904a514a382f6171516186c092e9ac2ed33d11a4cac80fd0b654b88c6",
+      "size": 6482,
+      "mtime": 1784774159,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "PROJECT_INSTRUCTIONS_S175_reconciled.md",
+      "sha256": "4e32e81099e87857208510d207f15b3dd488473b0f79672e68effe324b0fc858",
+      "size": 2468,
+      "mtime": 1785122261,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "PROJECT_INSTRUCTIONS_S176_reconciled.md",
+      "sha256": "5b5896661ef397ea872011048f33ac1e61cccc6196c2f2a82ffb794c3a99dda8",
+      "size": 3576,
+      "mtime": 1785138443,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S153.md",
+      "sha256": "0a7dfeca09542655f076d6493002e6ad0c9d5a7b1c960e6b35fe206f4b14c6da",
+      "size": 7341,
+      "mtime": 1784203503,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S154.md",
+      "sha256": "ec7f57f15256942d0fff6e459e908018f67bb43281ebd4fe5ca9feeabc242adc",
+      "size": 7369,
+      "mtime": 1784236884,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S155.md",
+      "sha256": "02daabee235532bd829aa6bacdd9c517e7a7d4206949b2ff3204ab6fefc4aea5",
+      "size": 5920,
+      "mtime": 1784243200,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S156.md",
+      "sha256": "afa6c8975de1e6b38eac35f5efb0c2845d1073e8dc24803006740a6ec76a7322",
+      "size": 5017,
+      "mtime": 1784303878,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S158.md",
+      "sha256": "b4def618171014c00a694953fa40f3a19ebcd64773cdea61093684b075a9d81e",
+      "size": 8333,
+      "mtime": 1784380126,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S159.md",
+      "sha256": "7098c771d87f140c76a956669a2f95da8a2f109ed141b89e32a53aaf185fa24a",
+      "size": 9657,
+      "mtime": 1784381753,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S160.md",
+      "sha256": "fa032abd4b2b6c1163a60078d03de2e5d3851fbf823a019fbae549f6f30a07af",
+      "size": 12462,
+      "mtime": 1784402818,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S161.md",
+      "sha256": "3f1e64b2916cc7d7a5c3d80b063691305f7a53e499314d118fe64b8a46a5885a",
+      "size": 9979,
+      "mtime": 1784438608,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S162.md",
+      "sha256": "b6223293cd10189c0783345650e139c40f8f983e80939a8dfb0d7212b5b211c5",
+      "size": 7966,
+      "mtime": 1784441573,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S163.md",
+      "sha256": "036933ad9e4ea8d4f538e3a41a7eed7bf5ac8ed50ee8fc0b5d9ec68cca2d92c6",
+      "size": 8348,
+      "mtime": 1784447967,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S164.md",
+      "sha256": "b541dd7f14816bd09f6ca7d1c5a61e385beab4ce3348e990e8da05dfc645adbd",
+      "size": 8197,
+      "mtime": 1784540683,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S165.md",
+      "sha256": "d3617d3de17241ac382c666f4a3135d8f04abaffe54766b90b95c99283af3a8a",
+      "size": 8461,
+      "mtime": 1784635537,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S166.md",
+      "sha256": "5a38781f2d83fbf8914652b5969e6ab833672aaf841a99fc60be9ad5bf002d83",
+      "size": 8740,
+      "mtime": 1784640900,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S167.md",
+      "sha256": "0a1a606b339cdea2f82ad22c75511c4ad22685adfbc2eae739ebfa6aeb837e82",
+      "size": 8722,
+      "mtime": 1784687814,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S168.md",
+      "sha256": "648e38ba979937ecb77626539eb691d52682ea740319476429c0d1d23d02ed4e",
+      "size": 8164,
+      "mtime": 1784699132,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S169.md",
+      "sha256": "4883590447a62a629af6f27f349dfff3aa4a43155c2736041c7bd76b3e423c06",
+      "size": 9618,
+      "mtime": 1784703265,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S170.md",
+      "sha256": "cc60e38f09e77d51364bfbb82f7dea50a37aaa7ddd8f486c47e110a67c8054eb",
+      "size": 8147,
+      "mtime": 1784706631,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S171.md",
+      "sha256": "4005e9b38b5bdb9c39c18ded67cfc0a912a1201bb7a7e4033b9f6120cf56f631",
+      "size": 9051,
+      "mtime": 1784723226,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S172.md",
+      "sha256": "a718f0285d98d5cc9bb44a6a47c71ce0343696d8e132f48426a2f702adef20ec",
+      "size": 9008,
+      "mtime": 1784774537,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S173.md",
+      "sha256": "ef722f6302dc55b7227bb890d61e702e5d2b00d6ece1a05af860b7fa88e462fc",
+      "size": 9537,
+      "mtime": 1785065771,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S174.md",
+      "sha256": "28332ef9f683ad3b4d9e05e62da747c92c952236e293ae666f53d86ea3c4444c",
+      "size": 9329,
+      "mtime": 1785072528,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S175.md",
+      "sha256": "da24c7e229f6b6fd39457264dcb5a7b2faaf9e0cb977c82fb6c0133f60fbd158",
+      "size": 10889,
+      "mtime": 1785120785,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S176.md",
+      "sha256": "8130217f450b0545a89b4ff8af1f015f9d3dd35bd565e2e2db146552d55f2066",
+      "size": 14038,
+      "mtime": 1785141010,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S177.md",
+      "sha256": "1cf229e32760f67fefc3ddf5ffde7bcc1ef9c1cb02edbee3f83e01f54d307bff",
+      "size": 15428,
+      "mtime": 1785262018,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S178.md",
+      "sha256": "482314424f84b0278c170db3f996916c95e258f037d324fc03aff93d558389c4",
+      "size": 13154,
+      "mtime": 1785309188,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S179.md",
+      "sha256": "789a69056bf3d77a65b908cf21713c4cbcc70eb8c8df14c28f393e59c88e1aac",
+      "size": 16206,
+      "mtime": 1785323201,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CANONICAL_REPORT_S180.md",
+      "sha256": "ec745189b49344b9d6f5543a7bd81d192cd9d12a28cdf389bec9ab21adc3fb54",
+      "size": 17217,
+      "mtime": 1785333974,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CONTENT_FACTORY_S164.md",
+      "sha256": "e49ca813aa5b871442e5ab4279fd153742f6f0e2300b6ce63928b82d5fd3d73e",
+      "size": 8599,
+      "mtime": 1784540256,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_CONTINUITY_S160_S164_by_S166.md",
+      "sha256": "8ab1cc9727adeaacca682f5eaae8d246d0800b33eba40d549709c4afdd7fb8e8",
+      "size": 8920,
+      "mtime": 1784638145,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/AUDIT_FORENSIC_S160_S164_by_S165.md",
+      "sha256": "cea8a03f113dd8cfd2908c943d0baba022df18a184a074c63987a81c5f0f63ca",
+      "size": 4054,
+      "mtime": 1784635407,
+      "class": "audit_report",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/COMMUNITY_POSTS_DRAFTS.md",
+      "sha256": "9a717a36b81eb024782bc8bc9956a08c6055729f28e22dd95b276a85747012ce",
+      "size": 15563,
+      "mtime": 1780283826,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/DESIGN_DOMAIN_MANIFEST_S166.md",
+      "sha256": "2916f0243a78af7b83230e92088aa8e9d5026db90482f10d3051db4d20004786",
+      "size": 4885,
+      "mtime": 1784639893,
+      "class": "design",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/ERROR_LOG.md",
+      "sha256": "d810ad662a3baab8fc085b98d27d1e8d8c4911fcbf65e977cf9bb40caf8515e9",
+      "size": 187166,
+      "mtime": 1785336959,
+      "class": "error_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.6.md",
+      "sha256": "fe1774dbdadcc4f1c979453060d7dc16971b6747155ea6ef51d4cc4df9c10979",
+      "size": 84656,
+      "mtime": 1778832331,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.7.md",
+      "sha256": "c1586cb475087964ae58503578a337c7231f76aa8706131dc356486a3cec08fe",
+      "size": 94272,
+      "mtime": 1779254559,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.1.8.md",
+      "sha256": "8b194638418e81bce52e77011cd886e6362c9e80394cb58355f338373e0e1791",
+      "size": 100160,
+      "mtime": 1779440323,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.0.md",
+      "sha256": "aadac4c3b52f0e8f64550e5402234e481730f0f308af4cb144729365750a502e",
+      "size": 104314,
+      "mtime": 1779840416,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.1.md",
+      "sha256": "874ea8964399b829c28fa675cbb0325d8c203dd5da9a4242d6d862eee74583f2",
+      "size": 108902,
+      "mtime": 1781079665,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.2.md",
+      "sha256": "8d5a3c88b4a6d853c6e1597b5159cb1dd7068e0dc65afc1c12e93ab05dae1402",
+      "size": 114752,
+      "mtime": 1781340636,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.3.md",
+      "sha256": "9b3d2a1c61777c754624f3ebaa1225fd65b650d82aea677d133430d443e1aa7a",
+      "size": 119360,
+      "mtime": 1781431404,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.4.md",
+      "sha256": "b8b6f22b5813f35e783f702d7e05b2485df72b5e39f93210d90735045c81ed02",
+      "size": 125305,
+      "mtime": 1781481335,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.5.md",
+      "sha256": "4618deca119beb0fe7b2d1201e9d7b101be7d3c20e50ece72ac0efa6b2cd0c3b",
+      "size": 132863,
+      "mtime": 1781947789,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.6.md",
+      "sha256": "2996363af9666cdc2e56da9fbddec19d0268a4eda7ac06ad2326b76bbbc90666",
+      "size": 138645,
+      "mtime": 1782051683,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.7.md",
+      "sha256": "35474f877ab9d9a3ac0edd20c30d5586afd973ca4a24fc60c6ab12196b52653f",
+      "size": 144268,
+      "mtime": 1783174262,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/INIT_UNIVERSAL_RUNTIME_KERNEL_v3.2.8.md",
+      "sha256": "ecbbbfa35f0cc0208e709c23e8b78c41a1341c7a2fda772619ccea2205ffd4a1",
+      "size": 154356,
+      "mtime": 1785118537,
+      "class": "init_prompt",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/RAG_COLD.json",
+      "sha256": "857d2eb26836d97237738ee20b94e4a8aced4816f455c6a4976067e820718cba",
+      "size": 10855,
+      "mtime": 1785118684,
+      "class": "rag_state",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/RAG_CONTEXT.json",
+      "sha256": "bb6527a675c9eeffd87b13340facefcf9ec31108bdf2b14449aafe14e0deb046",
+      "size": 125697,
+      "mtime": 1785338193,
+      "class": "data",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/RAG_MASTER.json",
+      "sha256": "34864f8322e869971a6538eb0548247773e043e67b8a869b91a2e0868c663671",
+      "size": 386593,
+      "mtime": 1785338188,
+      "class": "rag_state",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/_gen_inventory.py",
+      "sha256": "19e137417bf1cb1a7343d2996b57f3abc2760ac78e5731a7ea86f65466a47861",
+      "size": 5678,
+      "mtime": 1785142388,
+      "class": "code",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/migrate_inc6_INS039.py",
+      "sha256": "403ce502f52d01aafe873393e4a5b881296717c30f0a285675cf3897d324b7ee",
+      "size": 6933,
+      "mtime": 1780819375,
+      "class": "code",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/__init__.py",
+      "sha256": "95ba1f0e063005a0bbd56fc3d51ac13a87810e67f39b51663b073061a86a117f",
+      "size": 13139,
+      "mtime": 1785303184,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/__main__.py",
+      "sha256": "f66cdaa6ffb046981f395f7bb35df6d00b76432b0c39e0a8d131b9987588ee70",
+      "size": 290253,
+      "mtime": 1785338094,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/agent_supervisor.py",
+      "sha256": "520b313b40635ebead7b2b01fd3dd61c1a0356757d05bc891993aad648c1da99",
+      "size": 16982,
+      "mtime": 1785303184,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/api.py",
+      "sha256": "f8a7e69ff7a37c26c47f8befed675014d624f93abe30e2f5c4aa45cb77e770d3",
+      "size": 57019,
+      "mtime": 1785303184,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/asset_registry.py",
+      "sha256": "dad8388ce9ce04e4f6cdfe4e74f448b9efc894dd0018bba38bc3ee0bf1b68279",
+      "size": 15279,
+      "mtime": 1785303184,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/birth_adopt.py",
+      "sha256": "4c1c4f9435a5010037b2c61a1ccd58b2c9867a996f7b4847d61d0b45b668fe16",
+      "size": 24046,
+      "mtime": 1785338093,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/bootmap.py",
+      "sha256": "0a01c90634fd78a2e6bc31bf9d3c1f433641da684fc1d4286a9aeca009868169",
+      "size": 14240,
+      "mtime": 1785303184,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/cold_manager.py",
+      "sha256": "2f60279486d39beaac8d3faf3949199ae53b962a000350391968a5d7bf85da6f",
+      "size": 15239,
+      "mtime": 1785303184,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/concurrency.py",
+      "sha256": "fdd057885fb9e34b4d1f8a6dd3a5be989275b1138fe18ecd179a14506858189a",
+      "size": 12022,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/conflict_engine.py",
+      "sha256": "fd3e850e64c87a5ba9833d129b51cb960aec23896e0f43ad3b701998e610ef48",
+      "size": 22148,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/context_policy.py",
+      "sha256": "a38bd46bba06d34f77665d59b01f99cd913562e1aec7f9ad5983ecd79f67f5f0",
+      "size": 14372,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/decision_ledger.py",
+      "sha256": "f9bc4ff0fa2231f1a225e7f9903f360efa9a6371ddf057ea1845b2c8263f4885",
+      "size": 8680,
+      "mtime": 1785338093,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/drift_audit.py",
+      "sha256": "3fe17bda88e173989d99dc17082256e2acadc03dc9bd04a8518986e1fc9d7842",
+      "size": 129136,
+      "mtime": 1785333166,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/drift_control.py",
+      "sha256": "a1caef1ba7d3cce4bc1268085ca626db137c5ea9285f85b590161bc6186504b5",
+      "size": 22370,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/drift_render.py",
+      "sha256": "1b4dbe3fb995e934e4747e6d2b9621e7b132ce4179a0b2bd589ee3a41d700629",
+      "size": 39705,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/drift_store.py",
+      "sha256": "68579e57105e1beaa208adcc5b1d4070751b18807a25d79ec9979069eeeb2c8d",
+      "size": 57618,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/generated_guards.py",
+      "sha256": "8ee6f364a04ed4420a2570eaf1f7b18edb6b8da866d87313d87c9436f956619f",
+      "size": 10784,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/graph_orchestrator.py",
+      "sha256": "08069174416fac62ffec8dae0ca91b7f9a82d437fec2791840584e9e163cf466",
+      "size": 53101,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/guardgen.py",
+      "sha256": "d19eaf47bbd6be4e83d20429ca7f7cd73a56cddc5a8a82f76e048ecfc0fe7d61",
+      "size": 28541,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/ingest.py",
+      "sha256": "6275a10624ff3e7d3875401218f6769b6857195537efd723cdf4c93902837bf2",
+      "size": 12925,
+      "mtime": 1785338093,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/inventory.py",
+      "sha256": "a3a4570fa6e86d4d394a4b2afdaed56d5821fed35fad51f3e13ab785702bf8da",
+      "size": 14082,
+      "mtime": 1785332421,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/mcp_transport.py",
+      "sha256": "9a11a7557c875610dc0bc6674f5764b703e5937193f21c5b1a392b7e53c50cb7",
+      "size": 13947,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/persistence.py",
+      "sha256": "8da7b308d3dfab2f31f794f83a43c53b3425ca92b025c3f4317b798c280697c6",
+      "size": 30993,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/schema_migrate.py",
+      "sha256": "d49ca868f831bd1410e8e67a2955a2a5927b3c09fffd1ac720f2b55bc5ee4cea",
+      "size": 22796,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/schemas.py",
+      "sha256": "28a47f18e78258d9c40a39ffb22a0a0c601c363ae605d82f472681b3fe397570",
+      "size": 17767,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/session_logger.py",
+      "sha256": "a35b13a244167a6f73eb3ca5e1f4d30f4bb92a1a4eff765f9b4594372dcfe477",
+      "size": 25769,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/spec_parser.py",
+      "sha256": "f1b6d7e722df4411bfb91c65e8ad5f53100f8447bced3dfc053ce254cc3ed70e",
+      "size": 31852,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/state_machine.py",
+      "sha256": "cec6f77ea2c1d1460f6566f8a19b568cea10d5d037f64b5f253f42e48d0b8076",
+      "size": 13635,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/transplant.py",
+      "sha256": "1d80089a7fcad6f218c42acf23a8edf51ec5d704582daa37c487701628a6677f",
+      "size": 15483,
+      "mtime": 1785303185,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/rag_kernel/wait_primitive.py",
+      "sha256": "840c5f990cf2943dd0656b187a4839ec27b1a27b66dcd41864c79f8ca2b96e6c",
+      "size": 9776,
+      "mtime": 1785325182,
+      "class": "kernel",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/CLEANUP.ps1",
+      "sha256": "15bc999c221def8efe756d2c8a91f5de717c9e02b63f9d4750b41473361999c7",
+      "size": 27259,
+      "mtime": 1784541838,
+      "class": "script",
+      "owner": "operator"
+    },
+    {
+      "path": "RAG/scripts/CLEANUP_MANUAL.md",
+      "sha256": "4d3abb61cec474cf554c89926def85b3bc923b7ebe23af4707e4719ca5b193ed",
+      "size": 4573,
+      "mtime": 1784541838,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/s181_apply_hardening.py",
+      "sha256": "062ff01eccd5c98fd8983d2373cc1d158624d43b95b0e215569de5bec3c9f9c0",
+      "size": 2477,
+      "mtime": 1785336884,
+      "class": "code",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/s181_hardened_rules.json",
+      "sha256": "3f9d07ffac06bbaf734f2c7d1c0ed5efb9a3fa46b8c8675a6af54ef5baa3cff9",
+      "size": 12519,
+      "mtime": 1785336868,
+      "class": "data",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/s181_py_mandate.txt",
+      "sha256": "2bf780d5bdfe07d9d95c9aa93acd9ca57ae6b99a7119fd6984a229755030423b",
+      "size": 2079,
+      "mtime": 1785338027,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/s181_rule30.txt",
+      "sha256": "2403391828ccd4bacf782bee8d84f17b9467d9dfff6d7ad20c43d4efb5ecb03c",
+      "size": 3687,
+      "mtime": 1785336993,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/s181_spec_identical.py",
+      "sha256": "3cd3503d37bea5c13714b7bbc85ed4ffb6d17083956012f2cfb2d8b28a6d61d4",
+      "size": 2309,
+      "mtime": 1785336732,
+      "class": "code",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/session_cleanup.sh",
+      "sha256": "68052816a41a9d9d7e9e52c4abaab7b00dd636cb182639896e39564296f930c6",
+      "size": 5443,
+      "mtime": 1781065475,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/scripts/tmux_dedup.sh",
+      "sha256": "a5c8ca41d93e55f1467ef86ee08d891eb24061bb9e17fea50f05c75ce4d945fa",
+      "size": 1896,
+      "mtime": 1783154365,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S100.jsonl",
+      "sha256": "53dc85852b9ba7986d73faa25e3b43691c2892bf708b27e573618b00318d319e",
+      "size": 5037,
+      "mtime": 1782040357,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S101.jsonl",
+      "sha256": "f03b1ec7c6617ed35d8a7257977860259609a32631e2016cc91a5050ea6a0106",
+      "size": 2697,
+      "mtime": 1782044605,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S102.jsonl",
+      "sha256": "b62eecc0287a62746dc40d39304d36a78c593847feeac9291b19103deafe979b",
+      "size": 2940,
+      "mtime": 1782051139,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S103.jsonl",
+      "sha256": "51104f9a0e719efd7ff55e6b1a91b7f68cc0f29828c6028ce7d41336bc3dbffa",
+      "size": 3155,
+      "mtime": 1782091404,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S104.jsonl",
+      "sha256": "f78115faddddbc7587d9f9f0dd8c90ece6ab737583425f756f4ed36db850d0f2",
+      "size": 9502,
+      "mtime": 1782140065,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S105.jsonl",
+      "sha256": "60bd2203da7db2c67f02a29a7dc1a925df02e41f8434aac62551bd1bbc439eb0",
+      "size": 3609,
+      "mtime": 1782141490,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S106.jsonl",
+      "sha256": "e55e6c54e9885d56e7239d1ec49cb9106cfb1794b6c6a54f976629d03dc0358d",
+      "size": 3137,
+      "mtime": 1782150066,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S107.jsonl",
+      "sha256": "9e91cb6d3adb397c2d03af1e8c3f621ba21ee97ec2af2cf67a6f28bbf1647254",
+      "size": 5496,
+      "mtime": 1782192294,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S108.jsonl",
+      "sha256": "f423f9bebc0c8c083498e72b61b3d1c0e3ed2c99d1991e036d7a259cf1dbda67",
+      "size": 4337,
+      "mtime": 1782195509,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S109.jsonl",
+      "sha256": "a0627d31c6cb1f352bdd1abb30595ad6e0f1056b96234b534c8ee926dab154b2",
+      "size": 2217,
+      "mtime": 1782196706,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S110.jsonl",
+      "sha256": "1e6edc460e8d59054b178ff77e25a2f682254aa32a9b1bd0fef90721564f5172",
+      "size": 6711,
+      "mtime": 1782218147,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S111.jsonl",
+      "sha256": "b364156021978e090b2f5dabcb874e6779fe8281b05b70bb024ea00cf4961ea8",
+      "size": 6399,
+      "mtime": 1782759317,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S112.jsonl",
+      "sha256": "e95bf301934a3083a0e3ece454f66fda3ea1925a0cc7abbbcae00481cdac4157",
+      "size": 6008,
+      "mtime": 1782768123,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S113.jsonl",
+      "sha256": "b2ce4ca126189573a90b0c1c099005065b86b0448bbe34293bf6ea1b705bff53",
+      "size": 10412,
+      "mtime": 1782772347,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S114.jsonl",
+      "sha256": "9bad835924cd7fa0f74601e4e146fe6c3c56551fa8d742a7d95c273d2b824028",
+      "size": 11629,
+      "mtime": 1782774267,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S115.jsonl",
+      "sha256": "49da94ee4e681e19993e3a01109c5e1cc1982ab8ea49a1ba4132a4edde2d57f8",
+      "size": 6898,
+      "mtime": 1782803491,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S116.jsonl",
+      "sha256": "3e25c6b7cd334a486762cd75031142d3413435d4cec771e4bf1c453dad50121e",
+      "size": 6950,
+      "mtime": 1782807315,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S117.jsonl",
+      "sha256": "12f088dd59d2fb0617a10c02191a566cfd8c309e89dac3cb35a4e3a7a37a0a74",
+      "size": 2917,
+      "mtime": 1782839036,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S118.jsonl",
+      "sha256": "74aeb126c1521495d6d4379dcca91492ac1e21f5cd7a51fdc7f7e509e15f5fa8",
+      "size": 7857,
+      "mtime": 1783158535,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S119.jsonl",
+      "sha256": "2c5a0e0f6e1998d12d3d23a01f225ebe1b0879967750fcf866733d192adf2da8",
+      "size": 1518,
+      "mtime": 1783159987,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S120.jsonl",
+      "sha256": "4f179e728351a77d22fe4376b25fe1b6fca7886cd79235ef57164208c50004c4",
+      "size": 1010,
+      "mtime": 1783161037,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S121.jsonl",
+      "sha256": "215c5efc538d0e31390eb12b1c5f174f512d9bf54ef2a7e0e6cdd17e9806d188",
+      "size": 3370,
+      "mtime": 1783172785,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S122.jsonl",
+      "sha256": "ec79ac87c7a0662674ab179dad3b7ce1608c72bfd34e411722639044ef3996f6",
+      "size": 4807,
+      "mtime": 1783186270,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S123.jsonl",
+      "sha256": "336f25beee9f15d918abce109f1fd3ba98ce33ed98183f295e001861a98f02e3",
+      "size": 5714,
+      "mtime": 1783190359,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S124.jsonl",
+      "sha256": "32ed4764a3eaf73dc36a4a413db79c2a36ff82b9a154c4348ab0af7bcce72ed9",
+      "size": 8091,
+      "mtime": 1783193008,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S125.jsonl",
+      "sha256": "b4e3585f038a229ccae4542120756ff0d2f9a5ea00333b3578607876ce44d04f",
+      "size": 4044,
+      "mtime": 1783274839,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S126.jsonl",
+      "sha256": "e8e3bdc2fb1936df149ac5f980a5ca098a811d4a1fe5c519991e1d6bd6a76bc6",
+      "size": 2874,
+      "mtime": 1783314447,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S127.jsonl",
+      "sha256": "40168e538445a930c656e1a3cde040c2229faaa4a8605b5381381700b8fc28a3",
+      "size": 8069,
+      "mtime": 1783334965,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S128.jsonl",
+      "sha256": "776214dda5319716c957a40022b05dd594ad64e4cdef81b95d1dd0267ffd1ac0",
+      "size": 2963,
+      "mtime": 1783338221,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S129.jsonl",
+      "sha256": "23448b6d17e3805a52867555b926c4a1f8031cef75b40a198ebe71b9d998f891",
+      "size": 6621,
+      "mtime": 1783377388,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S130.jsonl",
+      "sha256": "17505f42c3210f7bd01526e1ea906f9652ba58452680c02414f381fa4666b207",
+      "size": 3825,
+      "mtime": 1783423663,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S131.jsonl",
+      "sha256": "a1eec57f37ed0a4a015fd7fcd34807006e085aaae327d68eaee16efbbf987d3c",
+      "size": 8992,
+      "mtime": 1783460716,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S132.jsonl",
+      "sha256": "42d102f644a167b79cb43a1d6436a30b6b375b67140fe59e2f75f182113f1967",
+      "size": 3043,
+      "mtime": 1783679973,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S133.jsonl",
+      "sha256": "0c6e353affcefe5729073fd83267472c3ffbdf1d7629222ab658a3c4d09e7e18",
+      "size": 2412,
+      "mtime": 1783727550,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S134.jsonl",
+      "sha256": "2868b8d41f3c073a02ca1ddf988aa26ff784a637efb94ca26c8d1a1afd7818c5",
+      "size": 7670,
+      "mtime": 1783757245,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S135.jsonl",
+      "sha256": "0411a422e2c788bf25cce631d299371788535cdf83c58c8c6aa427f3a6eb4ded",
+      "size": 9810,
+      "mtime": 1783778362,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S136.jsonl",
+      "sha256": "2693c63ed18ffcb3073a5ae58f3b099a33395c2c3d560bbc71a8d8f4dc1610ad",
+      "size": 9543,
+      "mtime": 1783822578,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S137.jsonl",
+      "sha256": "94b22a392e2b587cc3f548ceb4326ead1c51b7ae1987527bc612595618b9fcff",
+      "size": 5036,
+      "mtime": 1783851216,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S138.jsonl",
+      "sha256": "909cffd208dfa7e9ce5df2499fb5fa76aff6920cdc0139abc4aa96743cca93e7",
+      "size": 3392,
+      "mtime": 1783854332,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S139.jsonl",
+      "sha256": "b3e8c5fa294677d0b8b926dcc050821fd140a1104b5fc17fa544f8c2a39ebd24",
+      "size": 6774,
+      "mtime": 1783888385,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S140.jsonl",
+      "sha256": "77c58d340e97c80ca9b51180f6c347d1d1a48cfae939af4ff232b220889ccfe7",
+      "size": 7354,
+      "mtime": 1783932877,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S141.jsonl",
+      "sha256": "11191ba85b1a1ffb49eebe625240ae5b35acbee482a00b93e997c178573392c4",
+      "size": 3408,
+      "mtime": 1783981680,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S142.jsonl",
+      "sha256": "22d9914971125cf553d2f219a8dbbdf3150081ddff258c826bd045a00c29c6c9",
+      "size": 3200,
+      "mtime": 1784015660,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S143.jsonl",
+      "sha256": "570bde3f1b840cf6a7ff6569c89d171261fb8c2cf0ad1c3c1387438e2a06e2d7",
+      "size": 2430,
+      "mtime": 1784017236,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S144.jsonl",
+      "sha256": "1312f2249c2ec224894bde1a993d3657a60edb7ef3b3128ffff8a858111c9b4a",
+      "size": 5097,
+      "mtime": 1784020791,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S145.jsonl",
+      "sha256": "1ae95bea5914726beb1c7e18f56b9011a3dc07dab0b263537004b5f088f40e89",
+      "size": 6264,
+      "mtime": 1784060865,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S146.jsonl",
+      "sha256": "cbe22e6622333d4a734b131162e6446cc2bb20f4d1e2a838a2d7db6796de5248",
+      "size": 10653,
+      "mtime": 1784065510,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S147.jsonl",
+      "sha256": "4355ce15a7ff40f1fad828af78c83a80ea4aa4d2fef7f16cdbc57684d5d0bd96",
+      "size": 7890,
+      "mtime": 1784095973,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S148.jsonl",
+      "sha256": "c0453f234e009900287d452a8e99624bf0ff6743d250566465e6083156fb7a0e",
+      "size": 8870,
+      "mtime": 1784103639,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S149.jsonl",
+      "sha256": "cf2782039eadc015d063268ae0b46d0d9fed8d86612c339234784277145c15f6",
+      "size": 2001,
+      "mtime": 1784179394,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S150.jsonl",
+      "sha256": "093701add9e7adaffbec2b86eb03f97ca07782b17a04c2f1c4d008566cd02a50",
+      "size": 3693,
+      "mtime": 1784182955,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S151.jsonl",
+      "sha256": "8dba82a5fc06e85674bc2d5025c5b7c11aa6943c703044ddf0b18de38fe9350b",
+      "size": 4086,
+      "mtime": 1784184721,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S152.jsonl",
+      "sha256": "a7d2742a3b03f54360e64b804fc9119973321566d3bfb82cc782157fb9d5be94",
+      "size": 6034,
+      "mtime": 1784194909,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S153.jsonl",
+      "sha256": "5426250240cf7fb2c0ab0bc3ee3994194a432808213301b9c037008fa85df0b0",
+      "size": 6912,
+      "mtime": 1784203504,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S154.jsonl",
+      "sha256": "9f003cbe55a600c5bbc71e8c7a58d64ccf27ffa99e265a212da266b1905e14c3",
+      "size": 3224,
+      "mtime": 1784236962,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S155.jsonl",
+      "sha256": "773fddd1ce668599f24663da7b0ed051e0fa9a28785966d1f643bc8abfcc9538",
+      "size": 4859,
+      "mtime": 1784243246,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S156.jsonl",
+      "sha256": "b9735030b5edfc69a39b7134650a7ee7a19ada0d0066f224828b7b2bb4093e8b",
+      "size": 3145,
+      "mtime": 1784303918,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S157.jsonl",
+      "sha256": "94785872741b3a5a723277913b990f63463cfd868e3a114f610f3461f2d1bc89",
+      "size": 5943,
+      "mtime": 1784378928,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S158.jsonl",
+      "sha256": "322581cacb87a8b1e4f1c4bb6b4ec99fd0141a4ebe9915dcdcb8c3ed64db6710",
+      "size": 4576,
+      "mtime": 1784380162,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S159.jsonl",
+      "sha256": "55ce4817dc03aca86784a5a12b9a27d9e883a510d155bd2b604ccaeb2c905c0c",
+      "size": 5064,
+      "mtime": 1784399785,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S160.jsonl",
+      "sha256": "79c17b737da43a95e25f9d3bb487f619f90683ecbbc78c6a1c009bedeea13cb0",
+      "size": 14309,
+      "mtime": 1784403411,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S161.jsonl",
+      "sha256": "e78768a2dd6ece41096a1546822a384ad61b06b28075673a7b12226bef62b85f",
+      "size": 6701,
+      "mtime": 1784439152,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S162.jsonl",
+      "sha256": "0af947c669e728c8a1c5fa6fecea6fc1f4a1bdde78a893bc750583a076f5c8a0",
+      "size": 3898,
+      "mtime": 1784447763,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S163.jsonl",
+      "sha256": "b35657f71e20a0659cdedc4d172a306285d42cb4c6b0ba2f5290c65457f4d73d",
+      "size": 3408,
+      "mtime": 1784493770,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S164.jsonl",
+      "sha256": "0e93cb7f0af5d6ee6a6ba7f66945558c82ab87d31906e0ca13c3b47ed5e2e876",
+      "size": 7804,
+      "mtime": 1784598658,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S165.jsonl",
+      "sha256": "6df854ce3aed929e01f5b25dcb7bb637519e5344998a6b8fb5ac1d3d8306f0d4",
+      "size": 6024,
+      "mtime": 1784635517,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S166.jsonl",
+      "sha256": "9d14b90de34f1373bd5585b27b43948a241237bbbacc15ff8e7ae5f2eea80420",
+      "size": 5494,
+      "mtime": 1784686212,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S167.jsonl",
+      "sha256": "47027dcea7a14a7ca556d75b05249f312b18adac4f2d9f2ee0f5ddb442d95fff",
+      "size": 1504,
+      "mtime": 1784687848,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S168.jsonl",
+      "sha256": "47d1313b2be255c619f4a9310859614c18cc3157e7604e3120eaf98f270a88e5",
+      "size": 3897,
+      "mtime": 1784699165,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S169.jsonl",
+      "sha256": "3ed3cd3bb10bbf8d294ded6709c7c22c7acf5651f23fd3c292de062fffe55ac3",
+      "size": 6766,
+      "mtime": 1784703304,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S170.jsonl",
+      "sha256": "1b8ee485f0fcae021f265720c518405ec98d2fef82d0fbc7168734b6c41a6173",
+      "size": 8138,
+      "mtime": 1784722971,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S171.jsonl",
+      "sha256": "cab9ce85a298e115172c620770d873d873a1ea61abc32649cfe1b718796285a4",
+      "size": 999,
+      "mtime": 1784723284,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S172.jsonl",
+      "sha256": "9b63f38fde24247776825ee7620e2da85c3c81b15e2eef063743a262950ae71c",
+      "size": 11652,
+      "mtime": 1784774573,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S173.jsonl",
+      "sha256": "aa5063353d58d840efbb45f0e8e1aea6221e557c0034810d433ea4aa22310790",
+      "size": 6497,
+      "mtime": 1785065816,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S174.jsonl",
+      "sha256": "5515aa87677a0e9af569f958e6028fe930f4d8a4a4b48a77ae3228f89814d4bf",
+      "size": 4405,
+      "mtime": 1785072639,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S175.jsonl",
+      "sha256": "3881f73d6051da0dad236ffae2ec4437e8addf95b5af366a593c0923a47dae24",
+      "size": 12614,
+      "mtime": 1785122302,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S176.jsonl",
+      "sha256": "2f7997fe65361584b7f59766ab2245abe015877551cb6f626a47f1f0fd12d752",
+      "size": 25682,
+      "mtime": 1785140956,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S177.jsonl",
+      "sha256": "e9dfee2adc6018e87e79b577d6820ec2d837a1e6ad11b3c5790db6d93b519db4",
+      "size": 5967,
+      "mtime": 1785262045,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S178.jsonl",
+      "sha256": "77581ebc08c79f8b9cdb3a452c9e56f8a75954ddb51f34421ca5856be837245d",
+      "size": 7194,
+      "mtime": 1785309198,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S179.jsonl",
+      "sha256": "9b99f1277e221539b28b5153a236e9fa1f53447fc9a9a6f67506e3df558a3ee2",
+      "size": 11837,
+      "mtime": 1785323174,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S180.jsonl",
+      "sha256": "f75b47d8a8383671512b0620e64cba52f31dd8305c32d61ad4336b7d7f57a88c",
+      "size": 25710,
+      "mtime": 1785333977,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S181.jsonl",
+      "sha256": "62eef504db793e14c77b6dea45de06bc07bd8f2e6369a7d267f1c3a14eed2303",
+      "size": 21024,
+      "mtime": 1785338194,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S92.jsonl",
+      "sha256": "98528f4f18347a1d3e07f742792865478a7c8b92fb9f125bf758e98e107255d3",
+      "size": 1267,
+      "mtime": 1781944827,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S93.jsonl",
+      "sha256": "6c7a1b1add37ab182eca025a968e0fa220a9dbd425f27b3d0dd2ec83436609bb",
+      "size": 2444,
+      "mtime": 1781960892,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S94.jsonl",
+      "sha256": "5fe60c5fb4ee725bd0bded8d4694e9f4edcf2c219b5f4bc2335b237d12cd0202",
+      "size": 2431,
+      "mtime": 1781963538,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S95.jsonl",
+      "sha256": "7785f9a00ca536667b61dc4341c92a639ca83b7cec6d1a0d20a38d09393a461e",
+      "size": 2450,
+      "mtime": 1781964829,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S96.jsonl",
+      "sha256": "2083ac11871bdf20811322b86028f0904cc99e94a01996cafbdd7316b07d8d22",
+      "size": 3609,
+      "mtime": 1781982827,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S97.jsonl",
+      "sha256": "15548bc72eb0bcb143680e6ca86b36b2da3ecafa618b7ba98f8b12a613ddfc4f",
+      "size": 2436,
+      "mtime": 1781985630,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S98.jsonl",
+      "sha256": "8db6883b8080ede222025af1508945968f9073363ad8bdfb439004605ae44538",
+      "size": 4562,
+      "mtime": 1782021495,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RAG/session_log_S99.jsonl",
+      "sha256": "e9535d96d850ecd49d323a04f0ad5ba2adc402ccf94369980b80b0b8685e0b50",
+      "size": 3827,
+      "mtime": 1782024914,
+      "class": "session_log",
+      "owner": "kernel"
+    },
+    {
+      "path": "RUNBOOK_CLONE_INIT_S179.md",
+      "sha256": "181e9a1b8d6d9b2cab8b1366dad9b69402bb12600f80a4a1bbeb18bdcd7da2f2",
+      "size": 33070,
+      "mtime": 1785328606,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "S157_CANONICAL_REPORT.txt",
+      "sha256": "e37660cd07e766c3d5efce2a7c3c6fe668d724eb511b37fa981d41f941ba5efa",
+      "size": 5103,
+      "mtime": 1784378927,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "TO-DO PLANs/TODO_PLAN_POST_S16.md",
+      "sha256": "186bb3cf9cf5dcde781730a7102ef0d614fc4ddad5d9b9ac72d6f6663806a75b",
+      "size": 15549,
+      "mtime": 1779515895,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/CLAUDE_CODE_ENV_PROFILE.md",
+      "sha256": "0d324a7542dc4e5972b4717fcab7205dbf6a342d9e07d02dd6a0cdb705bff53e",
+      "size": 7595,
+      "mtime": 1785259495,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/Claude SEO Project-d80877ac.txt",
+      "sha256": "8fb332114312bbd9584a639eab01da126505302f7cb6001fc6561a876f82b368",
+      "size": 4250,
+      "mtime": 1785261560,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/Claude SEO Project.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "mtime": 1785260935,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/Claude SMM TRANSCRIPT.txt",
+      "sha256": "19486f106eb53a0eb6f12df83c5a9befe2e74f75e9db5d56ffe0ad23ce9bb7fc",
+      "size": 6568,
+      "mtime": 1785261646,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/Combined SEO + SMM automation system (Claude Code).txt",
+      "sha256": "602678579cf0daf657b7082b6fcd9d4daed07c88ecc5d78338e75581b392ff75",
+      "size": 3460,
+      "mtime": 1785261681,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/FB_IMG_1777987162096.jpg",
+      "sha256": "8ca31256cf22784d025670ff31ce9b582ebe2f065646fc2c2f1804858f50dd5f",
+      "size": 405695,
+      "mtime": 1777983562,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/Hermes Agent in NVIDIA Cloud.md",
+      "sha256": "5b710cbcaa40a696cf5f70509abf5fac3e08f3b4c57bb7f45cf07eaf37915072",
+      "size": 2147,
+      "mtime": 1782757002,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/LiteLLM.txt",
+      "sha256": "35de58f0839522e2de8e76243f53b3439fc5256d28d27a8eedcb6ac6845808c5",
+      "size": 8354,
+      "mtime": 1785210686,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/MY CLOUDFLARE ACCOUNT.txt",
+      "sha256": "6ed5fde0b662a845da510e78229b321d68831655a0102142d3d163104ef650e0",
+      "size": 2225,
+      "mtime": 1782538498,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/NVIDIA NIM API.txt",
+      "sha256": "79ba4171b623c784cc587cf65310b8b89db5de816b4cdab9c345a3765cb6b988",
+      "size": 2163,
+      "mtime": 1782541346,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/PRIOR_WORK_SURVEY.md",
+      "sha256": "4d81ffb4755cca992f07ed38bccf8762368413af16ac7a56934ffb73a7bc1aa0",
+      "size": 8678,
+      "mtime": 1785211908,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/SEO_TOOLING_ASSESSMENT.md",
+      "sha256": "ecbed2cf4514c34dd0318cd7c19d96b817c0b88673f9d5bcbac2f32b5a828beb",
+      "size": 10016,
+      "mtime": 1785261114,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/SOURCE10_SEO_WORKFLOW_TRANSCRIPT.md",
+      "sha256": "afa33997768cce59356d466cdc17cd6bdc7ae1e06880d3c7c72ea0a8f94a16e3",
+      "size": 5477,
+      "mtime": 1785261482,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/SOURCE11_CLAUDE_SEO_PROJECT_SCAFFOLD.md",
+      "sha256": "144831cfd25db1149108f972a1313c5cb6c3bac78bc63d12b6f4c93e045b156c",
+      "size": 5477,
+      "mtime": 1785261677,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/SOURCE12-13_SMM_AND_COMBINED_ENGINE.md",
+      "sha256": "e034adba498aa11e061263df396f7aca3f61ca315077b255b6ee0d2519b35beb",
+      "size": 7387,
+      "mtime": 1785261862,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/Screenshot_20260619_152918_Gallery.jpg",
+      "sha256": "0283e3db6438130072f0d21020af4609cce15dbe765450788a18f1a4cf3fe54f",
+      "size": 600607,
+      "mtime": 1781897358,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/Screenshot_20260621_020516_Gallery.jpg",
+      "sha256": "6f1106bcda3a2b52b5c44e26f0f590a73f9ce9618f20d562d651cd13323a6351",
+      "size": 592211,
+      "mtime": 1782021916,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/TRIAGE_LEDGER.md",
+      "sha256": "173a9b09e966ee0f8142050caf63b355cee2ffa1835bd2a9912295a3adf87fbf",
+      "size": 13856,
+      "mtime": 1785211351,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/The-Local-Business-Guide-to-Increasing-Your-Visibility-on-Google.pdf",
+      "sha256": "bb4cbbedc76211998399542747f1a375b032aef4901ba6f6422fa0ae37896c38",
+      "size": 14740139,
+      "mtime": 1784950377,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/_CLAUDE-CODE SETUP.md",
+      "sha256": "1cbc4c8e35618a2a07fe735a3e540416546223a379dafaa0f249b1d5c3534f76",
+      "size": 6187,
+      "mtime": 1784689300,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/claude-ai-tools.md",
+      "sha256": "767ff1c55a819eb31727d4f7cc15df95619faabb70b9ea5a6e365f2b0470723e",
+      "size": 7631,
+      "mtime": 1784724201,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/cloud--emergencycomputerhelp.txt",
+      "sha256": "29e13dd973e3aa13232289dcac2a36a6abb9aceb08ed69c7b9e9891d539e14a3",
+      "size": 353,
+      "mtime": 1782541204,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/how to create Google LSA profile.md",
+      "sha256": "d2044b7ff29e54d0713131c3d09b20d024f4626c8e73bd4f1d3e2a1fa276b2a6",
+      "size": 6457,
+      "mtime": 1784334289,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S177/✅ Reconstructed Transcript (High‑Ac.txt",
+      "sha256": "7af3362d82ba99b867d76a27aff9aa7279892afed814d3575df92860bea4fed1",
+      "size": 5328,
+      "mtime": 1785260856,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/ANSWERS_G4-G9_S179.md",
+      "sha256": "41d6542bd47f5ef661fb2a4f0c808a2a1e245fb7a265f07c905f7329814a7fc3",
+      "size": 7579,
+      "mtime": 1785312605,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Cursor and Hermes -- Hybrid Stack.txt",
+      "sha256": "7c873812cd4cfec2fd8edf9d46b6018f02cb2933de09a396a29ac2a83b8ef3d4",
+      "size": 1929,
+      "mtime": 1782505592,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #1.txt",
+      "sha256": "7e00c504b95167711c43a73e25bdbc5d3ce927926e34e7a637fbacf2e4b8aead",
+      "size": 8857,
+      "mtime": 1785301769,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #2.txt",
+      "sha256": "98c401cc535ebbffb2a9bc8fa22d92ccdd7694226c268c2a79ac09ff7bd50c01",
+      "size": 4250,
+      "mtime": 1785301750,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/EXAMLE OF MY PROMPT AND EXPECTED RESULT #3.txt",
+      "sha256": "f22829456584a19712d13859e32968963a8376edc88828782e8588a1d4c45612",
+      "size": 13831,
+      "mtime": 1785301730,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/EXAMLE OF MY Profile Content.txt",
+      "sha256": "084e8cfe5481910642b46c5fc3801adc6a1d2c1ddb6096aa9234d96038d0f695",
+      "size": 840,
+      "mtime": 1757381778,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/EXAMPLE OF MY PROMPT TO ANALYSE NICHE AND COMPS.txt",
+      "sha256": "a74c1d4b751a3ce73263f3d8a9aa3f89e0b8ef7c9f1ac39d20ac070d58cb26ae",
+      "size": 8327,
+      "mtime": 1754290206,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/G1_DISTRIBUTION_VERIFICATION_S179.md",
+      "sha256": "1aad9b1e5a4847a3fd571c8d5e208fdd219ecffa7257c9fc308bf2ab28f58c10",
+      "size": 13517,
+      "mtime": 1785312896,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/HITL ISSUE -- PROJECT.md",
+      "sha256": "3c7a091611ac31f390966896e000225dffa40b7aaa64cf26b20ca8149734ca90",
+      "size": 47476,
+      "mtime": 1778891683,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/HOW to USE Claude Design AND Daily included routine runs.txt",
+      "sha256": "3b25d1fdec70dfe6eff1db13c3cb5c8eaa0c8faf47eb7ad3640977bffb44ca64",
+      "size": 4491,
+      "mtime": 1777447113,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/RECONCILIATION_S178.md",
+      "sha256": "f180d9d988323da9015694da25d48e608ef98abfb7570e317e17b617df5137f6",
+      "size": 11742,
+      "mtime": 1785307627,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/TRIAGE_S178_BENCHMARK_SITES.md",
+      "sha256": "34eddfc41bd0e3010b638f23a2a9c79960b2f0178b7db1da07bb78818263ac17",
+      "size": 10345,
+      "mtime": 1785307029,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/TRIAGE_S178_FALLBACK_STACK.md",
+      "sha256": "e1dffbc221ad27c4e496c3d8bfb88a4487f45bd54a7ed81faed7f656c7a6fe8a",
+      "size": 6896,
+      "mtime": 1785302655,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/TRIAGE_S178_OPERATOR_METHOD.md",
+      "sha256": "d1d1ac27c2fdb3463510f3c9424430fac8dbdf267aec4e3527dedcf0fdeb129b",
+      "size": 8486,
+      "mtime": 1785301948,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/WHAT ACTUALLY WORKS (Proven & Bulletproof).txt",
+      "sha256": "17e16e131cf7d366bc92b0acc7ba828eb5b69b309172186d2caa43ad184bceb8",
+      "size": 1044,
+      "mtime": 1782759333,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz.zip",
+      "sha256": "f4df20590f1915e118293252193dc61c0745d261aaca8f5102b7c5ef0e510d53",
+      "size": 1569138,
+      "mtime": 1785305029,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_account_information.html",
+      "sha256": "3c1740e46e2e0eca20ccf10daf64116f78f00c4aed2b9e7c22f0edb7fd5166fc",
+      "size": 238447,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_business_bio.html",
+      "sha256": "14ec00c139c83af0b695122c4449c32ebef07126093124cc66da90d0ef770e96",
+      "size": 237961,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_business_claim.html",
+      "sha256": "864cb1badc017c2944f9693ef2d486b3c84aa140a3c53ba90d8c66b46fc1b7df",
+      "size": 238482,
+      "mtime": 1785319264,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_business_photo.html",
+      "sha256": "886ca4d4496b5629271ce98485de70d2204cec3a5838a57fbffe502e8307843a",
+      "size": 242245,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_flagged_content.html",
+      "sha256": "d3e26ad010bd85b5b8e4b9bec75d634f6b26b34bbc739e58ac793ccea9826c07",
+      "size": 237968,
+      "mtime": 1785319264,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_login.html",
+      "sha256": "98c6b602a7a95a87738af5c22a9676e03647acd1f16cdca5969f0cf69d8b5a22",
+      "size": 240272,
+      "mtime": 1785319264,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_message.html",
+      "sha256": "62097c1fb1ec2267d447f55e13d5ee4ebc1e2af2f35d8aa2be3a7e084f53b591",
+      "size": 238084,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_profile_photo.html",
+      "sha256": "ed29d3e50751a2944e3c01b89f8a36f15aca993fb777547236da067d72195403",
+      "size": 237892,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_review_comment.html",
+      "sha256": "9d8838e16ebf54e210a7cd3dee66aa7ba8f8d02e7f4bcc9ebd3295ee7c6170bf",
+      "size": 237986,
+      "mtime": 1785319264,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_session.html",
+      "sha256": "e90f70ccefa23dec5d2649cd708a8b701e0b56536c6c13087c549bffba155aec",
+      "size": 240052,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/biz_user_subscription.html",
+      "sha256": "0103f75db09a8a5ef0007d40465ab5d56a01f5ddcd7092b06303790ba0d72791",
+      "size": 238085,
+      "mtime": 1785319264,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/html/cbil_linked_account.html",
+      "sha256": "c7c8a7938b1da8593c45917f8e72aba432991929171127bb2e38a05e2ad214cb",
+      "size": 238036,
+      "mtime": 1785319264,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/index.html",
+      "sha256": "b5ee5066c00772a578e2bd9d73c650352189a1392d1db1d2459c28d2adf79ab9",
+      "size": 238507,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/media/biz_user_business_photo/AoqRKXNpoUB2tPTzUR-rGQ.jpg",
+      "sha256": "1bf788887708a6e72203caf65559d58f7748e78cf34acc9f71cdfb1cc06003fc",
+      "size": 132995,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/media/biz_user_business_photo/EfHhrKIgJ0kPXrqyxZTOBg.jpg",
+      "sha256": "5a870874df7e954ceacd77e95881c0d10f3f347374e0c7ae249bb4c9f1fd4987",
+      "size": 392279,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/media/biz_user_business_photo/LF8Zc5_VuPNgk4mTe5_YeQ.jpg",
+      "sha256": "1c505e9440cc6e5d5a95f1445037e84a2651cb03a2c3627916d5ddc8cc773aa5",
+      "size": 114866,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/media/biz_user_business_photo/VnMuXf2BiJeq_A8rNsOWGg.jpg",
+      "sha256": "016cb256e6a971d7dc7a10de8c48fac0606edac34936a5ac54934212d4c25a0f",
+      "size": 122493,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/media/biz_user_business_photo/e3REghLYoly_d5dDWg6RAQ.jpg",
+      "sha256": "1ff14bb061636b7cd83f10bb99be2096f4ab9d896affe8f9e7e1182673c2ce1e",
+      "size": 117967,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/media/biz_user_business_photo/iqlWM2chhffzV-05JM3eQw.jpg",
+      "sha256": "8edfba3197ff9ab5b4eb577659de30cfe1454e6599239dd0f0ef1096a8f7b383",
+      "size": 133725,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/Yelp-Biz/media/biz_user_business_photo/oA2wx3HCBG4eIaGPHHntcA.jpg",
+      "sha256": "6c7fe6decbb702e469e82a0b90eeeee97379e105dfd145e45fd43756380d5665",
+      "size": 91409,
+      "mtime": 1785319262,
+      "class": "other",
+      "owner": "kernel"
+    },
+    {
+      "path": "_INGEST_S178/_extract_yelp.py",
+      "sha256": "04eeb8ff1a3e56e5f8c024f0573a892272bd5408cb3cca180c737d2955150e59",
+      "size": 4119,
+      "mtime": 1785305702,
+      "class": "code",
+      "owner": "kernel"
+    },
+    {
+      "path": "docs/LEAN_TAXONOMY_SPEC.md",
+      "sha256": "c0dcd39ea53aa8ffd80b99bd1dd9177e424eca60d99e207fc288f806af96811a",
+      "size": 8473,
+      "mtime": 1782803430,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_AUDIT_FINDINGS_S130.md",
+      "sha256": "783e36ee6c1de76d135e21fe0ae247afd7e9c40d4adba25f31ae1c819f9c83cc",
+      "size": 17153,
+      "mtime": 1783423611,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_CANONICAL_AUDIT_S131.md",
+      "sha256": "8c4bb958c8b98f7e081552bf9bfab10323a4d2a85e466ed4b9a328785884ffc9",
+      "size": 7084,
+      "mtime": 1783427438,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_CLONE_AUDIT_S125.md",
+      "sha256": "2936d0f58895b7ac9839bb80ee5dde14585ead01f1cd66acce05362716c9a094",
+      "size": 6071,
+      "mtime": 1783274602,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_CLONE_AUDIT_S129.md",
+      "sha256": "e3631264d8e6eda363c77541ee5b3bc98f478300c7d7365744eb305ceab490e2",
+      "size": 9096,
+      "mtime": 1783339537,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_CLONE_PROJECT_INSTRUCTIONS.md",
+      "sha256": "63611482e86b8c9275974f1f58cb8f3c020ac0de68a69b091ebdd9f7fc8825a2",
+      "size": 4710,
+      "mtime": 1783679788,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_MIGRATION_FINDINGS_RECONCILIATION_S132.md",
+      "sha256": "559b39768d971d89d0cb0f5e9e2dc58516852e7b9b5d35e99aea05e2963ba243",
+      "size": 6897,
+      "mtime": 1783460644,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_SITTING_INVENTORY_S130.md",
+      "sha256": "af3ed9e39d1563cf525a99cc7b4a3c39be01bd8f745104d395dae2a56efbdb3c",
+      "size": 3999,
+      "mtime": 1783423601,
+      "class": "doc",
+      "owner": "kernel"
+    },
+    {
+      "path": "migration/EBAY_UNIVERSAL_TRANSFER_PROCEDURE_S131.md",
+      "sha256": "007748663f25b8cf3350c0e7227d571b4dafad04b61ec05d32bb5193ed0aff98",
+      "size": 6642,
+      "mtime": 1783428731,
+      "class": "doc",
+      "owner": "kernel"
+    }
+  ]
+}

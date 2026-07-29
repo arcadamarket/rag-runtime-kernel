@@ -829,6 +829,90 @@ def build_parser() -> argparse.ArgumentParser:
     transplant_parser.add_argument("--dry-run", action="store_true",
                                    help="render every planned addition and collision line-by-line without writing")
 
+    # -- birth-adopt (BIRTH-ADOPT-VERB: carry hardened VALUES between deployments) --
+    # transplant is additive-only and halts on every differing key; migrate never
+    # touches operating_protocol. This verb is the missing path: it moves an
+    # IMPROVED value of an EXISTING rule, in a direction it can justify.
+    adopt_parser = subparsers.add_parser(
+        "birth-adopt",
+        help="Carry hardened universal rule VALUES between kernel deployments. Three modes: diff (per-key, BOTH directions, with provenance and a stated reason — never writes), adopt (BIRTH path: apply every add + source-ahead move in one governed pass), update (RUNNING deployment: propagate an improved value of an EXISTING rule, optimistic-concurrency guarded). Direction is decided by the INIT spec as a third reference point, then by provenance; a true tie is REFUSED, never guessed.",
+    )
+    adopt_parser.add_argument("mode", choices=["diff", "adopt", "update"],
+                              help="diff (read-only, mandatory first), adopt (birth), update (running deployment)")
+    adopt_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                              help="Path to the TARGET deployment's RAG_MASTER.json (the only file written)")
+    adopt_parser.add_argument("--source", type=Path, required=True,
+                              help="Path to the SOURCE kernel's RAG_MASTER.json (read-only authority for rule content)")
+    adopt_parser.add_argument("--spec", type=Path, required=True,
+                              help="INIT spec .md whose operating_protocol keys DEFINE the universal set (Authority A)")
+    adopt_parser.add_argument("--session", type=str, required=True,
+                              help="session id stamped into meta.rule_provenance on every key this verb sets")
+    adopt_parser.add_argument("--key", dest="keys", action="append", default=None,
+                              help="update mode: restrict propagation to this rule key (repeatable). Omit to propagate every source-ahead key.")
+    adopt_parser.add_argument("--decide", dest="decisions", action="append", default=None,
+                              metavar="KEY=source|target",
+                              help="adopt mode: an explicit operator ruling for a DIVERGED key (repeatable). Without one, a diverged key is a hard refusal.")
+    adopt_parser.add_argument("--limit", type=int, default=0,
+                              help="cap the rendered move list (Rule 17 bounded emission; 0 = all)")
+    adopt_parser.add_argument("--force", action="store_true",
+                              help="update mode: overwrite even when the target's live value no longer matches its recorded provenance hash")
+    adopt_parser.add_argument("--dry-run", action="store_true",
+                              help="render what adopt/update would apply without writing")
+
+    # -- ingest (BLUEPRINT-INGEST-PROTOCOL: document -> governed state, with an
+    #    exit predicate instead of an opinion) --
+    ingest_parser = subparsers.add_parser(
+        "ingest",
+        help="Route a source document into governed state (RUNBOOK 5A, mechanised): RULE->operating_protocol, REFERENCE->COLD, ASSET->RAG_CONTEXT[baked_assets], TASK->tracked_items, DELIVERABLE->meta.root_deliverables. Claims are declared with `INGEST: <KIND> <id> — <text>` lines or inferred from headings. Reports the DECIDABLE exit predicate: the deployment answers what the document answers, without the document.",
+    )
+    ingest_parser.add_argument("document", type=Path, help="source document to ingest")
+    ingest_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                               help="Path to RAG_MASTER.json")
+    ingest_parser.add_argument("--rag-dir", dest="rag_dir", type=Path, default=None,
+                               help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
+    ingest_parser.add_argument("--limit", type=int, default=0,
+                               help="cap the rendered create-list (Rule 17; 0 = all)")
+    ingest_parser.add_argument("--json", dest="as_json", action="store_true",
+                               help="output the plan as JSON")
+
+    # -- decide / decisions (DECISION-LEDGER-PRIMITIVE: operator rulings as state) --
+    decide_parser = subparsers.add_parser(
+        "decide",
+        help="Record an OPERATOR RULING as a first-class governed record: the question, the alternatives that were actually on the table, which was chosen, and the tracked items it binds. Refuses a single-option 'decision' (that is a mandatory control disguised as a preference, E-092) and refuses a bind that does not resolve.",
+    )
+    decide_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                               help="Path to RAG_MASTER.json")
+    decide_parser.add_argument("--session", type=str, required=True,
+                               help="session id recorded on the ruling")
+    decide_parser.add_argument("--question", type=str, required=True,
+                               help="the question the operator answered")
+    decide_parser.add_argument("--option", dest="options", action="append",
+                               required=True,
+                               help="an alternative that was on the table (repeatable; at least two)")
+    decide_parser.add_argument("--chosen", type=str, required=True,
+                               help="the option the operator chose (must be one of --option)")
+    decide_parser.add_argument("--rationale", type=str, default="",
+                               help="one-line reason recorded with the ruling")
+    decide_parser.add_argument("--binds", action="append", default=None,
+                               help="tracked_item id this ruling governs (repeatable)")
+    decide_parser.add_argument("--supersedes", type=str, default=None,
+                               help="decision id this ruling replaces (DIRECTIVE-SUPERSEDE-PATH)")
+    decide_parser.add_argument("--dry-run", action="store_true",
+                               help="validate without writing")
+
+    decisions_parser = subparsers.add_parser(
+        "decisions",
+        help="Render the decision ledger (read-only): every operator ruling with its alternatives, what was chosen, and what it binds.",
+    )
+    decisions_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                                  help="Path to RAG_MASTER.json")
+    decisions_parser.add_argument("--limit", type=int, default=0,
+                                  help="show only the most recent N (Rule 17; 0 = all)")
+    decisions_parser.add_argument("--live", action="store_true",
+                                  help="hide rulings that a later decision superseded")
+    decisions_parser.add_argument("--item", type=str, default=None,
+                                  help="show only rulings binding this tracked_item id")
+
     # -- register-asset / reuse-check (REUSE-REGISTRY-GUARD: baked-asset registry) --
     # Lean-RAG: the inventory lives in the sanctioned, NON-LOADED RAG_CONTEXT.json
     # `baked_assets` partition; RAG_MASTER.json carries only the concise
@@ -5197,6 +5281,254 @@ def cmd_transplant(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_birth_adopt(args: argparse.Namespace) -> int:
+    """Governed value-adoption between deployments (BIRTH-ADOPT-VERB, S181).
+
+    Where ``transplant`` moves rules a target is MISSING and halts fail-loud on
+    every key present with differing content, this verb moves the CONTENT of
+    keys both sides already have — the case that leaves a clone frozen. It never
+    guesses direction: the INIT spec is a third reference point (a side holding
+    verbatim spec text has never hardened that key), provenance breaks the
+    remaining ties, and a genuine tie is REFUSED with the keys named.
+
+    Exit 0 on success/no-op, 1 on any fail-loud condition (unknown spec,
+    undecidable divergence without a ruling, stale target provenance).
+    """
+    from rag_kernel.birth_adopt import (
+        ADOPTABLE,
+        AdoptError,
+        Direction,
+        adopt_file,
+        adoption_complete,
+        render_diff,
+    )
+
+    decisions: dict[str, str] = {}
+    for raw in (args.decisions or []):
+        if "=" not in raw:
+            print(f"Error: --decide expects KEY=source|target, got {raw!r}",
+                  file=sys.stderr)
+            return 1
+        key, _, side = raw.partition("=")
+        side = side.strip().lower()
+        if side not in ("source", "target"):
+            print(f"Error: --decide side must be 'source' or 'target', got {side!r}",
+                  file=sys.stderr)
+            return 1
+        decisions[key.strip()] = side
+
+    try:
+        diff, result, wrote = adopt_file(
+            args.rag,
+            args.source,
+            args.spec,
+            session=args.session,
+            mode=args.mode,
+            keys=args.keys,
+            decisions=decisions,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except AdoptError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    print(render_diff(diff, limit=args.limit))
+    print()
+
+    if args.mode == "diff":
+        # The mandatory first mode: report both directions and stop. A diff that
+        # finds undecidables has done its job — it surfaced them before a write.
+        undecided = diff.undecidable
+        if undecided:
+            print(f"  {len(undecided)} key(s) UNDECIDABLE — neither side matches the "
+                  f"spec and provenance is absent or tied. Rule a side with "
+                  f"`--decide KEY=source|target` before adopting:")
+            for key in undecided:
+                print(f"    ? {key}")
+        back = diff.by(Direction.TARGET_TO_SOURCE, Direction.ADD_TO_SOURCE)
+        if back:
+            print(f"  {len(back)} key(s) where the TARGET is ahead — back-flow "
+                  f"candidates this verb will NOT move (run it in reverse to adopt "
+                  f"them here):")
+            for entry in back:
+                print(f"    < {entry.key}")
+        return 0
+
+    assert result is not None
+    header = "[DRY RUN] would apply" if args.dry_run else (
+        "applied" if wrote else "no change"
+    )
+    print(f"birth-adopt {args.mode}: {header} [session {args.session}]")
+    if result.applied:
+        print(f"  applied ({len(result.applied)}):")
+        for key, direction in result.applied:
+            print(f"    > {key}  [{direction.value}]")
+    else:
+        print("  applied (0): nothing to move")
+    if result.refused:
+        print(f"  refused ({len(result.refused)}):")
+        for key, why in result.refused:
+            print(f"    ! {key} — {why}")
+
+    # GATE-OR-HOPE: state the decidable exit predicate, do not merely assert done.
+    if args.mode == "adopt" and not args.dry_run:
+        remaining = [e for e in diff.entries
+                     if e.direction in ADOPTABLE and e.key not in
+                     {k for k, _ in result.applied}]
+        ok, verdict = adoption_complete(diff) if not result.applied else (
+            not remaining,
+            "adoption COMPLETE: no adoptable move remains, none undecidable"
+            if not remaining else
+            f"adoption INCOMPLETE: {len(remaining)} adoptable move(s) remain",
+        )
+        print(f"  exit predicate: {verdict}")
+        if not ok:
+            return 1
+    if wrote:
+        print("  written atomically; .bak refreshed to byte-parity (HOT == BAK); "
+              "meta.rule_provenance + meta.init_spec stamped.")
+    return 0
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    """Document ingestion with a decidable exit predicate (B4, S181).
+
+    Read-only: it plans, renders, and states whether the deployment already
+    answers what the document answers. It never writes — the landing records it
+    names are created through their own governed verbs (add / add-rule /
+    register-asset), so ingestion cannot become a second write path into
+    canonical state. Exit 0 when ingestion is COMPLETE, 1 while it is not.
+    """
+    import json as _json
+
+    from rag_kernel.ingest import (
+        IngestError,
+        ingest_complete,
+        plan_ingest,
+        render_plan,
+    )
+
+    try:
+        rag = _json.loads(Path(args.rag).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        print(f"Error: cannot read RAG {args.rag}: {ex}", file=sys.stderr)
+        return 1
+
+    rag_dir = Path(args.rag_dir) if args.rag_dir else Path(args.rag).parent
+    context = None
+    ctx_path = rag_dir / "RAG_CONTEXT.json"
+    if ctx_path.exists():
+        try:
+            context = _json.loads(ctx_path.read_text(encoding="utf-8"))
+        except ValueError:
+            context = None
+
+    try:
+        plan = plan_ingest(args.document, rag, context=context)
+    except IngestError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    ok, verdict = ingest_complete(plan, rag, context=context)
+
+    if args.as_json:
+        print(_json.dumps({
+            "document": plan.document,
+            "counts": plan.counts,
+            "routes": [
+                {"id": r.claim.id, "kind": r.claim.kind,
+                 "destination": r.destination, "action": r.action,
+                 "explicit": r.claim.explicit}
+                for r in plan.routes
+            ],
+            "unrouted": [c.id for c in plan.unrouted],
+            "complete": ok,
+            "verdict": verdict,
+        }, indent=2))
+        return 0 if ok else 1
+
+    print(render_plan(plan, limit=args.limit))
+    print()
+    print(f"  exit predicate: {verdict}")
+    if not ok:
+        print("  Land the missing records through their governed verbs "
+              "(add / add-rule / register-asset), then re-run.")
+    return 0 if ok else 1
+
+
+def cmd_decide(args: argparse.Namespace) -> int:
+    """Record an operator ruling as governed state (B5, S181)."""
+    import json as _json
+
+    from rag_kernel.decision_ledger import DecisionError, record_decision
+    from rag_kernel.persistence import atomic_write_json
+
+    rag_path = Path(args.rag)
+    try:
+        rag = _json.loads(rag_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        print(f"Error: cannot read RAG {rag_path}: {ex}", file=sys.stderr)
+        return 1
+
+    try:
+        decision = record_decision(
+            rag,
+            session=args.session,
+            question=args.question,
+            options=args.options or [],
+            chosen=args.chosen,
+            rationale=args.rationale,
+            binds=args.binds,
+            supersedes=args.supersedes,
+        )
+    except DecisionError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    prefix = "[DRY RUN] would record" if args.dry_run else "recorded"
+    print(f"{prefix} {decision.id} [session {decision.session}]")
+    print(f"  Q: {decision.question}")
+    for opt in decision.options:
+        print(f"   {'>' if opt == decision.chosen else ' '} {opt}")
+    if decision.rationale:
+        print(f"  why: {decision.rationale}")
+    if decision.binds:
+        print(f"  binds: {', '.join(decision.binds)}")
+    if decision.supersedes:
+        print(f"  supersedes: {decision.supersedes}")
+    if args.dry_run:
+        return 0
+    atomic_write_json(rag_path, rag, mirror_bak=True, guard_side_stores=True)
+    print("  written atomically; .bak refreshed to byte-parity (HOT == BAK).")
+    return 0
+
+
+def cmd_decisions(args: argparse.Namespace) -> int:
+    """Render the decision ledger (read-only)."""
+    import json as _json
+
+    from rag_kernel.decision_ledger import decisions_for, render_ledger
+
+    try:
+        rag = _json.loads(Path(args.rag).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        print(f"Error: cannot read RAG {args.rag}: {ex}", file=sys.stderr)
+        return 1
+
+    if args.item:
+        found = decisions_for(rag, args.item)
+        print(f"decision ledger — {len(found)} ruling(s) binding {args.item}")
+        for rec in found:
+            print(f"\n  {rec.get('id')} [{rec.get('session')}] "
+                  f"chose: {rec.get('chosen')}")
+            print(f"    Q: {str(rec.get('question'))[:160]}")
+        return 0
+
+    print(render_ledger(rag, limit=args.limit, live_only=args.live))
+    return 0
+
+
 def _resolve_context_dir(rag_dir: Path) -> Path:
     """Shared with cmd_context (KA-CTX-RAGFLAG): operators habitually pass a FILE to
     a --rag*-style flag; the context store lives in a DIRECTORY. When the path is (or
@@ -5825,6 +6157,10 @@ def main(argv: list[str] | None = None) -> int:
         "refresh-current-status": cmd_refresh_current_status,
         "migrate": cmd_migrate,
         "transplant": cmd_transplant,
+        "birth-adopt": cmd_birth_adopt,
+        "ingest": cmd_ingest,
+        "decide": cmd_decide,
+        "decisions": cmd_decisions,
         "register-asset": cmd_register_asset,
         "reuse-check": cmd_reuse_check,
         "inventory": cmd_inventory,
