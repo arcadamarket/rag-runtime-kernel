@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -73,6 +74,150 @@ class WALError(PersistenceError):
     """Raised on WAL I/O failures."""
 
 
+class ConcurrentWriterError(PersistenceError):
+    """Raised when another live process holds the single-writer lock on a RAG."""
+
+
+# ---------------------------------------------------------------------------
+# SINGLE-WRITER LOCK (S184)
+# ---------------------------------------------------------------------------
+#
+# Field cause: two agents — a parent kernel and its own clone — ran governed
+# verbs against ONE RAG_MASTER.json at the same moment. The write path is atomic
+# per write, so nothing was corrupted; but the concurrent access wedged a
+# Windows↔WSL 9p filesystem RPC into uninterruptible `D` state, and the clone's
+# boot hung with a 0-byte log and no way to tell a hang from slow progress.
+#
+# Atomicity is not mutual exclusion. `atomic_write` guarantees a reader never
+# sees half a file; it says nothing about two writers interleaving read-modify-
+# write cycles, which is exactly how a lost update happens: A loads, B loads, A
+# commits, B commits over A. That window was open on every governed write.
+#
+# The lock is advisory, holder-identified, and stale-tolerant:
+#   · O_CREAT|O_EXCL sidecar — the create IS the acquire, so there is no
+#     check-then-act race.
+#   · It records pid, host and utc, so a refusal NAMES the holder instead of
+#     saying "busy".
+#   · A lock whose pid is dead is stale and gets broken automatically — a
+#     killed agent must never brick the deployment (that failure mode would be
+#     strictly worse than the race it prevents).
+#   · Same-process re-entry is allowed: one verb legitimately writes several
+#     times (store mutation, then .bak parity, then meta touch).
+_LOCK_SUFFIX = ".lock"
+_LOCK_STALE_SECONDS = 900
+
+
+def _lock_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + _LOCK_SUFFIX)
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if pid is a live process. Unknown/unsupported reads as ALIVE (fail closed)."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True          # exists, owned by someone else
+    except OSError:
+        return True          # cannot tell -> assume held
+
+
+class single_writer:
+    """Context manager taking the advisory single-writer lock on a RAG file.
+
+    Raises :class:`ConcurrentWriterError` when a LIVE foreign holder exists. Never
+    blocks: a governed verb that cannot get the lock must fail loud and say who
+    has it, so the operator sees "another agent is writing" rather than a hang.
+    """
+
+    _held: "dict[str, int]" = {}          # path -> re-entry depth, this process
+
+    def __init__(self, path: Path, *, owner: str = "rag_kernel"):
+        self.path = Path(path)
+        self.owner = owner
+        self.lock = _lock_path(self.path)
+        self._acquired_here = False
+
+    def __enter__(self) -> "single_writer":
+        key = str(self.lock)
+        if single_writer._held.get(key):
+            single_writer._held[key] += 1     # re-entrant within one process
+            return self
+        self._break_if_stale()
+        payload = json.dumps({
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "owner": self.owner,
+            "utc": datetime.now(timezone.utc).isoformat(),
+        }).encode("utf-8")
+        try:
+            fd = os.open(str(self.lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise ConcurrentWriterError(self._holder_message()) from None
+        except OSError:
+            return self            # cannot lock (read-only dir) -> proceed un-locked
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        single_writer._held[key] = 1
+        self._acquired_here = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> "bool":
+        key = str(self.lock)
+        depth = single_writer._held.get(key, 0)
+        if depth > 1:
+            single_writer._held[key] = depth - 1
+            return False
+        single_writer._held.pop(key, None)
+        if self._acquired_here:
+            try:
+                self.lock.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return False
+
+    def _read_holder(self) -> dict:
+        try:
+            return json.loads(self.lock.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _break_if_stale(self) -> None:
+        if not self.lock.exists():
+            return
+        info = self._read_holder()
+        pid = int(info.get("pid") or 0)
+        age = None
+        try:
+            age = time.time() - self.lock.stat().st_mtime
+        except OSError:
+            pass
+        dead = not _pid_alive(pid)
+        expired = age is not None and age > _LOCK_STALE_SECONDS
+        if dead or expired:
+            try:
+                self.lock.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _holder_message(self) -> str:
+        info = self._read_holder()
+        return (
+            "another writer holds this RAG: "
+            f"pid={info.get('pid')} host={info.get('host')} "
+            f"owner={info.get('owner')} since={info.get('utc')}. "
+            "ONE AGENT PER RAG. Wait for it to finish, or if that process is gone "
+            f"delete {self.lock.name} and retry. Do NOT run two agents against one "
+            "deployment — that is what wedged the 9p transport in S183."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Atomic writes (M-020)
 # ---------------------------------------------------------------------------
@@ -110,6 +255,29 @@ def atomic_write(
     store is live. Runs BEFORE any byte is written. Same opt-in set as
     ``mirror_bak`` (the canonical RAG-state writers); generic writes leave it off.
     """
+    if guard_side_stores:
+        assert_no_side_stores(path)
+    # SINGLE-WRITER LOCK (S184): held across the whole read-modify-write commit,
+    # on the same opt-in set as mirror_bak/guard_side_stores — the canonical
+    # RAG-state writers. Generic writes (COLD, sidecars) stay lock-free.
+    if mirror_bak or guard_side_stores:
+        with single_writer(path, owner="atomic_write"):
+            return _atomic_write_unlocked(
+                path, data, mirror_bak=mirror_bak, guard_side_stores=False
+            )
+    return _atomic_write_unlocked(
+        path, data, mirror_bak=mirror_bak, guard_side_stores=False
+    )
+
+
+def _atomic_write_unlocked(
+    path: Path,
+    data: bytes,
+    *,
+    mirror_bak: bool = False,
+    guard_side_stores: bool = False,
+) -> None:
+    """The M-020 write sequence itself. Callers hold the lock; see atomic_write."""
     if guard_side_stores:
         assert_no_side_stores(path)
     tmp_path = path.with_suffix(path.suffix + ".tmp")

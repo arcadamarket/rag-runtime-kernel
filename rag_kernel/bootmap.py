@@ -73,6 +73,17 @@ META_POINTER_KEY = "bootmap_manifest"
 # Directories never mapped: the GC exclude set plus the dev worktree tree. Matched
 # by directory *name* during the walk (``GIT WORKTREES`` is the top-level dev tree).
 _EXCLUDE_DIRS = {
+    # ".boot" (S184): the BOOT-LOG-TEE transcript dir. Excluded because it is
+    # written BY the boot that then diffs the map — include it and every single
+    # boot manufactures its own coverage gap, which is a self-inflicted instance
+    # of the exact defect the tee was added to help diagnose. Derived diagnostic
+    # output, never governed state.
+    ".boot",
+    # ".trash" (S184): agent quarantine. Excluded so a quarantined tree does not
+    # register as N new governed files. NOTE this does NOT excuse trashing a
+    # REGISTERED asset — asset_registry still fails loud on that, deliberately:
+    # un-register first, then move. Governed order, not agent discretion.
+    ".trash",
     ".git", "__pycache__", "node_modules", ".venv", ".playwright-mcp",
     "GIT WORKTREES",
 }

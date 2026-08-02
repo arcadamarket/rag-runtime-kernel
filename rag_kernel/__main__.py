@@ -1010,6 +1010,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
+    # -- run (RUN-DETACH-AWAIT, S185): launch AND wait as ONE operation ---------
+    #
+    # wait-for below made waiting a verb. It did not make LAUNCHING one, so launch
+    # and wait stayed two agent actions with a pollable handle between them — and
+    # that window is the single generator behind four banked ERROR items (re-run
+    # it, kill it, ask about it, poll it). This verb closes the window by never
+    # returning control until the job is in a TERMINAL state.
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Launch a command detached AND wait for it in ONE call. Returns a "
+             "terminal state — DONE 0 / FAILED 1 / TIMEOUT 2 / DIED 3 — plus a "
+             "bounded tail. No intermediate handle exists to poll, deliberately.",
+    )
+    # dest is cmd_argv, NOT command: argparse already uses args.command for the
+    # subcommand name, and shadowing it makes the dispatch table unhashable.
+    run_parser.add_argument("cmd_argv", nargs="+", metavar="COMMAND",
+                            help="the command to run (use -- before it if it has flags)")
+    run_parser.add_argument("--log", type=Path, default=None,
+                            help="transcript path (default: <cwd>/.boot/run.log). "
+                                 "Always written, so a lost terminal is recovered by "
+                                 "a READ, never by re-running the job.")
+    run_parser.add_argument("--cwd", type=Path, default=None,
+                            help="working directory for the command")
+    run_parser.add_argument("--timeout", type=float, default=900.0,
+                            help="upper bound in seconds (default: 900). A TIMEOUT "
+                                 "means UNOBSERVED, not failed — the process is still "
+                                 "alive and exit 2 says so distinctly from DIED (3).")
+    run_parser.add_argument("--poll-ms", dest="poll_ms", type=int, default=1000,
+                            help="internal wait interval in ms (default: 1000). The "
+                                 "MACHINE waits here at zero tool round-trips; this is "
+                                 "not the E-081 agent polling that is banned.")
+    run_parser.add_argument("--emit", type=int, default=20,
+                            help="tail lines to return (default: 20; 0 = all)")
+    run_parser.add_argument("--detach", action="store_true",
+                            help="accepted for symmetry and readability; detaching is "
+                                 "unconditional — there is no attached mode.")
+    run_parser.add_argument("--await", dest="await_", action="store_true",
+                            help="accepted for symmetry; waiting is unconditional.")
+    run_parser.add_argument("--kill-on-timeout", dest="kill_on_timeout",
+                            action="store_true",
+                            help="SIGTERM the process group if the deadline passes. "
+                                 "OFF by default: killing an unobserved job that is "
+                                 "still making progress is worse than waiting again.")
+
     # -- wait-for (WAIT-PRIMITIVE: the sanctioned blocking wait, S176 -> S180) --
     # Long jobs run DETACHED to a file (E-081). This is how you wait for one:
     # server-side, inside the sanctioned transport, zero agent round-trips.
@@ -2928,6 +2972,136 @@ def _carry_forward_gate(
 
 
 # ---------------------------------------------------------------------------
+# GATE-AUTO-RECONCILE (S184) — repair DERIVED state, never ASSERTED state
+# ---------------------------------------------------------------------------
+#
+# Origin: the operator, after a birth in which every single carry-forward refusal
+# was mechanically repairable and every one of them was nonetheless handed to him
+# as a command to paste. "I want to say hello and expect it to run smooth."
+#
+# The classifier below is the whole design. A finding is repairable ONLY if the
+# repair is a pure function of canonical state — regenerate the derived artifact
+# and no fact is lost, because canonical already held it. Everything else is a
+# claim, and a claim can only be settled by a decision.
+#
+# REPAIRABLE (derived):
+#   map_coverage / boot-map drift  -> reseal the baseline from the live tree
+#   render_parity                  -> re-render the legacy arrays from tracked_items
+#   current_status_freshness       -> re-stamp the git-head token
+#   bak / .bak parity              -> re-mirror the backup from HOT
+#
+# NEVER REPAIRABLE (asserted) — deliberately enumerated so the list cannot grow
+# by accident:
+#   verify / spec coherence     a version skew or a surviving placeholder
+#   asset_registry              a registered file's content changed; refreshing
+#                               the checksum would erase the only signal that it did
+#   note_status_contradiction   a semantic disagreement between a human sentence
+#                               and a machine status
+#   side stores                 a second source of truth; Rule 13
+#   incomplete close            the predecessor's close aborted; `session-resume`
+#                               is a real recovery with real state to reconcile
+#   unsealed prior session      sealing it needs a SUMMARY and a HANDOFF that only
+#                               the session that did the work can write. Auto-sealing
+#                               would forge a close. This is the single most
+#                               important entry in this list.
+_REPAIRABLE_MARKERS = (
+    "map_coverage",
+    "boot-map",
+    "render_parity",
+    "current_status_freshness",
+    "bak_parity",
+    ".bak",
+)
+_NEVER_REPAIRABLE_MARKERS = (
+    "verify:",
+    "asset_registry",
+    "note_status_contradiction",
+    "side store",
+    "incomplete close",
+    "unsealed prior session",
+    "spec_completeness",
+    "record_coverage",
+)
+
+
+def _finding_is_repairable(finding: str) -> bool:
+    """Classify one gate finding. Fail CLOSED: unknown text is never repairable."""
+    low = finding.lower()
+    if any(m.lower() in low for m in _NEVER_REPAIRABLE_MARKERS):
+        return False
+    return any(m.lower() in low for m in _REPAIRABLE_MARKERS)
+
+
+def _auto_reconcile_gate(
+    rag_path: Path, rag_dir: Path, sid: str, findings: list[str], *,
+    strict: bool = False, git_head: "str | None" = None,
+) -> "tuple[list[str], bool, list[str]]":
+    """Repair the derived-state findings, then RE-RUN the gate once and return it.
+
+    Returns ``(repairs, ok, findings)``. The gate is re-run rather than assumed
+    clean — a repair that did not actually fix its finding must surface as a
+    refusal, not as an optimistic green. One pass only: a repair that needs a
+    second pass to hold is not a repair, it is a loop.
+    """
+    repairs: list[str] = []
+
+    # Only act when at least one finding is repairable AND none is asserted. A
+    # mixed batch is refused wholesale: repairing half of a broken state and then
+    # reporting the remainder invites acting on a partially-reconciled RAG.
+    if not any(_finding_is_repairable(f) for f in findings):
+        return repairs, False, findings
+    if any(not _finding_is_repairable(f) for f in findings):
+        return repairs, False, findings
+
+    joined = " ".join(findings).lower()
+
+    # 1. render_parity — re-render the legacy arrays from canonical tracked_items.
+    if "render_parity" in joined:
+        try:
+            rc = cmd_render(argparse.Namespace(rag=rag_path, apply=True, what=None))
+            repairs.append(
+                "render_parity: re-rendered legacy open_tasks/deferred_items from "
+                f"canonical tracked_items (rc={rc})"
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed repair must not crash the boot
+            repairs.append(f"render_parity: repair FAILED ({exc})")
+
+    # 2. current_status_freshness — re-stamp the git-head token only.
+    if "current_status_freshness" in joined:
+        try:
+            rc = cmd_refresh_current_status(argparse.Namespace(
+                rag=rag_path, session=sid, version=None, git_head=git_head,
+                tests=None, strict=False, dry_run=False,
+            ))
+            repairs.append(
+                f"current_status_freshness: re-stamped github_repo HEAD from the live "
+                f"worktree (rc={rc})"
+            )
+        except Exception as exc:  # noqa: BLE001
+            repairs.append(f"current_status_freshness: repair FAILED ({exc})")
+
+    # 3. map_coverage / boot-map drift — reseal the baseline from the live tree.
+    #    This is the S183 field failure: files authored AFTER a close left the map
+    #    stale and blocked the successor. Resealing loses nothing; the map IS the
+    #    derived artifact.
+    if "map_coverage" in joined or "boot-map" in joined:
+        try:
+            rc = cmd_bootmap(argparse.Namespace(
+                rag=rag_path, root=None, refresh=True, session=sid,
+                json_output=False,
+            ))
+            repairs.append(f"map_coverage: resealed the domain boot-map baseline (rc={rc})")
+        except Exception as exc:  # noqa: BLE001
+            repairs.append(f"map_coverage: repair FAILED ({exc})")
+
+    # Re-run the gate. Its verdict, not ours, decides whether the boot proceeds.
+    ok2, findings2 = _carry_forward_gate(
+        rag_path, strict=strict, git_head=git_head, rag_dir=rag_dir, new_sid=sid,
+    )
+    return repairs, ok2, findings2
+
+
+# ---------------------------------------------------------------------------
 # KA-14 — session-start rule-load attestation gate
 # ---------------------------------------------------------------------------
 #
@@ -3135,13 +3309,26 @@ def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None) -> str
         f"  inference_ledger: {len(open_items)} OPEN of {len(led)} total{overdue_txt}"
     )
     if isinstance(nsd, dict):
+        # DIRECTIVE-NO-TRUNCATE (S184). This was clipped to 300 chars with an
+        # ellipsis, which made the boot briefing the ONLY place a directive could
+        # be read and even there only its first paragraph. The directive is the
+        # highest-leverage artifact a session produces — E-095 was a directive
+        # DEFECT, and a successor cannot honour, or contradict, text it cannot
+        # see. token_economy governs verbose diagnostics, not the one field the
+        # next session is required to obey; a bounded emission that drops the
+        # binding instruction is not economy, it is data loss with a nice name.
+        # Wrapped for readability, never shortened.
         directive = " ".join(str(nsd.get("directive", "")).split())
-        if len(directive) > 300:
-            directive = directive[:300] + "…"
         lines.append(
             f"  next_session_directive: for {nsd.get('for_session', '?')} "
-            f"(by {nsd.get('session', '?')}) — {directive or '(none)'}"
+            f"(by {nsd.get('session', '?')}) — FULL TEXT, verbatim:"
         )
+        if directive:
+            import textwrap as _tw
+            for _ln in _tw.wrap(directive, width=96) or [directive]:
+                lines.append(f"    {_ln}")
+        else:
+            lines.append("    (none)")
     else:
         lines.append("  next_session_directive: (none)")
     lines.append(
@@ -3221,6 +3408,64 @@ def _session_start_attest(
     return 0
 
 
+class _BootTee:
+    """BOOT-LOG-TEE (S184) — mirror phase-1 stdout to a file, unconditionally.
+
+    Field cause (clone ERR-S3-DUP-SESSION-START): the transport returned "output
+    could not be captured" on a healthy pane three times, so the agent could not
+    read the attestation token — and RE-RAN `session-start`, a state-touching
+    governed verb, to recover it. The token was recoverable the whole time; only
+    the *channel* had failed.
+
+    A governed verb whose only copy of its output is the terminal makes re-running
+    it the cheapest recovery. So there is always a second copy: every phase-1 boot
+    writes its full transcript to ``<rag_dir>/.boot/session_start_<SID>.log`` and
+    prints that path FIRST, before anything that could be lost. Recovery becomes a
+    read, never a re-execution.
+
+    Best-effort by construction: if the log cannot be opened the boot proceeds
+    un-teed rather than failing. A diagnostic aid must never become a new gate.
+    """
+
+    def __init__(self, stream, path: "Path | None"):
+        self._stream = stream
+        self._fh = None
+        if path is not None:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._fh = open(path, "w", encoding="utf-8")
+            except OSError:
+                self._fh = None
+
+    def write(self, data):
+        n = self._stream.write(data)
+        if self._fh is not None:
+            try:
+                self._fh.write(data)
+            except OSError:
+                pass
+        return n
+
+    def flush(self):
+        self._stream.flush()
+        if self._fh is not None:
+            try:
+                self._fh.flush()
+            except OSError:
+                pass
+
+    def isatty(self):
+        return getattr(self._stream, "isatty", lambda: False)()
+
+    def close(self):
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+            self._fh = None
+
+
 def cmd_session_start(args: argparse.Namespace) -> int:
     """KA-6 + KA-14 — machine-enforced, rule-load-attested session-START ritual.
 
@@ -3266,6 +3511,29 @@ def cmd_session_start(args: argparse.Namespace) -> int:
     if getattr(args, "attest", None) is not None:
         return _session_start_attest(rag_path, rag_dir, sid, args.attest)
 
+    # BOOT-LOG-TEE (S184) — open the transcript mirror and announce it FIRST, so a
+    # transport that drops the rest of this output still leaves the agent a path to
+    # read instead of a verb to re-run.
+    _boot_log = rag_dir / ".boot" / f"session_start_{sid}.log"
+    _tee = _BootTee(sys.stdout, _boot_log)
+    _real_stdout = sys.stdout
+    sys.stdout = _tee
+    try:
+        print(f"[BOOT-LOG] Full transcript of this phase-1 boot: {_boot_log}")
+        print(
+            "  If this output is truncated or the transport drops it, READ THAT FILE. "
+            "Do NOT re-run session-start to recover the token (ERR-S3-DUP-SESSION-START)."
+        )
+        return _session_start_phase1(args, rag_path, rag_dir, sid)
+    finally:
+        sys.stdout = _real_stdout
+        _tee.close()
+
+
+def _session_start_phase1(
+    args: argparse.Namespace, rag_path: Path, rag_dir: Path, sid: str
+) -> int:
+    """Phase-1 body, extracted S184 so the BOOT-LOG-TEE can wrap it wholesale."""
     # 0. OPERATING FRAME — rendered BEFORE the gate, deliberately.
     #
     # S176 defect found by testing the S176 fix: the frame was rendered at step 3c,
@@ -3287,6 +3555,30 @@ def cmd_session_start(args: argparse.Namespace) -> int:
         rag_dir=rag_dir, new_sid=sid,
     )
     print("[1/4] Carry-forward gate:")
+    if not ok and not getattr(args, "no_auto_reconcile", False):
+        # GATE-AUTO-RECONCILE (S184). A gate that refuses at a HUMAN for a failure
+        # the kernel can repair itself is not a safety control, it is a chore. The
+        # split is not "safe vs unsafe" — it is DERIVED vs ASSERTED state:
+        #
+        #   DERIVED   regenerable from canonical with zero information loss —
+        #             the boot-map baseline, the legacy render arrays, the
+        #             current_status git-head snapshot. Repairing these cannot
+        #             destroy a fact, because canonical already holds it.
+        #   ASSERTED  a claim someone made — spec coherence, asset checksums,
+        #             note/status agreement, an unsealed predecessor's missing
+        #             summary. Repairing these would FABRICATE or ERASE a fact.
+        #
+        # Derived failures are repaired. Asserted failures stay fail-loud, forever.
+        # And nothing is silent: every repair is named, with its before/after, so
+        # self-healing never becomes self-concealing.
+        repairs, ok, findings = _auto_reconcile_gate(
+            rag_path, rag_dir, sid, findings,
+            strict=args.strict, git_head=getattr(args, "git_head", None),
+        )
+        if repairs:
+            print(f"  AUTO-RECONCILED — {len(repairs)} derived-state repair(s):")
+            for rep in repairs:
+                print(f"    · {rep}")
     if ok:
         print("  OK — inherited RAG coherent (verify + audit clean).")
     else:
@@ -3299,7 +3591,12 @@ def cmd_session_start(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             print(
-                "  Reconcile the inherited RAG (or pass --force to start anyway, UNSAFE).",
+                "  These findings are ASSERTED state: repairing them automatically "
+                "would fabricate or erase a fact, so they need a decision.",
+                file=sys.stderr,
+            )
+            print(
+                f"  Full boot transcript: {rag_dir / '.boot' / ('session_start_' + sid + '.log')}",
                 file=sys.stderr,
             )
             return 1
@@ -6087,6 +6384,12 @@ def _dispatch_with_bootstrap_log(
             pass  # never let observability break the command
 
 
+def _cmd_run_detach_await(args: argparse.Namespace) -> int:
+    """RUN-DETACH-AWAIT (S185) — thin CLI shim over rag_kernel.detach_run."""
+    from rag_kernel.detach_run import cmd_run as _run
+    return _run(args)
+
+
 def cmd_bootmap(args: argparse.Namespace) -> int:
     """ROOT-FILE-MANIFEST (S168) — deterministic domain boot-map verb.
 
@@ -6164,6 +6467,7 @@ def main(argv: list[str] | None = None) -> int:
         "register-asset": cmd_register_asset,
         "reuse-check": cmd_reuse_check,
         "inventory": cmd_inventory,
+        "run": _cmd_run_detach_await,
         "wait-for": cmd_wait_for,
         "verify": cmd_verify,
         "context": cmd_context,
