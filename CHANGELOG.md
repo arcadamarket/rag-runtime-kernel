@@ -2,6 +2,25 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.4.51] - 2026-08-04
+
+_ADOPT-DESTROYS-LOCAL-DIVERGENCE remediation -- the child-authored asset update path is promoted upstream so an adoption can no longer delete it._
+
+- **register-asset --update restored and promoted (S186).** A child deployment authored this verb at its own S5; adopting the byte-identical v0.4.50 package removed it, leaving that deployment unable to seal a session (three asset sha divergences, transfer_ready refused). Byte-identity IS the deletion mechanism, so a local verb only survives if it lives upstream. The update path re-hashes an existing id IN PLACE and pushes the prior sha256 onto its `supersedes` lineage; it refuses to re-aim an id at a different path (`AssetRebindError`), and a content change WITHOUT the flag stays fail-loud. Implementation promoted verbatim from the child.
+- **Anti-regression guard.** `test_cli_still_exposes_update` asserts the flag is PRESENT in the CLI, so a future adoption cannot silently drop it again. Same shape as the anti-poll guard on `run --detach --await`: the affordance is the contract, so its absence is what fails.
+- Suite 2265 -> 2271.
+
+## [v0.4.50] - 2026-08-02
+
+_Boot robustness + `run --detach --await`._ Released as 9bf524e. One call owns launch and wait with four distinct terminal states (DONE 0 / FAILED 1 / TIMEOUT 2 / DIED 3) and no intermediate handle to poll. Backfilled here in S186: this release shipped without a changelog entry.
+
+## [v0.4.49] - 2026-08-01
+
+_BIRTH-ADOPT + INGEST + DECISION-LEDGER; the B3-B5 gate._ Released as e292435. Backfilled here in S186: shipped without a changelog entry.
+
+## [v0.4.48] - 2026-07-31
+
+_Boot-map and report hardening._ Released as 12f1614. Backfilled here in S186: shipped without a changelog entry.
 ## [v0.4.47] — 2026-07-26
 
 _SPEC-PROMOTION-DRIFT + RULE19-PIN-REFRESH — the boot-integrity spine is promoted into

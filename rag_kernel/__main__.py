@@ -931,6 +931,11 @@ def build_parser() -> argparse.ArgumentParser:
                                   help="stable asset id (default: the project-relative POSIX path)")
     reg_asset_parser.add_argument("--session", type=str, required=True,
                                   help="session id recorded on the asset record")
+    reg_asset_parser.add_argument("--update", action="store_true",
+                                  help="the SAME file at the SAME path legitimately changed: re-hash "
+                                       "the existing id in place and push the prior sha256 onto its "
+                                       "`supersedes` lineage. Refuses to re-aim an id at a different "
+                                       "path. Without this flag a content change stays fail-loud.")
     reg_asset_parser.add_argument("--rag-dir", type=Path, default=_default_rag_path().parent,
                                   help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
     reg_asset_parser.add_argument("--project-root", type=Path, default=None,
@@ -5857,15 +5862,18 @@ def cmd_register_asset(args: argparse.Namespace) -> int:
         rec, action = register_asset(
             rag_dir, asset_id=asset_id, path=args.path, purpose=args.purpose,
             session=args.session, project_root=project_root, dry_run=args.dry_run,
+            update=getattr(args, "update", False),
         )
     except AssetRegistryError as ex:
         print(f"Error: {ex}", file=sys.stderr)
         return 1
 
     if args.dry_run:
-        head = "[DRY RUN] would register"
+        head = "[DRY RUN] would register" if action != "updated" else "[DRY RUN] would update"
     elif action == "idempotent":
         head = "already registered (idempotent -- no write)"
+    elif action == "updated":
+        head = "UPDATED in place"
     else:
         head = "registered"
     print(f"register-asset: {head} [session {args.session}]:")
@@ -5873,8 +5881,16 @@ def cmd_register_asset(args: argparse.Namespace) -> int:
     print(f"  path:    {rec.path}")
     print(f"  purpose: {rec.purpose}")
     print(f"  sha256:  {rec.sha256}")
+    if rec.supersedes:
+        prior = rec.supersedes[-1]
+        print(f"  supersedes: sha256 {str(prior.get('sha256', ''))[:12]}… "
+              f"registered {prior.get('registered_utc')} by session {prior.get('session')} "
+              f"({len(rec.supersedes)} prior revision(s) retained)")
     if action == "created" and not args.dry_run:
         print(f"  -> appended to RAG_CONTEXT.json[{PARTITION_NAME}] (non-loaded store; no .bak).")
+    if action == "updated" and not args.dry_run:
+        print(f"  -> record rewritten in RAG_CONTEXT.json[{PARTITION_NAME}]; the id and its "
+              f"path are unchanged, only the content hash and its lineage.")
     return 0
 
 

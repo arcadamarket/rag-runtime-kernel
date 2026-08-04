@@ -37,6 +37,18 @@ DESIGN CONTRACT
    rebound. The same PATH under a different id is fail-loud
    (:class:`AssetPathCollisionError`) — that IS the re-authoring this guard exists
    to surface.
+1a. **A registered asset that legitimately CHANGES has a governed update path**
+   (``update=True`` / ``register-asset --update``). Without it the registry
+   punished the normal case — edit a registered file, and `audit` raises an
+   asset_registry divergence that NO verb can clear, so the only exits are a
+   permanent audit error or a hand-edit of the store (a side-store violation).
+   That is the guard training agents to ignore the auditor, which is worse than
+   the drift it catches. The update is deliberately NARROW: it re-hashes an
+   EXISTING id whose stored PATH is unchanged, and appends the superseded
+   ``{sha256, session, registered_utc}`` to ``supersedes`` so the record keeps
+   its lineage. Pointing an id at a DIFFERENT path is still fail-loud — that,
+   not a content change, is what "a stable handle" protects. An update without
+   ``--update`` remains fail-loud, so drift is never silently absorbed.
 2. **Reuse-check never writes.** It answers "what already covers this
    path/purpose?" and returns the matches; the CLI turns a non-empty result into
    a fail-loud non-zero exit so an agent reuses instead of rewrites.
@@ -94,7 +106,13 @@ class AssetFileNotFoundError(AssetRegistryError):
 
 class DuplicateAssetError(AssetRegistryError):
     """The asset_id already exists with DIFFERENT content. An id is a stable handle;
-    rebinding it is forbidden — register a new id or reuse the existing asset."""
+    rebinding it is forbidden — register a new id, reuse the existing asset, or, when
+    the SAME file has legitimately changed, re-register it with ``update=True``."""
+
+
+class AssetRebindError(AssetRegistryError):
+    """``update=True`` was asked to point an existing id at a DIFFERENT path. The
+    update path re-hashes a file in place; it never re-aims the handle."""
 
 
 class AssetPathCollisionError(AssetRegistryError):
@@ -115,9 +133,13 @@ class AssetRecord:
     sha256: str
     session: str
     registered_utc: str
+    #: Lineage of superseded content for this id, oldest first. Each entry is
+    #: ``{sha256, session, registered_utc}``. Empty for a record never updated, and
+    #: OMITTED from ``to_dict`` when empty so pre-existing rows round-trip byte-identically.
+    supersedes: tuple = ()
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "asset_id": self.asset_id,
             "path": self.path,
             "purpose": self.purpose,
@@ -125,9 +147,13 @@ class AssetRecord:
             "session": self.session,
             "registered_utc": self.registered_utc,
         }
+        if self.supersedes:
+            d["supersedes"] = [dict(s) for s in self.supersedes]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "AssetRecord":
+        prior = d.get("supersedes") or []
         return cls(
             asset_id=str(d.get("asset_id", "")),
             path=str(d.get("path", "")),
@@ -135,6 +161,7 @@ class AssetRecord:
             sha256=str(d.get("sha256", "")),
             session=str(d.get("session", "")),
             registered_utc=str(d.get("registered_utc", "")),
+            supersedes=tuple(dict(s) for s in prior if isinstance(s, dict)),
         )
 
     def identity_matches(self, other: "AssetRecord") -> bool:
@@ -249,13 +276,17 @@ def register_asset(
     session: str,
     project_root: Optional[Path | str] = None,
     dry_run: bool = False,
+    update: bool = False,
     now: Optional[str] = None,
 ) -> tuple[AssetRecord, str]:
     """Register ``path`` under ``asset_id``. Returns ``(record, action)``.
 
-    ``action`` is ``"created"`` (a new row was appended / would be) or ``"idempotent"``
-    (an identical row already exists — no write). Raises :class:`DuplicateAssetError`
-    (id exists, different content), :class:`AssetPathCollisionError` (path exists under
+    ``action`` is ``"created"`` (a new row was appended / would be), ``"idempotent"``
+    (an identical row already exists — no write), or ``"updated"`` (``update=True`` and
+    the same id at the same path re-hashed in place, prior content pushed onto
+    ``supersedes``). Raises :class:`DuplicateAssetError` (id exists with different
+    content and ``update`` was not asked for), :class:`AssetRebindError` (``update``
+    aimed at a different path), :class:`AssetPathCollisionError` (path exists under
     another id), or :class:`AssetFileNotFoundError` (file missing). Nothing is written
     on any raise, nor under ``dry_run``.
     """
@@ -277,16 +308,28 @@ def register_asset(
     reg = load_registry(rag_dir)
     existing = [AssetRecord.from_dict(a) for a in reg.get("assets", []) if isinstance(a, dict)]
 
+    superseded: Optional[AssetRecord] = None
     for rec in existing:
         if rec.asset_id == asset_id:
             if rec.identity_matches(candidate):
                 return rec, "idempotent"  # same id, same content — no-op
-            raise DuplicateAssetError(
-                f"asset_id {asset_id!r} already registered with different content "
-                f"(stored path={rec.path!r} sha256={rec.sha256[:12]}…; incoming "
-                f"path={candidate.path!r} sha256={sha[:12]}…) — an id is a stable "
-                f"handle; register a new id or reuse the existing asset"
-            )
+            if not update:
+                raise DuplicateAssetError(
+                    f"asset_id {asset_id!r} already registered with different content "
+                    f"(stored path={rec.path!r} sha256={rec.sha256[:12]}…; incoming "
+                    f"path={candidate.path!r} sha256={sha[:12]}…) — an id is a stable "
+                    f"handle. If this is the SAME file and it legitimately changed, "
+                    f"re-register with --update; otherwise register a new id or reuse "
+                    f"the existing asset"
+                )
+            if rec.path != stored:
+                raise AssetRebindError(
+                    f"--update refuses to re-aim asset_id {asset_id!r} from {rec.path!r} "
+                    f"to {stored!r}. The update path re-hashes a file in place; a handle "
+                    f"is never pointed at a different file. Register a new id instead"
+                )
+            superseded = rec
+            continue
         if rec.path == stored and rec.asset_id != asset_id:
             raise AssetPathCollisionError(
                 f"path {stored!r} is already registered under id {rec.asset_id!r} — "
@@ -294,6 +337,28 @@ def register_asset(
                 f"existing asset (this is the re-authoring REUSE-REGISTRY-GUARD exists "
                 f"to catch)"
             )
+
+    if superseded is not None:
+        candidate = AssetRecord(
+            asset_id=candidate.asset_id, path=candidate.path, purpose=candidate.purpose,
+            sha256=candidate.sha256, session=candidate.session,
+            registered_utc=candidate.registered_utc,
+            supersedes=(*superseded.supersedes, {
+                "sha256": superseded.sha256,
+                "session": superseded.session,
+                "registered_utc": superseded.registered_utc,
+            }),
+        )
+        if dry_run:
+            return candidate, "updated"
+        rows = [candidate.to_dict() if AssetRecord.from_dict(a).asset_id == asset_id else a
+                for a in reg.get("assets", []) if isinstance(a, dict)]
+        reg = {**reg, "assets": rows}
+        reg.setdefault("_protocol", DEFAULT_PROTOCOL)
+        mgr = _manager(rag_dir)
+        mgr.path.parent.mkdir(parents=True, exist_ok=True)
+        mgr.update_partition(PARTITION_NAME, reg)
+        return candidate, "updated"
 
     if dry_run:
         return candidate, "created"
