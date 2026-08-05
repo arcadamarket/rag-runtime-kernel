@@ -2,6 +2,13 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.4.53] - 2026-08-04
+
+_SEAL-REPORT-STALE-SURFACE + SEAL-BOOTMAP-ORDER-GAP -- the close ritual stops sealing artifacts that describe a state it has already left._
+
+- **The boot-map is resealed LAST.** It used to reseal at step 1c, mid-ritual, before the logger close and before the canonical report were written -- so every artifact the close produced afterwards landed OUTSIDE the sealed baseline and the next boot opened on a coverage gap. It now runs as step 5/5, after the transfer marker, once every file this close creates exists on disk.
+- **A stale transfer surface can no longer be sealed.** `_report_state_drift` compares the seq the rendered report asserts against the live RAG immediately before the COMPLETE marker is written. On a mismatch the close refuses, leaves the marker SURFACE_PENDING and stays resumable. S185 sealed a report naming seq 284 while the RAG was at 285; the child deployment sealed a superseded HEAD the same day. Two deployments, no shared code path -- an ordering defect, not a slip.
+- Suite 2290 -> 2294.
 ## [v0.4.52] - 2026-08-04
 
 _PUSH-DESTINATION-UNGOVERNED + ADOPT-DESTROYS-LOCAL-DIVERGENCE -- the two invariants whose absence let a child deployment publish into the wrong account and lose a local verb._

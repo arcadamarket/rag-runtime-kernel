@@ -4051,19 +4051,11 @@ def _drive_close(
             "verbatim-matched (KA-INTENT-FIDELITY inc1)."
         )
 
-    # Step 1c — ROOT-FILE-MANIFEST (bootmap S168): reseal the domain boot-map as
-    # the sealed baseline the NEXT boot diffs against, and set the one-line
-    # meta.rag_files pointer. Runs after the checkpoint (so the map captures
-    # everything banked this session) and before the audit (so check_map_coverage
-    # sees a fresh baseline == disk). Advisory-fail: a map hiccup must never strand
-    # an otherwise-green close, so it warns rather than aborting.
-    try:
-        from rag_kernel import bootmap
-        _bm_path = bootmap.refresh_baseline(rag_dir.parent, rag_dir, sid)
-        bootmap.ensure_meta_pointer(rag_path)
-        print(f"[1c] Domain map resealed: {_bm_path.name} (+.bak parity).")
-    except Exception as _bm_exc:
-        print(f"  WARN: could not reseal domain boot-map: {_bm_exc}", file=sys.stderr)
+    # Step 1c REMOVED S186 (SEAL-BOOTMAP-ORDER-GAP): the domain boot-map
+    # used to be resealed HERE, mid-ritual -- before the logger close and
+    # before the report artifact were written. Everything produced after it
+    # therefore landed OUTSIDE the sealed baseline, and the next boot opened
+    # on a coverage gap. The reseal now runs LAST, after the transfer marker.
 
     # Step 2/4 — close the session logger (KA-4 gate satisfied by step 1).
     if not steps.get("logger_close"):
@@ -4215,6 +4207,22 @@ def _drive_close(
         )
         return 1
 
+    _surface = None
+    if close_report_path is not None:
+        try:
+            _surface = Path(close_report_path).read_text(encoding="utf-8")
+        except OSError:
+            _surface = None
+    _drift = _report_state_drift(rag_path, _surface)
+    if _drift:
+        print(
+            f"ERROR: SEAL-REPORT-STALE-SURFACE -- {_drift}. transfer_ready "
+            "NOT set (marker SURFACE_PENDING, resumable). Re-render the "
+            "report against current state and re-run session-resume.",
+            file=sys.stderr,
+        )
+        return 1
+
     _write_close_marker(
         rag_path,
         _build_close_marker(
@@ -4222,6 +4230,19 @@ def _drive_close(
         ),
     )
     print("[4/4] Transfer marker: transfer_ready=true (phase COMPLETE).")
+
+    # Step 5/5 (S186, SEAL-BOOTMAP-ORDER-GAP) -- reseal the domain boot-map
+    # LAST, once every artifact this close produces exists on disk: the
+    # session log, the canonical report and the transfer marker. Sealing
+    # earlier is what handed a successor a coverage gap on an otherwise
+    # clean close. Advisory-fail: a map hiccup must not strand a green seal.
+    try:
+        from rag_kernel import bootmap
+        _bm_path = bootmap.refresh_baseline(rag_dir.parent, rag_dir, sid)
+        bootmap.ensure_meta_pointer(rag_path)
+        print(f"[5/5] Domain map resealed LAST: {_bm_path.name} (+.bak parity).")
+    except Exception as _bm_exc:
+        print(f"  WARN: could not reseal domain boot-map: {_bm_exc}", file=sys.stderr)
     verb = "resumed and completed" if resuming else "ended cleanly"
     print(
         f"Session {sid} {verb}: checkpoint + ERROR_LOG + close + audit all green; "
@@ -4249,6 +4270,35 @@ def _drive_close(
             file=sys.stderr,
         )
     return 0
+
+
+def _report_state_drift(rag_path, report_text: str):
+    """Return a drift message if the rendered report no longer describes reality.
+
+    SEAL-REPORT-STALE-SURFACE (S186). A close artifact is a transfer surface
+    only while it describes the state at the moment of sealing. S185 sealed a
+    report naming seq 284 while the live RAG was at seq 285, and the child
+    deployment reproduced the same defect the same day, which makes it a defect
+    in the ritual ORDER rather than a local slip. The report is rendered before
+    the transfer marker is written, so anything that moves state in between
+    turns the surface into a plausible lie -- strictly worse than a missing one.
+    """
+    import json as _j
+    import re as _re
+    m = _re.search(r"seq\s+(\d+)", report_text or "")
+    if not m:
+        return None
+    try:
+        live = _j.loads(Path(rag_path).read_text(encoding="utf-8"))
+        live_seq = (live.get("meta") or {}).get("last_checkpoint_seq")
+    except Exception:
+        return None
+    if live_seq is None or int(m.group(1)) == int(live_seq):
+        return None
+    return (
+        f"report asserts seq {m.group(1)} but the live RAG is at seq {live_seq}; "
+        f"the state moved after the report was rendered"
+    )
 
 
 def cmd_session_end(args: argparse.Namespace) -> int:
