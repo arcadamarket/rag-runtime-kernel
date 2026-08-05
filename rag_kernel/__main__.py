@@ -1153,6 +1153,46 @@ def build_parser() -> argparse.ArgumentParser:
     bootmap_parser.add_argument("--json", dest="json_output", action="store_true",
                                 help="output the map/diff as JSON")
 
+    # -- deployment (DEPLOYMENT-REGISTRY: authorized destinations as FIELDS, S186) --
+    dep_parser = subparsers.add_parser(
+        "deployment",
+        help=("Read or set meta.deployments fields -- notably authorized_remote "
+              "and authorized_identity, the facts a push gate checks against. "
+              "Refuses an unrecorded deployment and an unsettable field."),
+    )
+    dep_parser.add_argument("--rag", type=Path, default=None, help="Path to RAG_MASTER.json")
+    dep_parser.add_argument("--list", action="store_true", help="render the registry (read-only)")
+    dep_parser.add_argument("--key", type=str, default=None, help="deployment key in meta.deployments")
+    dep_parser.add_argument("--field", type=str, default=None, help="field to set")
+    dep_parser.add_argument("--value", type=str, default=None, help="new value")
+    dep_parser.add_argument("--session", type=str, default=None, help="session id (audit trail)")
+
+    # -- push-check (PUSH-DESTINATION GATE, S186) --
+    push_parser = subparsers.add_parser(
+        "push-check",
+        help=("Refuse a push whose remote is not the declared authorized_remote "
+              "for that deployment. REFUSE-BY-DEFAULT: an undeclared destination "
+              "is refused, because absence of a declaration is not permission. "
+              "Also refuses a credential embedded in the remote URL."),
+    )
+    push_parser.add_argument("--rag", type=Path, default=None, help="Path to RAG_MASTER.json")
+    push_parser.add_argument("--deployment", type=str, required=True, help="deployment key")
+    push_parser.add_argument("--root", type=Path, required=True, help="working tree holding the remote")
+    push_parser.add_argument("--remote", type=str, default="origin", help="remote name")
+
+    # -- adopt-preflight (ADOPT-DESTROYS-LOCAL-DIVERGENCE, S186) --
+    pre_parser = subparsers.add_parser(
+        "adopt-preflight",
+        help=("Before a runtime redeploy, enumerate what the TARGET would LOSE "
+              "-- modules, verbs and flags it holds that the incoming package "
+              "does not -- and refuse unless --accept-local-loss. Byte-identity "
+              "is a deletion mechanism."),
+    )
+    pre_parser.add_argument("--target", type=Path, required=True, help="dir CONTAINING the target rag_kernel/")
+    pre_parser.add_argument("--source", type=Path, required=True, help="dir CONTAINING the incoming rag_kernel/")
+    pre_parser.add_argument("--accept-local-loss", dest="accept_local_loss", action="store_true",
+                            help="delete the listed local work deliberately")
+
     return parser
 
 
@@ -6406,6 +6446,79 @@ def _cmd_run_detach_await(args: argparse.Namespace) -> int:
     return _run(args)
 
 
+def cmd_deployment(args: argparse.Namespace) -> int:
+    """Read or set meta.deployments fields through the guarded atomic store."""
+    from rag_kernel.deployment_registry import (
+        DeploymentRegistryError, load_deployments, set_deployment_field_in_file,
+    )
+    from rag_kernel.drift_store import load_hot
+
+    rag_path = args.rag or _default_rag_path()
+    try:
+        if args.list or not args.field:
+            deps = load_deployments(load_hot(rag_path))
+            if not deps:
+                print("deployment: registry is EMPTY -- every destination is refused.")
+                return 0
+            for key in sorted(deps):
+                rec = deps[key]
+                print(f"{key}")
+                for k in sorted(rec):
+                    print(f"    {k}: {rec[k]}")
+            return 0
+        if not (args.key and args.value is not None and args.session):
+            print("Error: --key, --field, --value and --session are all required to set.",
+                  file=sys.stderr)
+            return 2
+        set_deployment_field_in_file(
+            rag_path, args.key, args.field, args.value, session=args.session,
+        )
+    except DeploymentRegistryError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+    print(f"deployment {args.key}: {args.field} set [session {args.session}]")
+    print("  written atomically; .bak refreshed to byte-parity.")
+    return 0
+
+
+def cmd_push_check(args: argparse.Namespace) -> int:
+    """Refuse a push to an undeclared or mismatched destination."""
+    from rag_kernel.deployment_registry import (
+        DeploymentRegistryError, check_push_destination,
+    )
+
+    rag_path = args.rag or _default_rag_path()
+    try:
+        result = check_push_destination(
+            rag_path, args.deployment, args.root, remote=args.remote,
+        )
+    except DeploymentRegistryError as ex:
+        print(f"REFUSED: {ex}", file=sys.stderr)
+        return 1
+    print(f"push-check: {result.message}")
+    print(f"  declared: {result.declared}")
+    return 0
+
+
+def cmd_adopt_preflight(args: argparse.Namespace) -> int:
+    """Enumerate what a redeploy would delete in the target, and refuse."""
+    from rag_kernel.adopt_preflight import PreflightError, assert_safe_to_adopt
+
+    try:
+        div = assert_safe_to_adopt(
+            args.target, args.source, accept_local_loss=args.accept_local_loss,
+        )
+    except PreflightError as ex:
+        print(f"{ex}", file=sys.stderr)
+        return 1
+    if div.clean:
+        print("adopt-preflight: SAFE -- " + div.render())
+    else:
+        print("adopt-preflight: PROCEEDING UNDER --accept-local-loss; deleting:")
+        print(div.render())
+    return 0
+
+
 def cmd_bootmap(args: argparse.Namespace) -> int:
     """ROOT-FILE-MANIFEST (S168) — deterministic domain boot-map verb.
 
@@ -6487,6 +6600,9 @@ def main(argv: list[str] | None = None) -> int:
         "wait-for": cmd_wait_for,
         "verify": cmd_verify,
         "context": cmd_context,
+        "deployment": cmd_deployment,
+        "push-check": cmd_push_check,
+        "adopt-preflight": cmd_adopt_preflight,
         "bootmap": cmd_bootmap,
     }
     return _dispatch_with_bootstrap_log(

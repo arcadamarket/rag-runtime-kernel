@@ -2,6 +2,16 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.4.52] - 2026-08-04
+
+_PUSH-DESTINATION-UNGOVERNED + ADOPT-DESTROYS-LOCAL-DIVERGENCE -- the two invariants whose absence let a child deployment publish into the wrong account and lose a local verb._
+
+- **`deployment` verb (new).** meta.deployments gains governed setters for `authorized_remote`, `authorized_identity`, `current_runtime` and friends. Until now the registry recorded root, rag, blueprint, runbook and born_runtime -- and nothing about WHERE a deployment may push, so an inherited git `origin` was indistinguishable from an authorization. Refuses an unrecorded deployment and any field outside the allowlist; writes atomically with .bak parity.
+- **`push-check` verb (new).** Refuses a push whose remote owner/repo is not the declared `authorized_remote`. REFUSE-BY-DEFAULT: an undeclared destination is refused, because absence of a declaration is not permission. Also refuses a credential embedded in a remote URL -- that is how a PAT reached a log on 2026-08-04.
+- **`adopt-preflight` verb (new).** Before a runtime redeploy, enumerate what the TARGET would LOSE and refuse unless `--accept-local-loss`. Compares BOTH the module list and the CLI surface (subcommands + option strings), because the S186 regression was invisible at file level: the module survived, one flag did not. Replayed against the real incident it reports `FLAGS only in target: register-asset --update` and exits 1.
+- **Probe provenance guard.** A bare `sys.path.insert` does not stop an import falling through to another `rag_kernel` already on the path, which would introspect the wrong package and report zero losses. The probe now verifies where the package resolved from and fails loud; UNKNOWN is a refusal, never an empty set.
+- **Deployment records are dicts, not underscore-free keys.** The first cut filtered `_`-prefixed keys to skip `_purpose` prose -- which would have hidden `_ONLINE_BIZ_PROJECT` and `_CONTENT_FACTORY_PROJECT`, two of the three real deployments. Caught by its own test before release.
+- Suite 2271 -> 2290.
 ## [v0.4.51] - 2026-08-04
 
 _ADOPT-DESTROYS-LOCAL-DIVERGENCE remediation -- the child-authored asset update path is promoted upstream so an adoption can no longer delete it._

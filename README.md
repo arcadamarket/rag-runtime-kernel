@@ -21,12 +21,12 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
 | **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 2,050 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.8** | Runtime kernel **v0.4.51** |
+| **Version** | Specification **v3.2.8** | Runtime kernel **v0.4.52** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
 
-> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.8`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.51`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
+> **On the two version numbers.** This repo tracks two things on separate version lines: the **specification** (the protocol the LLM follows — currently `v3.2.8`) and the **runtime kernel** (the Python engine that enforces it — currently `v0.4.52`). Tier 1 uses the spec alone; Tier 2 uses the runtime to enforce that spec.
 
 ---
 
