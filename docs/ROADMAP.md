@@ -4,6 +4,39 @@
 
 ---
 
+## v0.4.55 — Released (2026-08-07)
+
+**The S178–S187 forensic audit, and the gates it demanded.** A ten-session audit
+found the same shape eight times: a rule existed, was recited at every boot, and was
+checked by nothing. This release converts those into machine gates — and labels the
+one that cannot be converted as the hope it is, rather than pretending otherwise.
+
+| Component | Status |
+|---|---|
+| `tests` verb — measured suite + provenance stamp; a cached pass decays to STALE by itself (REPORT-TESTS-GATE-UNMEASURED) | Shipped |
+| `meta` verb — governed REFUSE-BY-DEFAULT setter for declared `meta.*` scalars (META-SETTER-GAP) | Shipped |
+| `forensics` verb — a session's conduct rendered from its own log; emitted at every close (SELF-DIAGNOSIS-UNSOURCED) | Shipped |
+| `check_kernel_copy_lockstep` — deployed kernel == tested kernel, as an invariant rather than a habit | Shipped |
+| Close refuses to seal on ERROR_LOG silence; `--no-errors` must declare (CLOSE-STEP-ERRLOG-UNENFORCED) | Shipped |
+| Mutating verbs refused after a COMPLETE seal (CLOSE-DOUBLE-SEAL-S187) | Shipped |
+| `meta.record_cutover` — declarable record-coverage cutover (INFERENCE-KIND-LATENT-COUPLING) | Shipped |
+| Rules 32 / 33, each labelled machine-supported or operator-detected | Shipped |
+| Suite 2,294 → **2,509**; modules 20 → 23; `audit --strict` green for the first time since S183 | Shipped |
+
+**Deliberately NOT closed** (stated, not buried): `AGENT-SIDE-WAIT-GAP` — polling is
+now *detected*, not *prevented*; `GATE-OR-HOPE-PRINCIPLE` — 2 of 53 rules classified;
+`ERROR-KIND-UNDECLARED` — the coupling is defused but the 44-record migration is not
+done; `CLAIM-AUDIT-SWEEP` — untouched.
+
+## v0.4.54 — Released (2026-08-07)
+
+**Commit the S186/S187 working-tree delta.** 1,061 insertions across 11 files plus
+three untracked modules had been live, tested and enforcing rules since 2026-08-05
+while existing in no commit and no tag. RELEASE items backfilled for v0.4.50–v0.4.55
+so the report's build cell cannot freeze again (it had named v0.4.49 since S179).
+
+---
+
 ## v0.2.0 — Released (2026-05-22)
 
 **Paradigm shift: fully autonomous OS-level Python backbone.** LLM role reduced to task assignor, results checker, orchestrator. All bootstrapping, state management, validation, and persistence run as deterministic Python scripts consuming zero LLM tokens.

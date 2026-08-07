@@ -2,6 +2,27 @@
 
 All notable changes to the RAG Runtime Kernel specification and tooling.
 
+## [v0.4.55] - 2026-08-07
+
+_The S178-S187 forensic audit, and the gates it demanded. A rule that can be violated silently is a hope; this release converts eight of them into gates and honestly labels the one that cannot be._
+
+- **`tests` verb (new) — the seal MEASURES the suite.** The report's Tests cell was whatever the agent typed into `--tests`: S184 and S185 sealed `n/a`, S186 typed 2294, S187 typed 2,409. `tests --run` executes the suite, parses the summary and stamps `meta.test_gate` with the count **and the runtime version + git HEAD it was measured against**. The verdict is tri-state, so a cached pass decays to `STALE` on its own when the code moves — verified live: the stamp went stale by itself the moment this release was committed. (REPORT-TESTS-GATE-UNMEASURED)
+- **`meta` verb (new) — governed setter for `meta.*` scalars.** REFUSE-BY-DEFAULT over a declared allowlist; container keys refused by name with the verb that owns them; typed coercion that fails loud (an int field refuses `"two hundred"` *and* refuses `True`); a no-op writes nothing so HOT/.bak parity is preserved. (META-SETTER-GAP, open since S186)
+- **`forensics` verb (new) — a session's conduct, rendered from its own log.** Wall time, governed-call count, failed calls with their REAL elapsed cost, silent gaps, repeat bursts (the machine-visible shadow of polling), double-seal detection. The close emits it automatically. S187 explained a 4h00 session by naming a 5-second event while holding the log that said 81% of the time sat in five silent gaps. (SELF-DIAGNOSIS-UNSOURCED)
+- **Kernel-copy lockstep is now an invariant.** `RAG/rag_kernel` and the tested worktree copy were kept byte-identical by hand. `check_kernel_copy_lockstep` audits them every run, distinguishing deployed-only (running code no test has seen), tested-only, and differing content. It caught this session's own drift twice. (KERNEL-COPY-LOCKSTEP-UNGATED)
+- **The close refuses to seal on silence.** `steps.error_log` had been recorded since S139 and checked by nothing, while ERROR_LOG.md went unwritten from S183 through S187. A close now banks an entry or DECLARES the session clean with `--no-errors`; absence of a declaration is not permission. (CLOSE-STEP-ERRLOG-UNENFORCED)
+- **A sealed session cannot be written to.** S187 wrote two `session_end` records with eight canonical mutations between them, so the first seal attested a state that no longer existed. 23 mutating verbs are now refused when they name a session already sealed COMPLETE, with the repair named. Read-only verbs are untouched and the guard fails OPEN if it cannot read the marker. (CLOSE-DOUBLE-SEAL-S187)
+- **The record-coverage cutover is declarable.** Banking one honest `kind=ERROR` finding used to retroactively demand canonical items for all 44 legacy `E-###` headings. `meta.record_cutover` makes migration state a stated fact; absent a declaration the historical behaviour is preserved byte-for-byte. A rule you must remember not to trip is a trap, not a rule. (INFERENCE-KIND-LATENT-COUPLING)
+- **Rules 32 and 33**, each labelled with its enforcement class: SELF-DIAGNOSIS-SOURCING (machine-supported) and GOVERNANCE-BY-QUESTION-BAN (**operator-detected**, declared a hope rather than dressed up as a gate).
+- Suite 2294 -> **2509**. Modules 20 -> 23. `audit --strict` green for the first time since S183.
+
+## [v0.4.54] - 2026-08-07
+
+_Commit the S186/S187 working-tree delta -- the running kernel existed in no commit for two sessions._
+
+- **1,061 insertions across 11 files plus 3 untracked modules committed.** `measured.py`, the drift_render 1.4.0 `priority_actions` surface and `prune-current-status` had been live and tested since 2026-08-05 while existing in no commit and no tag: a `git checkout` would have erased them without trace. Tested code equalled running code; neither equalled anything git knew about. (KERNEL-DELTA-UNCOMMITTED)
+- **RELEASE items backfilled for v0.4.50 through v0.4.55**, so the report's build cell can no longer freeze — it had named v0.4.49 @ e292435 since S179, four releases behind. (REPORT-BUILD-CELL-STALE)
+
 ## [v0.4.53] - 2026-08-04
 
 _SEAL-REPORT-STALE-SURFACE + SEAL-BOOTMAP-ORDER-GAP -- the close ritual stops sealing artifacts that describe a state it has already left._

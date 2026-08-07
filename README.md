@@ -19,9 +19,9 @@ It ships in **two tiers** so it fits both a non-technical user pasting one file 
 | **Who it's for** | Anyone. No Python, no Node, no install. | Builders of large, multi-session, token-critical projects who want hard guarantees. |
 | **What you run** | One markdown specification, dropped into a chat session. | The `rag_kernel` Python runtime (MCP or HTTP server) alongside the spec. |
 | **How rules are applied** | The LLM **self-enforces** the spec by instruction (autonomous). | The Python kernel **intercepts and validates** every state change. The LLM cannot bypass it. |
-| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 2,050 passing tests. |
+| **Determinism** | As reliable as the model following instructions. | Deterministic state machine — formally verified (TLA+) and covered by 2,509 passing tests. |
 | **Token cost of state ops** | The model reads and reasons over the spec (~100 KB). | **Zero LLM tokens** for bootstrap, validation, persistence, and recovery — they run in Python. |
-| **Version** | Specification **v3.2.8** | Runtime kernel **v0.4.53** |
+| **Version** | Specification **v3.2.8** | Runtime kernel **v0.4.55** |
 | **Setup effort** | Seconds. Paste a file. | Minutes. Copy `rag_kernel/`, run one command. |
 
 > **Same project, same RAG files.** Start in Tier 1 and graduate to Tier 2 without rewriting anything — the enforced runtime reads and writes the exact same `RAG/` state. Tier 2 is a strict superset of Tier 1.
