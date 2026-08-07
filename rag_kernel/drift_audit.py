@@ -71,7 +71,9 @@ also *verifies* that every render still equals the state it persisted.
               "check_context_side_stores", "check_secrets_boundary",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
-              "check_current_status_coherence", "check_manifest_version_binding",
+              "check_current_status_coherence", "check_current_status_archived_keys",
+              "check_state_machine_status", "check_measured_doc_provenance",
+              "check_manifest_version_binding",
               "check_placeholder_tokens", "check_project_context_placeholders",
               "check_template_keys",
               "check_written_by_session", "check_session_id_coherence",
@@ -92,7 +94,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from rag_kernel.drift_control import (
     ItemKind,
@@ -219,7 +221,24 @@ from rag_kernel import persistence
 #         VALUE at the INGESTING path before commit merges it into HOT) and the
 #         audit-time boundary check draw from ONE source of truth. Behaviour of
 #         check_secrets_boundary is unchanged (pure refactor + new public export).
-DRIFT_AUDIT_VERSION = "1.14.0"
+# 1.15.0 — META-SETTER-GAP residue (S187): check_current_status_archived_keys
+#         WARNS for every session-stamped snapshot key left on the live
+#         current_status surface (next_session_directive_S133, session_finding_
+#         S77_E045, fv_phase3_S35 …). Detection is single-sourced in
+#         drift_store.archived_current_status_keys and shared with the repair
+#         verb `prune-current-status`, so flag and fix can never disagree.
+# 1.16.0 — STATE-MACHINE-STATUS-INVALID (S187): check_state_machine_status ERRORs
+#         when state_machine_status holds a value no transition produces. The
+#         legal set is imported from spec_parser.VALID_STATE_MACHINE_STATUS
+#         (hoisted out of SpecParser.validate, which audit never ran), so the
+#         parser and the auditor agree on what a state IS by construction.
+# 1.17.0 — RUNBOOK-TABLE-NO-INVARIANT (S187): check_measured_doc_provenance
+#         WARNS when a document's MEASURED provenance stamp names a runtime/spec
+#         the live world has moved past. Replaces the hand-run "re-measure before
+#         you trust this document" instruction that four consecutive runbook
+#         revisions shipped stale past. Opt-in per document via the stamp, so an
+#         unstamped tree audits exactly as before.
+DRIFT_AUDIT_VERSION = "1.17.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -501,6 +520,11 @@ def check_render_parity(hot: dict) -> list[AuditFinding]:
     canonical array. A hand-edit of either array — the drift inc 4 removed — makes
     them diverge and is caught here. An ABSENT legacy array is not a parity error
     (nothing was hand-edited); it is simply un-rendered.
+
+    S187 (PRIORITY-ACTIONS-STALE-SNAPSHOT) extends the same assertion to
+    ``priority_actions``, which until now was the one backlog surface the check
+    did not cover — which is exactly how a frozen S133 prose snapshot survived
+    54 sessions of green audits and got re-briefed at every boot.
     """
     findings: list[AuditFinding] = []
     store = TrackedItemStore.from_hot(hot)
@@ -532,6 +556,21 @@ def check_render_parity(hot: dict) -> list[AuditFinding]:
                     f"tracked_items ({len(actual_d) if isinstance(actual_d, list) else '?'} "
                     f"persisted vs {len(expected_d)} rendered) — hand-edited? run "
                     "`rag_kernel render --apply`"
+                ),
+            ))
+
+    if "priority_actions" in hot:
+        expected_p = drift_render.render_priority_actions(store)
+        actual_p = hot["priority_actions"]
+        if actual_p != expected_p:
+            findings.append(AuditFinding(
+                check="render_parity",
+                severity=ERROR,
+                detail=(
+                    "persisted priority_actions does not match the render of "
+                    f"tracked_items ({len(actual_p) if isinstance(actual_p, list) else '?'} "
+                    f"persisted vs {len(expected_p)} rendered P1 items) — hand-authored "
+                    "snapshot? run `rag_kernel render --apply`"
                 ),
             ))
     return findings
@@ -1433,6 +1472,118 @@ def check_current_status_coherence(hot: dict) -> list[AuditFinding]:
             ),
         ))
     return findings
+
+
+def check_measured_doc_provenance(
+    docs: "Iterable[Path] | None",
+    *,
+    live_runtime: str = "",
+    live_spec: str = "",
+) -> list[AuditFinding]:
+    """WARNING per document whose MEASURED table the live runtime has outrun (S187).
+
+    RUNBOOK-TABLE-NO-INVARIANT. A measured table is evidence with a shelf life. The
+    runbook's own §0.4 — "RE-MEASURE BEFORE YOU TRUST THIS DOCUMENT" — is prose, and
+    prose caught none of the four consecutive staleness events it was written for.
+    This is the gate version: a document stamps what it was measured against, and
+    the auditor fails when the live world has moved past the stamp.
+
+    WARNING, not ERROR: the numbers are UNVERIFIED, not proven wrong, and a stale
+    reference document must not block an unrelated session's close. ``audit --strict``
+    still fails on it, which is what forces the re-measure. Self-skips entirely when
+    no docs are supplied, so the default audit path is unchanged.
+    """
+    from rag_kernel.measured import stale_measurements
+
+    if not docs:
+        return []
+    findings: list[AuditFinding] = []
+    for meas, reasons in stale_measurements(
+        docs, live_runtime=live_runtime, live_spec=live_spec
+    ):
+        findings.append(AuditFinding(
+            check="measured_doc_provenance",
+            severity=WARNING,
+            detail=(
+                f"{Path(meas.path).name}:{meas.line} — measured table is UNVERIFIED: "
+                + "; ".join(reasons)
+                + f" (stamped by {meas.session or 'an unrecorded session'}). "
+                "Re-measure and re-stamp, or the numbers below it are prose."
+            ),
+        ))
+    return findings
+
+
+def check_state_machine_status(hot: dict) -> list[AuditFinding]:
+    """ERROR if ``state_machine_status`` is not a legal state (S187).
+
+    STATE-MACHINE-STATUS-INVALID. The legal set was enforced ONLY by
+    ``spec_parser.SpecParser.validate``, which runs on ``init`` / ``configure`` —
+    never on ``audit``. This kernel's own RAG therefore carried
+    ``state_machine_status = "COMPLETE"``: a value no transition produces and no
+    guard admits, sitting on the canonical state through every green session-end
+    audit. A state machine whose status field can hold a non-state is not a state
+    machine, so this is an ERROR, not a warning.
+
+    The set is imported from ``spec_parser``, not restated here — the parser and the
+    auditor must agree on what a state IS by construction. Self-skips when the key
+    is absent (an un-migrated RAG declares no state machine); ``""`` is legal and
+    means "not yet declared".
+    """
+    from rag_kernel.spec_parser import VALID_STATE_MACHINE_STATUS
+
+    if not isinstance(hot, dict) or "state_machine_status" not in hot:
+        return []
+    sms = hot.get("state_machine_status")
+    if isinstance(sms, str) and sms in VALID_STATE_MACHINE_STATUS:
+        return []
+    legal = ", ".join(sorted(s for s in VALID_STATE_MACHINE_STATUS if s))
+    return [AuditFinding(
+        check="state_machine_status",
+        severity=ERROR,
+        detail=(
+            f"state_machine_status = {sms!r} is not a legal state — the machine "
+            f"admits only {legal} (or \"\" for not-yet-declared). No transition "
+            "produces this value; repair it with `rag_kernel checkpoint --status "
+            "<STATE>`"
+        ),
+    )]
+
+
+def check_current_status_archived_keys(hot: dict) -> list[AuditFinding]:
+    """WARNING for each session-stamped ARCHIVED key left in ``current_status``.
+
+    META-SETTER-GAP residue (S187). ``current_status`` is the LIVE status surface;
+    a key stamped with the session that authored it (``next_session_directive_S133``,
+    ``session_finding_S77_E045``, ``fv_phase3_S35``) is a frozen snapshot of a field
+    whose live form is unsuffixed, or of a finding whose home is now ``tracked_items``.
+    22 of them accreted unnoticed because no invariant looked and no governed verb
+    could remove them — ``refresh-current-status`` re-stamps TOKENS, it never removes
+    KEYS, so the only available repair was the hand edit ``tool_contract`` forbids.
+
+    WARNING, not ERROR: an archived key is dead weight on the boot surface, not a
+    false claim about reality, and a deployment mid-migration may legitimately carry
+    one for a session. ``audit --strict`` still fails on it, which is the gate that
+    makes it get cleaned up. The detection predicate is single-sourced in
+    ``drift_store.archived_current_status_keys`` and shared with the repair verb.
+    """
+    from rag_kernel.drift_store import archived_current_status_keys
+
+    if not isinstance(hot, dict):
+        return []
+    stale = archived_current_status_keys(hot)
+    if not stale:
+        return []
+    shown = ", ".join(stale[:5]) + (f", … (+{len(stale) - 5} more)" if len(stale) > 5 else "")
+    return [AuditFinding(
+        check="current_status_archived_keys",
+        severity=WARNING,
+        detail=(
+            f"current_status carries {len(stale)} archived session-stamped key(s) "
+            f"[{shown}] — frozen snapshots on the live status surface; remove them "
+            "with `rag_kernel prune-current-status`"
+        ),
+    )]
 
 
 # ---------------------------------------------------------------------------
@@ -2363,6 +2514,11 @@ def audit_hot(
     findings += check_errlog_id_coherence(error_log_path)
     findings += check_current_status_freshness(hot, version=version, git_head=git_head)
     findings += check_current_status_coherence(hot)
+    # META-SETTER-GAP residue (S187): archived session-stamped keys on the live
+    # status surface. WARNING-severity, so --strict is the gate that forces cleanup.
+    findings += check_current_status_archived_keys(hot)
+    # STATE-MACHINE-STATUS-INVALID (S187): the status field must hold a real state.
+    findings += check_state_machine_status(hot)
     # KA-5/E-046: single-source manifest version binding — pure introspection over
     # the kernel package (no hot input), always-on.
     findings += check_manifest_version_binding()
@@ -2498,6 +2654,26 @@ def audit_file(
     extra += check_wal_integrity(p.parent / wal_name)
     extra += check_bak_parity(p, hot)
     extra += check_cold_hot_version(p.parent / cold_name, hot)
+    # RUNBOOK-TABLE-NO-INVARIANT (S187): measured tables in project documents. The
+    # scan is scoped to *.md at the project root + the RAG dir — where this project's
+    # runbooks and handoffs actually live — and only fires on a document that opted
+    # in by carrying a MEASURED stamp, so an unstamped tree audits exactly as before.
+    try:
+        from rag_kernel import __spec_version__ as _live_spec
+    except Exception:  # noqa: BLE001 — spec version is advisory for this check
+        _live_spec = ""
+    _doc_roots = {p.parent}
+    if use_root is not None:
+        _doc_roots.add(Path(use_root))
+    _measured_docs: list[Path] = []
+    for _dr in _doc_roots:
+        try:
+            _measured_docs.extend(sorted(_dr.glob("*.md")))
+        except OSError:
+            continue
+    extra += check_measured_doc_provenance(
+        _measured_docs, live_runtime=version or "", live_spec=_live_spec or ""
+    )
     # REUSE-REGISTRY-GUARD: baked-asset registry integrity. RAG_CONTEXT.json lives in
     # the RAG dir (= p.parent); project root = use_root (default: the grandparent).
     extra += check_asset_registry(
@@ -2558,6 +2734,9 @@ __all__ = [
     "reconciliation_surfaces",
     "check_current_status_freshness",
     "check_current_status_coherence",
+    "check_current_status_archived_keys",
+    "check_state_machine_status",
+    "check_measured_doc_provenance",
     "check_placeholder_tokens",
     "check_project_context_placeholders",
     "check_template_keys",

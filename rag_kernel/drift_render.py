@@ -110,7 +110,12 @@ from rag_kernel.persistence import atomic_write_json
 #         the itemized authority), and labels the un-triaged catch-all explicitly
 #         instead of a silent "Unassigned". Section 2 / the milestone cell name the
 #         LIVE released build (release_ref/version) over a stale newest-RELEASE row.
-DRIFT_RENDER_VERSION = "1.3.0"
+# 1.4.0 — PRIORITY-ACTIONS-STALE-SNAPSHOT (S187): ``priority_actions`` becomes a
+#         render (``render_priority_actions``) of the ACTIVE P1 backlog instead of
+#         a hand-authored S133 prose snapshot, is written by ``apply_renders`` and
+#         is covered by the auditor's render_parity check — so the boot briefing
+#         can no longer name a superseded agenda.
+DRIFT_RENDER_VERSION = "1.4.0"
 
 # The non-terminal, actionable statuses — the "open backlog".
 ACTIVE_STATUSES: frozenset[ItemStatus] = frozenset(
@@ -226,6 +231,38 @@ def render_deferred_items(
         for it in store
         if it.status == ItemStatus.DEFERRED and it.kind in BACKLOG_KINDS
     ]
+
+
+def render_priority_actions(
+    source: TrackedItemStore | dict | Iterable[TrackedItem],
+) -> list[str]:
+    """Render the legacy ``priority_actions`` array from the canonical store.
+
+    PRIORITY-ACTIONS-STALE-SNAPSHOT (S187). ``priority_actions`` was the last
+    hand-authored backlog surface in the RAG: a frozen S133 prose snapshot whose
+    own text said it was superseded, re-briefed verbatim at every boot while it
+    contradicted the live P1 set. It becomes a projection like ``open_tasks``.
+
+    Holds ONLY the *actionable* P1 backlog — ``priority_group == "P1"`` AND a
+    non-terminal status AND a backlog kind — id-sorted, one stable line each.
+    A RESOLVED P1 item drops out: a closed item is not an action. An empty P1
+    set renders an empty list, which is the honest state, not a stale agenda.
+    """
+    store = _as_store(source)
+    out: list[str] = []
+    for it in store:  # id-sorted
+        if it.kind not in BACKLOG_KINDS:
+            continue  # INFERENCE / ERROR records are not task backlog
+        if it.status not in ACTIVE_STATUSES:
+            continue
+        if it.priority_group != "P1":
+            continue
+        session = it.session or "—"
+        line = f"{it.id} [P1 · {it.status.value} · {session}]: {it.title}"
+        if it.note:
+            line += f" — {it.note}"
+        out.append(line)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +523,7 @@ def render_all(
     return {
         "open_tasks": render_open_tasks(store),
         "deferred_items": render_deferred_items(store),
+        "priority_actions": render_priority_actions(store),
         "backlog": render_backlog_section(store, gated=gated),
         "inference_records": render_records_by_kind(store, ItemKind.INFERENCE),
         "error_records": render_records_by_kind(store, ItemKind.ERROR),
@@ -493,7 +531,10 @@ def render_all(
 
 
 def apply_renders(hot: dict) -> dict:
-    """Regenerate ``open_tasks`` + ``deferred_items`` in ``hot`` from tracked_items.
+    """Regenerate the derived backlog arrays in ``hot`` from tracked_items.
+
+    ``open_tasks`` + ``deferred_items`` (inc 4) and — since S187 — ``priority_actions``
+    (PRIORITY-ACTIONS-STALE-SNAPSHOT), the last hand-authored backlog surface.
 
     Pure on the dict (mutates and returns ``hot``). The canonical ``tracked_items``
     array is never touched — only the derived arrays are overwritten — so this is
@@ -508,6 +549,7 @@ def apply_renders(hot: dict) -> dict:
     store = TrackedItemStore.from_hot(hot)
     hot["open_tasks"] = render_open_tasks(store)
     hot["deferred_items"] = render_deferred_items(store)
+    hot["priority_actions"] = render_priority_actions(store)
     return hot
 
 

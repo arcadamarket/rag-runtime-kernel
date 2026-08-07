@@ -206,7 +206,7 @@ class TestRenderCommand:
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
         assert set(data) == {
-            "open_tasks", "deferred_items", "backlog",
+            "open_tasks", "deferred_items", "priority_actions", "backlog",
             "inference_records", "error_records",
         }
 

@@ -71,6 +71,19 @@ VERSION_PLACEHOLDER = "<SPEC_VERSION>"
 # now born coherent rather than caught after the fact.
 ISO_PLACEHOLDER = "<ISO>"
 
+#: STATE-MACHINE-STATUS-INVALID (S187). The legal states of the runtime state
+#: machine. This set previously existed ONLY as a literal inside
+#: ``SpecParser.validate``, which runs on ``init`` / ``configure`` — never on
+#: ``audit``. So this kernel's own RAG carried ``state_machine_status = "COMPLETE"``
+#: — a value no transition can produce and no guard admits — through every green
+#: session-end audit. Hoisted to a module constant so the parser's validation and
+#: the auditor's invariant read the SAME set and cannot drift apart; ``""`` is legal
+#: and means "not yet declared" (a pre-init RAG), not "any value goes".
+VALID_STATE_MACHINE_STATUS: frozenset[str] = frozenset({
+    "BOOTING", "READY", "INGESTING", "WORKING",
+    "CHECKPOINTING", "CLOSING", "RECOVERY", "",
+})
+
 # Minimal void RAG — valid structure with empty fields
 VOID_RAG: dict[str, Any] = {
     "meta": {
@@ -658,16 +671,12 @@ class SpecParser:
                 f"(expected 'autonomous' or 'enforced')"
             )
 
-        # State machine status validation
-        valid_states = {
-            "BOOTING", "READY", "INGESTING", "WORKING",
-            "CHECKPOINTING", "CLOSING", "RECOVERY", ""
-        }
+        # State machine status validation — single-sourced (S187, see module const).
         sms = rag.get("state_machine_status", "")
-        if sms not in valid_states:
+        if sms not in VALID_STATE_MACHINE_STATUS:
             errors.append(
                 f"Invalid state_machine_status: {sms!r} "
-                f"(expected one of {valid_states})"
+                f"(expected one of {set(VALID_STATE_MACHINE_STATUS)})"
             )
 
         return errors

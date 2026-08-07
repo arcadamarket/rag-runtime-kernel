@@ -931,6 +931,92 @@ _CS_RELEASE_RE = re.compile(
 # Fields whose labeled release tokens are current-release claims to guard/refresh.
 _CS_RELEASE_FIELDS: tuple[str, ...] = ("github_repo", _CS_VERSION_FIELD)
 
+# CS-SECONDARY-PROSE-DRIFT (S187). ``_CS_VERSION_FIELD`` is the ONE field whose
+# leading vX.Y.Z token the E-043 guard and the refresh verb reach. Any OTHER
+# current_status field that states a deployed-runtime version in prose is invisible
+# to both — which is how ``runtime_deployment`` sat at "Runtime v0.4.46 deployed"
+# through five releases while ``rag_kernel_version`` read v0.4.53 and every audit
+# passed clean. These fields carry the SAME machine fact (the deployed runtime
+# version), so they are refreshed from the SAME authority. Listed explicitly rather
+# than sniffed: a version-shaped token in an arbitrary narrative field is not
+# necessarily a claim about the live runtime, and guessing is the drift, not the fix.
+_CS_SECONDARY_VERSION_FIELDS: tuple[str, ...] = ("runtime_deployment",)
+
+# META-SETTER-GAP residue (S187). ``current_status`` accreted per-session SNAPSHOT
+# keys — ``next_session_directive_S59`` … ``_S147``, ``session_finding_S77_E045``,
+# ``fv_phase3_S35`` — archived copies of a field whose LIVE form is unsuffixed, or
+# of a finding whose home is now ``tracked_items``. No governed verb could reach
+# them (refresh-current-status re-stamps tokens; it never removes keys), so the only
+# way to clear them was the hand edit ``tool_contract`` forbids. The predicate is
+# purely structural: a trailing ``_S<digits>`` session stamp, optionally followed by
+# an ``_E<digits>`` error stamp. Every LIVE key (rag_kernel_version, github_repo,
+# unit_tests, runtime_deployment, security, readme, logo, funding, …) is unstamped,
+# so the pattern cannot reach one. Single-sourced here and consumed by BOTH the
+# auditor (to flag) and ``prune-current-status`` (to repair) — detection and repair
+# can never disagree.
+_CS_ARCHIVED_KEY_RE = re.compile(r"_S\d+(?:_E\d+)?$")
+
+
+def archived_current_status_keys(hot: dict) -> list[str]:
+    """Return the session-stamped ARCHIVED ``current_status`` keys, sorted.
+
+    Pure. An absent / non-dict ``current_status`` yields ``[]`` — nothing to prune
+    is not an error. The live unsuffixed fields are never matched by construction.
+    """
+    cs = hot.get(CURRENT_STATUS_KEY)
+    if not isinstance(cs, dict):
+        return []
+    return sorted(k for k in cs if _CS_ARCHIVED_KEY_RE.search(k))
+
+
+def prune_current_status_file(
+    path: Path | str,
+    *,
+    keys: Optional[Iterable[str]] = None,
+    now: Optional[str] = None,
+    touch_meta: bool = True,
+    dry_run: bool = False,
+) -> "tuple[list[str], bool]":
+    """Atomically remove ARCHIVED session-stamped keys from ``current_status``.
+
+    The repair half of META-SETTER-GAP residue. Load -> select -> on a real change:
+    delete the keys, ``_touch_meta``, ``atomic_write_json`` (tmp -> verify -> .bak
+    parity -> rename). Returns ``(removed, wrote)``.
+
+    ``keys`` narrows the removal to an explicit subset; every name supplied MUST
+    satisfy the archived predicate, so this verb can never be aimed at a live field
+    — that refusal is the whole point of routing the edit through a governed verb.
+    Nothing is written on ``dry_run`` or when there is nothing to remove, so
+    HOT == ``.bak`` is preserved either way.
+    """
+    p = Path(path)
+    hot = load_hot(p)
+    archived = archived_current_status_keys(hot)
+    if keys is None:
+        targets = archived
+    else:
+        requested = sorted(set(keys))
+        illegal = [k for k in requested if k not in archived]
+        if illegal:
+            raise CurrentStatusRefreshError(
+                "refusing to prune non-archived current_status key(s): "
+                + ", ".join(illegal)
+                + " — only session-stamped (_S<n>[_E<n>]) keys are prunable"
+            )
+        targets = requested
+    if dry_run or not targets:
+        return targets, False
+    cs = dict(hot[CURRENT_STATUS_KEY])
+    for k in targets:
+        cs.pop(k, None)
+    hot[CURRENT_STATUS_KEY] = cs
+    if touch_meta:
+        _touch_meta(hot, now)
+    atomic_write_json(  # FIX-4 (K6): parity-mirror .bak; FIX-7 (T1): live side-store guard
+        p, hot, mirror_bak=True, guard_side_stores=True
+    )
+    return targets, True
+
 
 class CurrentStatusRefreshError(DriftStoreError):
     """Raised when current_status is absent, or a --strict-required token is missing."""
@@ -1019,6 +1105,14 @@ def compute_current_status_refresh(
     # 1. runtime version — the leading vX.Y.Z token must equal rag_kernel.__version__.
     if version:
         _plan(_CS_VERSION_FIELD, "version", _CS_VERSION_TOKEN_RE, version.lstrip("v"))
+        # 1b. CS-SECONDARY-PROSE-DRIFT (S187): the SAME machine fact restated in a
+        # secondary narrative field. Refreshed from the same authority; a field that
+        # is absent or carries no version token is skipped, never invented — these
+        # are secondary restatements, so their absence is not a repair failure.
+        for _fld in _CS_SECONDARY_VERSION_FIELDS:
+            _raw = cs.get(_fld)
+            if isinstance(_raw, str) and _CS_VERSION_TOKEN_RE.search(_raw):
+                _plan(_fld, "version", _CS_VERSION_TOKEN_RE, version.lstrip("v"))
 
     # 2. git HEAD — the FIRST head-bearing field's "LATEST COMMIT <sha>" pointer.
     if git_head:

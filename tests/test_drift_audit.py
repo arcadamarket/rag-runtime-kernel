@@ -89,7 +89,7 @@ def _rendered_hot(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_severities():
-    assert DRIFT_AUDIT_VERSION == "1.14.0"
+    assert DRIFT_AUDIT_VERSION == "1.17.0"
     assert ERROR == "error" and WARNING == "warning"
 
 
@@ -182,6 +182,54 @@ def test_render_parity_detects_deferred_items_hand_edit():
 def test_absent_legacy_arrays_are_not_a_parity_error():
     # A HOT with only the canonical array (nothing rendered yet) is not "drift".
     hot = {"meta": {}, TRACKED_ITEMS_KEY: _clean_store().to_list()}
+    assert check_render_parity(hot) == []
+
+
+# ---------------------------------------------------------------------------
+# priority_actions parity (PRIORITY-ACTIONS-STALE-SNAPSHOT, S187)
+# ---------------------------------------------------------------------------
+
+def _p1_store():
+    """A store with an ACTIVE P1, a RESOLVED P1 and a non-P1 active item."""
+    return TrackedItemStore([
+        _item("P1-LIVE", ItemStatus.OPEN, session="S60", priority_group="P1"),
+        _item("P1-DONE", ItemStatus.RESOLVED, session="S55", priority_group="P1"),
+        _item("P2-LIVE", ItemStatus.OPEN, session="S60", priority_group="P2"),
+        _item("UNTRIAGED", ItemStatus.IN_PROGRESS, session="S61"),
+    ])
+
+
+def test_priority_actions_renders_only_active_p1():
+    rendered = drift_render.render_priority_actions(_p1_store())
+    assert len(rendered) == 1
+    assert rendered[0].startswith("P1-LIVE [P1 · OPEN · S60]:")
+
+
+def test_apply_renders_writes_priority_actions():
+    hot = _rendered_hot(_p1_store())
+    assert hot["priority_actions"] == drift_render.render_priority_actions(
+        TrackedItemStore.from_hot(hot)
+    )
+    assert check_render_parity(hot) == []
+
+
+def test_render_parity_detects_stale_priority_actions_snapshot():
+    """The S187 regression: a frozen hand-authored prose blob must now fail."""
+    hot = _rendered_hot(_p1_store())
+    hot["priority_actions"] = ["[S133 snapshot; superseded] P1 KA-13 -> P2"]
+    findings = check_render_parity(hot)
+    assert any(
+        f.check == "render_parity"
+        and f.severity == ERROR
+        and "priority_actions" in f.detail
+        for f in findings
+    )
+
+
+def test_empty_p1_renders_empty_not_stale():
+    store = TrackedItemStore([_item("ONLY-P3", ItemStatus.OPEN, priority_group="P3")])
+    hot = _rendered_hot(store)
+    assert hot["priority_actions"] == []
     assert check_render_parity(hot) == []
 
 

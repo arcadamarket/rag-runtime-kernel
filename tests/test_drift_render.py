@@ -65,7 +65,7 @@ def _hot_from(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_active_statuses():
-    assert DRIFT_RENDER_VERSION == "1.3.0"
+    assert DRIFT_RENDER_VERSION == "1.4.0"
     assert ACTIVE_STATUSES == frozenset({ItemStatus.OPEN, ItemStatus.IN_PROGRESS})
 
 
@@ -168,9 +168,10 @@ def test_error_log_backlog_lists_open_and_deferred():
 
 def test_render_all_shape():
     out = render_all(_mixed_store())
-    # inc6 expanded render_all to also surface the INFERENCE/ERROR record renders.
+    # inc6 expanded render_all to also surface the INFERENCE/ERROR record renders;
+    # S187 (PRIORITY-ACTIONS-STALE-SNAPSHOT) added the priority_actions render.
     assert set(out) == {
-        "open_tasks", "deferred_items", "backlog",
+        "open_tasks", "deferred_items", "priority_actions", "backlog",
         "inference_records", "error_records",
     }
 

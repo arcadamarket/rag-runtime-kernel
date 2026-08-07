@@ -67,6 +67,9 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "update-rule": "Re-set an EXISTING operating_protocol rule (string or dict/JSON value) or one sub-key of a dict rule through the guarded atomic store (UPDATE-RULE-VERB, fail-loud on a missing target unless --create)",
     "migrate": "Migrate a DEPLOYMENT's RAG meta up to the schema this kernel speaks — declared additive ladder, reads the target's own meta, refuses to downgrade a deploy that is ahead, fails loud on an unknown origin version, no-op when already current (KA-SCHEMA-MIGRATE)",
     "refresh-current-status": "Re-stamp current_status machine-facts (runtime version + git HEAD, optional --tests count) through the guarded atomic store — the governed repair for the E-043 freshness guard (KA-CS-REFRESH)",
+    "prune-current-status": "Remove ARCHIVED session-stamped keys from current_status through the guarded atomic store — the governed repair for the META-SETTER-GAP residue refresh-current-status cannot reach (S187)",
+    "list-kinds": "Print the INGEST kinds THIS deployment declares, with destinations — the authoritative set `ingest` enforces; a sender that cannot enumerate them can only guess (INGEST-KIND-UNVALIDATED, S187)",
+    "measured": "List MEASURED provenance stamps in project documents and flag the ones the live runtime/spec has outrun — the machine form of 're-measure before you trust this document' (RUNBOOK-TABLE-NO-INVARIANT, S187)",
     "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)",
     "context": "Read/write the sanctioned, non-loaded RAG_CONTEXT.json project-context store (set|get|list) — FIX-11 inc2 / U3"
   },
@@ -524,19 +527,26 @@ def build_parser() -> argparse.ArgumentParser:
     # -- render (DRIFT-ELIM increment 4: project tracked_items into legacy surfaces) --
     render_parser = subparsers.add_parser(
         "render",
-        help="Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from the canonical tracked_items array.",
+        help="Render legacy open_tasks/deferred_items/priority_actions/backlog/ERROR_LOG from the canonical tracked_items array.",
     )
     render_parser.add_argument(
         "--rag", type=Path, default=_default_rag_path(),
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
     )
     render_parser.add_argument(
-        "--what", choices=["open_tasks", "deferred_items", "backlog", "error_log", "all"],
+        "--what",
+        choices=[
+            "open_tasks", "deferred_items", "priority_actions",
+            "backlog", "error_log", "all",
+        ],
         default="all", help="Which render to emit (default: all)",
     )
     render_parser.add_argument(
         "--apply", action="store_true",
-        help="Write the rendered open_tasks + deferred_items back into the RAG atomically (else dry-run/print only).",
+        help=(
+            "Write the rendered open_tasks + deferred_items + priority_actions back "
+            "into the RAG atomically (else dry-run/print only)."
+        ),
     )
     render_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
@@ -799,6 +809,20 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_cs_parser.add_argument("--dry-run", action="store_true",
                                    help="show the planned old->new token changes without writing")
 
+    # -- prune-current-status (META-SETTER-GAP residue: governed removal of archived keys) --
+    prune_cs_parser = subparsers.add_parser(
+        "prune-current-status",
+        help="Remove ARCHIVED session-stamped keys (next_session_directive_S<n>, session_finding_S<n>_E<n>, …) from current_status through the guarded atomic store — the governed repair for the META-SETTER-GAP residue that refresh-current-status cannot reach.",
+    )
+    prune_cs_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    prune_cs_parser.add_argument("--session", type=str, required=True, help="session id (audit trail; stamps meta.last_updated_utc)")
+    prune_cs_parser.add_argument("--keys", nargs="*", default=None,
+                                 help="prune ONLY these keys (each must satisfy the archived predicate; a live field REFUSES). Default: every archived key.")
+    prune_cs_parser.add_argument("--list", action="store_true",
+                                 help="list the archived keys and exit without writing")
+    prune_cs_parser.add_argument("--dry-run", action="store_true",
+                                 help="show which keys would be removed without writing")
+
     # -- migrate (KA-SCHEMA-MIGRATE: governed deployment-facing schema/version uplift) --
     migrate_parser = subparsers.add_parser(
         "migrate",
@@ -874,6 +898,30 @@ def build_parser() -> argparse.ArgumentParser:
                                help="cap the rendered create-list (Rule 17; 0 = all)")
     ingest_parser.add_argument("--json", dest="as_json", action="store_true",
                                help="output the plan as JSON")
+
+    # -- list-kinds (INGEST-KIND-UNVALIDATED: the enumerable half of the contract) --
+    list_kinds_parser = subparsers.add_parser(
+        "list-kinds",
+        help="Print the INGEST kinds THIS deployment declares, with their destinations. The authoritative set a sender must use: `ingest` REFUSES any other kind, and a sender that cannot enumerate the receiver's kinds can only guess (HANDOFF-PRESCRIPTION-BAN).",
+    )
+    list_kinds_parser.add_argument("--json", dest="as_json", action="store_true",
+                                   help="output as JSON")
+
+    # -- measured (RUNBOOK-TABLE-NO-INVARIANT: measured tables that go stale loudly) --
+    measured_parser = subparsers.add_parser(
+        "measured",
+        help="List the MEASURED provenance stamps in project documents and whether the live runtime/spec has moved past them — the machine form of 're-measure before you trust this document'. Exit 1 if any stamp is stale.",
+    )
+    measured_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                                 help="Path to RAG_MASTER.json (used to locate the project root)")
+    measured_parser.add_argument("--roots", nargs="*", type=Path, default=None,
+                                 help="directories to scan for *.md (default: the project root)")
+    measured_parser.add_argument("--stamp", action="store_true",
+                                 help="print the stamp a re-measuring session should paste into its document")
+    measured_parser.add_argument("--session", type=str, default=None,
+                                 help="session id to record in --stamp output")
+    measured_parser.add_argument("--json", dest="as_json", action="store_true",
+                                 help="output as JSON")
 
     # -- decide / decisions (DECISION-LEDGER-PRIMITIVE: operator rulings as state) --
     decide_parser = subparsers.add_parser(
@@ -1941,7 +1989,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         print(
             f"Applied renders to {rag_path}: "
             f"{len(rendered['open_tasks'])} open_tasks, "
-            f"{len(rendered['deferred_items'])} deferred_items "
+            f"{len(rendered['deferred_items'])} deferred_items, "
+            f"{len(rendered['priority_actions'])} priority_actions "
             "(tracked_items untouched; .bak refreshed)."
         )
         return 0
@@ -1964,6 +2013,14 @@ def cmd_render(args: argparse.Namespace) -> int:
         print("# deferred_items (render)")
         for obj in drift_render.render_deferred_items(store):
             print(f"  {obj['id']}: {obj['title']} [{obj['status']}]")
+        print()
+    if what in ("priority_actions", "all"):
+        print("# priority_actions (render — ACTIVE P1 only)")
+        lines = drift_render.render_priority_actions(store)
+        for line in lines:
+            print(f"  {line}")
+        if not lines:
+            print("  (P1 clear — no active P1 item)")
         print()
     if what in ("backlog", "all"):
         print("# Rule 12 backlog (render)")
@@ -2602,6 +2659,14 @@ def _reconcile_checkpoint_render_parity(rag: dict, *, apply: bool) -> list[str]:
             corrected.append(f"deferred_items ({len(expected_d)})")
             if apply:
                 rag["deferred_items"] = expected_d
+    if "priority_actions" in rag:
+        # S187 PRIORITY-ACTIONS-STALE-SNAPSHOT: priority_actions is a render too,
+        # so the seal must reconcile it or the next boot briefs a stale agenda.
+        expected_p = drift_render.render_priority_actions(store)
+        if rag["priority_actions"] != expected_p:
+            corrected.append(f"priority_actions ({len(expected_p)})")
+            if apply:
+                rag["priority_actions"] = expected_p
     return corrected
 
 
@@ -2674,6 +2739,20 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
 
     # Optional: update state
     if args.status:
+        # STATE-MACHINE-STATUS-INVALID (S187): --status was a free-text passthrough
+        # straight into canonical state, which is how "COMPLETE" — a value no
+        # transition produces — got written and then survived every audit. Detecting
+        # it downstream is not enough; refuse it at the write site.
+        from rag_kernel.spec_parser import VALID_STATE_MACHINE_STATUS
+        if args.status not in VALID_STATE_MACHINE_STATUS:
+            legal = ", ".join(sorted(s for s in VALID_STATE_MACHINE_STATUS if s))
+            print(
+                f"Error: {args.status!r} is not a legal state_machine_status — "
+                f"the machine admits only {legal}. Refusing to write a non-state "
+                "into canonical state.",
+                file=sys.stderr,
+            )
+            return 1
         old_state = rag.get("state_machine_status", "UNKNOWN")
         rag["state_machine_status"] = args.status
         print(f"State: {old_state} -> {args.status}")
@@ -3105,8 +3184,8 @@ def _auto_reconcile_gate(
         try:
             rc = cmd_render(argparse.Namespace(rag=rag_path, apply=True, what=None))
             repairs.append(
-                "render_parity: re-rendered legacy open_tasks/deferred_items from "
-                f"canonical tracked_items (rc={rc})"
+                "render_parity: re-rendered legacy open_tasks/deferred_items/"
+                f"priority_actions from canonical tracked_items (rc={rc})"
             )
         except Exception as exc:  # noqa: BLE001 — a failed repair must not crash the boot
             repairs.append(f"render_parity: repair FAILED ({exc})")
@@ -3380,6 +3459,20 @@ def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None) -> str
         f"  backlog: priority_actions={len(pa)}, open_tasks={len(ot)}, "
         f"deferred_items={len(di)}"
     )
+    # S187 PRIORITY-ACTIONS-STALE-SNAPSHOT: priority_actions is now a render of the
+    # ACTIVE P1 set, so the boot can brief the live agenda by id instead of a count
+    # over a frozen prose blob. Ids only — the titles live one `render` call away.
+    if pa:
+        _p1_ids = [
+            str(x).split(" [", 1)[0].strip()
+            for x in pa
+            if isinstance(x, str) and " [P1 · " in x
+        ]
+        if _p1_ids:
+            import textwrap as _tw2
+            lines.append(f"  P1 (live, from tracked_items.priority_group) — {len(_p1_ids)}:")
+            for _ln in _tw2.wrap(", ".join(_p1_ids), width=92):
+                lines.append(f"    {_ln}")
     return "\n".join(lines)
 
 
@@ -5532,6 +5625,65 @@ def cmd_refresh_current_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prune_current_status(args: argparse.Namespace) -> int:
+    """Remove ARCHIVED session-stamped keys from current_status (META-SETTER-GAP residue).
+
+    ``refresh-current-status`` re-stamps machine-fact TOKENS; it has no way to remove
+    a KEY. So the 22 ``next_session_directive_S<n>`` snapshots, ``session_finding_
+    S77_E045`` and ``fv_phase3_S35`` sat on the live status surface with no governed
+    path to clear them — the exact "requires a hand edit that tool_contract forbids"
+    shape META-SETTER-GAP names. This is that path.
+
+    The archived predicate is single-sourced in ``drift_store`` and shared with the
+    auditor, so the verb can only ever remove what the auditor flags; naming a live
+    field REFUSES. Same write contract as its siblings: load -> select -> atomic
+    write (tmp -> verify -> .bak parity -> rename). Idempotent; a no-op when clean.
+    """
+    from rag_kernel.drift_store import (
+        CurrentStatusRefreshError,
+        DriftStoreError,
+        archived_current_status_keys,
+        load_hot,
+        prune_current_status_file,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    try:
+        if args.list:
+            stale = archived_current_status_keys(load_hot(rag_path))
+            print(f"current_status archived keys ({len(stale)}):")
+            for k in stale:
+                print(f"  {k}")
+            if not stale:
+                print("  (none — the live status surface is clean)")
+            return 0
+        removed, wrote = prune_current_status_file(
+            rag_path,
+            keys=args.keys or None,
+            dry_run=args.dry_run,
+        )
+    except (CurrentStatusRefreshError, DriftStoreError) as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    header = (
+        "[DRY RUN] current_status would prune" if args.dry_run
+        else ("current_status pruned" if wrote else "current_status already clean")
+    )
+    print(f"{header} [session {args.session}] — {len(removed)} archived key(s):")
+    for k in removed:
+        print(f"  - {k}")
+    if not removed:
+        print("  (none — no session-stamped key remains)")
+    if wrote:
+        print("  .bak refreshed to byte-parity (HOT == BAK).")
+    return 0
+
+
 def cmd_migrate(args: argparse.Namespace) -> int:
     """Governed schema/version migration of a DEPLOYMENT's RAG (KA-SCHEMA-MIGRATE).
 
@@ -5783,6 +5935,110 @@ def cmd_birth_adopt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_measured(args: argparse.Namespace) -> int:
+    """Inspect / emit MEASURED provenance stamps (RUNBOOK-TABLE-NO-INVARIANT, S187).
+
+    ``--stamp`` prints the stamp a re-measuring session should paste into its
+    document (it does NOT write: the session that re-measured is the only party
+    entitled to say what it measured). Default lists every stamp found under the
+    scanned roots and whether the live world has outrun it — the same predicate the
+    auditor uses, so `measured` and `audit` can never disagree.
+    """
+    import json as _json
+
+    from rag_kernel.drift_audit import canonical_facts
+    from rag_kernel.measured import format_stamp, scan_measurements, stale_measurements
+
+    version, _mc, _sha = canonical_facts()
+    try:
+        from rag_kernel import __spec_version__ as live_spec
+    except Exception:  # noqa: BLE001
+        live_spec = ""
+
+    if args.stamp:
+        print(format_stamp(session=args.session or "S?", runtime=version or "",
+                           spec=live_spec or ""))
+        return 0
+
+    # RESOLVE before deriving roots: a relative --rag ("RAG_MASTER.json") has
+    # Path.parent == "." , so the unresolved form scanned the CWD and silently
+    # reported zero stamps while `audit` found them. Found by running both.
+    _rag_abs = Path(args.rag).resolve()
+    _default_roots = [_rag_abs.parent.parent, _rag_abs.parent]
+    roots = [Path(r).resolve() for r in (args.roots or _default_roots)]
+    docs: list[Path] = []
+    seen: set[Path] = set()
+    for r in roots:
+        try:
+            for d in sorted(r.glob("*.md")):
+                if d not in seen:
+                    seen.add(d)
+                    docs.append(d)
+        except OSError:
+            continue
+
+    found = []
+    for d in docs:
+        try:
+            found.extend(scan_measurements(d.read_text(encoding="utf-8",
+                                                       errors="replace"), path=str(d)))
+        except OSError:
+            continue
+    stale = {(m.path, m.line): reasons
+             for m, reasons in stale_measurements(docs, live_runtime=version or "",
+                                                  live_spec=live_spec or "")}
+
+    if args.as_json:
+        print(_json.dumps([{
+            "path": m.path, "line": m.line, "session": m.session,
+            "runtime": m.runtime, "spec": m.spec,
+            "stale": (m.path, m.line) in stale,
+            "reasons": stale.get((m.path, m.line), []),
+        } for m in found], indent=2))
+        return 1 if stale else 0
+
+    print(f"MEASURED stamps found: {len(found)}   stale: {len(stale)}   "
+          f"(live runtime {version}, spec {live_spec})")
+    for m in found:
+        reasons = stale.get((m.path, m.line))
+        mark = "STALE" if reasons else "ok   "
+        print(f"  [{mark}] {Path(m.path).name}:{m.line} "
+              f"session={m.session or '—'} runtime={m.runtime or '—'} spec={m.spec or '—'}")
+        for r in reasons or []:
+            print(f"           {r}")
+    if not found:
+        print("  (no document under the scanned roots carries a MEASURED stamp)")
+    return 1 if stale else 0
+
+
+def cmd_list_kinds(args: argparse.Namespace) -> int:
+    """Print the INGEST kinds this deployment declares (INGEST-KIND-UNVALIDATED).
+
+    The enumerable half of the ingest contract. ``ingest`` now REFUSES any kind
+    outside this set; a sender who cannot read the set has no way to comply and
+    will invent one — which is exactly how a parent handoff declaring four
+    fabricated kinds landed as a satisfied exit predicate. Rendered from the same
+    ``KINDS`` / ``DESTINATION`` data the refusal enforces, so the published surface
+    and the gate cannot drift apart. Read-only; always exit 0.
+    """
+    import json as _json
+
+    from rag_kernel.ingest import declared_kinds
+
+    rows = declared_kinds()
+    if args.as_json:
+        print(_json.dumps(rows, indent=2))
+        return 0
+    print(f"INGEST kinds declared by this deployment ({len(rows)}):")
+    for r in rows:
+        print(f"  {r['kind']:<12} -> {r['destination']}")
+    print()
+    print("Declare a claim with:  INGEST: <KIND> <id> — <text>")
+    print("Any other kind is REFUSED — a sender cannot introduce a kind the")
+    print("receiver does not define (HANDOFF-PRESCRIPTION-BAN).")
+    return 0
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     """Document ingestion with a decidable exit predicate (B4, S181).
 
@@ -5831,6 +6087,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             "routes": [
                 {"id": r.claim.id, "kind": r.claim.kind,
                  "destination": r.destination, "action": r.action,
+                 "landing_id": r.landing_id, "basis": r.basis,
                  "explicit": r.claim.explicit}
                 for r in plan.routes
             ],
@@ -6637,10 +6894,13 @@ def main(argv: list[str] | None = None) -> int:
         "add-rule": cmd_add_rule,
         "update-rule": cmd_update_rule,
         "refresh-current-status": cmd_refresh_current_status,
+        "prune-current-status": cmd_prune_current_status,
         "migrate": cmd_migrate,
         "transplant": cmd_transplant,
         "birth-adopt": cmd_birth_adopt,
         "ingest": cmd_ingest,
+        "list-kinds": cmd_list_kinds,
+        "measured": cmd_measured,
         "decide": cmd_decide,
         "decisions": cmd_decisions,
         "register-asset": cmd_register_asset,
