@@ -110,7 +110,7 @@ def test_session_end_threads_declared_docs_root_into_audit(tmp_path, monkeypatch
     seen = {}
     monkeypatch.setattr(m, "cmd_audit", _capturing_audit(seen))
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"])
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x"])
     assert rc == 0
     assert Path(seen["docs_root"]) == (tmp_path / "wt")
 
@@ -121,7 +121,7 @@ def test_session_end_docs_root_flag_beats_declaration(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(m, "cmd_audit", _capturing_audit(seen))
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x",
                "--docs-root", str(tmp_path / "override")])
     assert rc == 0
     assert Path(seen["docs_root"]) == (tmp_path / "override")
@@ -133,7 +133,7 @@ def test_session_end_no_reconcile_passes_none(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(m, "cmd_audit", _capturing_audit(seen))
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x",
                "--no-reconcile"])
     assert rc == 0
     assert seen["docs_root"] is None
@@ -145,6 +145,6 @@ def test_session_end_undeclared_passes_none_backcompat(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(m, "cmd_audit", _capturing_audit(seen))
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"])
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x"])
     assert rc == 0
     assert "docs_root" in seen and seen["docs_root"] is None  # audit got None

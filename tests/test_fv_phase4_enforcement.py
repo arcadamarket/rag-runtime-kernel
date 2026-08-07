@@ -86,8 +86,8 @@ class TestModuleRegistration:
         registry = rag_kernel.discover()
         assert "generated_guards" in registry["critical_modules"]
 
-    def test_manifest_module_count_is_twenty(self):
-        """The functional-capability count (manifest dict) is 20.
+    def test_manifest_module_count_matches_the_registered_set(self):
+        """The functional-capability count is 22, and it is PINNED to the names.
 
         FV-PHASE4 reconciled the count to 12; M-009 added context_policy as
         the 13th functional module; GRAPH-ORCH increment 5 (INS-025)
@@ -96,11 +96,29 @@ class TestModuleRegistration:
         increment 3 registered drift_control as the 16th and drift_store as
         the 17th; DRIFT-ELIM increment 4 registered drift_render as the 18th;
         DRIFT-ELIM increment 5 registered drift_audit as the 19th;
-        KA-SCHEMA-MIGRATE registered schema_migrate as the 20th.
+        KA-SCHEMA-MIGRATE registered schema_migrate as the 20th; S188 registered
+        meta_setter as the 21st (META-SETTER-GAP), test_gate as the 22nd
+        (REPORT-TESTS-GATE-UNMEASURED) and session_forensics as the 23rd
+        (SELF-DIAGNOSIS-UNSOURCED).
+
+        The bare count was the whole assertion until S188, which meant every new
+        capability broke this test with a number and taught the next reader
+        nothing about WHAT changed. The named set below is the real invariant:
+        registering a module is a deliberate act that should have to be stated
+        here, and a DROPPED module should fail loudly rather than being masked by
+        a simultaneous addition.
         """
         registry = rag_kernel.discover()
         manifest_modules = registry["package"]["modules"]
-        assert len(manifest_modules) == 20
+        assert set(manifest_modules) == {
+            "state_machine", "persistence", "schemas", "cold_manager",
+            "concurrency", "api", "mcp_transport", "spec_parser",
+            "session_logger", "conflict_engine", "generated_guards", "guardgen",
+            "context_policy", "graph_orchestrator", "agent_supervisor",
+            "drift_control", "drift_store", "drift_render", "schema_migrate",
+            "drift_audit", "meta_setter", "test_gate", "session_forensics",
+        }
+        assert len(manifest_modules) == 23
         assert "schema_migrate" in manifest_modules
         assert "generated_guards" in manifest_modules
         assert "guardgen" in manifest_modules

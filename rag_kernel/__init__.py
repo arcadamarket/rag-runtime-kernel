@@ -28,6 +28,9 @@ Zero external dependencies. Python 3.12-3.14, standard library only.
     "drift_store": "Deterministic, atomic mutation API over the RAG tracked_items array: guarded transitions, atomic persistence (tmp→verify→.bak→rename), one-time backlog migration — the canonical store every status render projects from (DRIFT-ELIM increment 2)",
     "drift_render": "Deterministic, idempotent renderers projecting the canonical tracked_items array into the legacy open_tasks / deferred_items arrays, the Rule 12 status-report backlog, and the ERROR_LOG backlog summary — makes tracked_items the sole authority, every status mention a derived render (DRIFT-ELIM increment 4)",
     "schema_migrate": "Governed deployment-facing schema/version migration (KA-SCHEMA-MIGRATE): a declared ladder of additive, idempotent schema steps whose terminal node IS the schema the kernel speaks; reads the TARGET deploy's meta and compares every kernel-owned field independently, refusing (never silently downgrading) a deployment that is ahead, failing loud on an unknown origin version, no-op when already current, and never touching project-owned state (rag_version, tracked_items content, operating_protocol)",
+    "meta_setter": "Governed REFUSE-BY-DEFAULT setter for declared meta.* scalars: undeclared keys refused with the allowlist, container keys refused by name with the verb that owns them, typed fail-loud coercion, no-op writes nothing, atomic with .bak parity (META-SETTER-GAP, S188)",
+    "test_gate": "Measured test gate: run the suite, parse the summary, stamp meta.test_gate with the count AND the runtime/git HEAD measured against, then grade tri-state so a cached pass decays to STALE instead of lying (REPORT-TESTS-GATE-UNMEASURED, S188)",
+    "session_forensics": "Renders a session's CONDUCT from its own log — wall time, governed calls, failed verbs and their real cost, silent gaps, repeat bursts, double seals — so an account of a session is sourced rather than remembered (SELF-DIAGNOSIS-UNSOURCED, S188)",
     "drift_audit": "Fail-loud session-boundary auditor: asserts the rendered legacy open_tasks/deferred_items match the canonical tracked_items array (E-040 regression), supersede refs resolve, notes don't contradict status (INS-038), no Cowork-memory side stores exist in the project root (Rule 13), current_status version/HEAD match the live authorities (E-043), and the FIX-1 integrity family — WAL monotonicity, RAG↔.bak parity, unsubstituted-placeholder scan, leaked template-key scan, COLD↔HOT spec-version coherence, non-empty written_by_session, session-id coherence (K1+K2)"
   },
   "cli_commands": {
@@ -147,6 +150,9 @@ _KERNEL_MODULES = [
     "rag_kernel.drift_render",
     "rag_kernel.drift_audit",
     "rag_kernel.schema_migrate",
+    "rag_kernel.meta_setter",
+    "rag_kernel.test_gate",
+    "rag_kernel.session_forensics",
     "rag_kernel.__main__",
 ]
 

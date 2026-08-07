@@ -68,6 +68,9 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "migrate": "Migrate a DEPLOYMENT's RAG meta up to the schema this kernel speaks — declared additive ladder, reads the target's own meta, refuses to downgrade a deploy that is ahead, fails loud on an unknown origin version, no-op when already current (KA-SCHEMA-MIGRATE)",
     "refresh-current-status": "Re-stamp current_status machine-facts (runtime version + git HEAD, optional --tests count) through the guarded atomic store — the governed repair for the E-043 freshness guard (KA-CS-REFRESH)",
     "prune-current-status": "Remove ARCHIVED session-stamped keys from current_status through the guarded atomic store — the governed repair for the META-SETTER-GAP residue refresh-current-status cannot reach (S187)",
+    "meta": "Read or SET a declared meta.* scalar through the guarded atomic store — REFUSE-BY-DEFAULT allowlist, containers refused by name, typed coercion, no-op when already correct (META-SETTER-GAP, S188)",
+    "tests": "Measured test gate: --run executes the suite and stamps meta.test_gate with the count AND the runtime/git HEAD it was measured against; --verify grades that stamp against live facts so a cached pass decays to STALE (REPORT-TESTS-GATE-UNMEASURED, S188)",
+    "forensics": "Render a session's CONDUCT from its own log — wall time, governed calls, failed verbs and their real cost, silent gaps, repeat bursts, double seals; the numbers any account of a session must cite (SELF-DIAGNOSIS-UNSOURCED, S188)",
     "list-kinds": "Print the INGEST kinds THIS deployment declares, with destinations — the authoritative set `ingest` enforces; a sender that cannot enumerate them can only guess (INGEST-KIND-UNVALIDATED, S187)",
     "measured": "List MEASURED provenance stamps in project documents and flag the ones the live runtime/spec has outrun — the machine form of 're-measure before you trust this document' (RUNBOOK-TABLE-NO-INVARIANT, S187)",
     "verify": "Deterministic post-init HOT↔COLD self-version coherence gate (FIX-2)",
@@ -371,6 +374,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="One-line handoff/next-step note for the close report's section 7.")
     send_parser.add_argument("--no-report", action="store_true",
         help="Suppress the machine-rendered close report (not recommended).")
+    # CLOSE-STEP-ERRLOG gate (S188) — the explicit "nothing to bank" declaration.
+    # Without it, a close that banks no ERROR_LOG entry is REFUSED: S184-S187 each
+    # sealed with error_log=false while ERROR_LOG.md went unwritten for four
+    # sessions, so silence is no longer accepted as evidence of a clean session.
+    send_parser.add_argument("--no-errors", action="store_true",
+        help="DECLARE that this session produced no error worth an ERROR_LOG "
+             "record. Required when no --error-log-entry is given; the close "
+             "REFUSES to seal on silence (CLOSE-STEP-ERRLOG-UNENFORCED).")
     # KA-13 — wire the Rule 11 published-doc reconciliation into the close audit.
     send_parser.add_argument(
         "--docs-root", type=str, default=None,
@@ -414,6 +425,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-reconcile", action="store_true",
         help="Skip the close-time published-doc reconciliation even if "
              "meta.reconciliation_docs_root is declared.",
+    )
+    sresume_parser.add_argument(
+        "--no-errors", action="store_true",
+        help="DECLARE that this session produced no error worth an ERROR_LOG "
+             "record (same gate as session-end; a resume cannot launder silence).",
     )
 
     # -- checkpoint --
@@ -822,6 +838,58 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="list the archived keys and exit without writing")
     prune_cs_parser.add_argument("--dry-run", action="store_true",
                                  help="show which keys would be removed without writing")
+
+    # -- meta (META-SETTER-GAP: the governed setter for declared meta.* scalars) --
+    meta_parser = subparsers.add_parser(
+        "meta",
+        help="Read or SET a declared meta.* scalar through the guarded atomic store. REFUSE-BY-DEFAULT: an undeclared key is refused, a container key is refused by name, and a value that will not coerce to the declared type fails loud (META-SETTER-GAP).",
+    )
+    meta_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    meta_parser.add_argument("--set", dest="set_kv", metavar="KEY=VALUE", default=None,
+                             help="set one declared scalar, e.g. --set written_by_session=S188")
+    meta_parser.add_argument("--get", dest="get_key", metavar="KEY", default=None,
+                             help="print one meta scalar and exit")
+    meta_parser.add_argument("--list", dest="list_keys", action="store_true",
+                             help="list the declared settable keys with their live values")
+    meta_parser.add_argument("--session", type=str, default=None,
+                             help="session id (required for --set; a meta write must be attributable)")
+    meta_parser.add_argument("--dry-run", action="store_true",
+                             help="show the planned old->new change without writing")
+
+    # -- tests (REPORT-TESTS-GATE-UNMEASURED: the seal MEASURES the suite) --
+    tests_parser = subparsers.add_parser(
+        "tests",
+        help="Measured test gate. --run executes the suite and stamps meta.test_gate with the count AND the runtime/git HEAD it was measured against; --verify grades that stamp against live facts (exit 1 on red, stale or unmeasured). Replaces the agent typing --tests.",
+    )
+    tests_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    tests_parser.add_argument("--run", action="store_true",
+                              help="run the suite now and stamp the result (blocking — for a long suite, launch detached and use `wait-for`)")
+    tests_parser.add_argument("--verify", action="store_true",
+                              help="grade the existing stamp against the live runtime/git HEAD; exit 1 unless measured, green and current")
+    tests_parser.add_argument("--show", action="store_true",
+                              help="print the stored stamp and exit")
+    tests_parser.add_argument("--repo", type=Path, default=None,
+                              help="directory holding the suite (default: resolved from meta.reconciliation_docs_root)")
+    tests_parser.add_argument("--session", type=str, default=None,
+                              help="session id recorded on the stamp (required with --run)")
+    tests_parser.add_argument("--timeout", type=int, default=1800,
+                              help="abandon the measurement after N seconds (default 1800); nothing is stamped on timeout")
+    tests_parser.add_argument("--json", dest="as_json", action="store_true",
+                              help="emit machine-readable JSON")
+
+    # -- forensics (SELF-DIAGNOSIS-UNSOURCED: render conduct from the log) --
+    forensics_parser = subparsers.add_parser(
+        "forensics",
+        help="Render a session's CONDUCT from its own log — wall time, governed calls, failed verbs and their real cost, silent gaps, repeat bursts, double seals. The numbers any account of a session has to cite (SELF-DIAGNOSIS-UNSOURCED).",
+    )
+    forensics_parser.add_argument("session_id", nargs="?", default=None,
+                                  help="session id (default: the newest session log beside the RAG)")
+    forensics_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                                  help="Path to RAG_MASTER.json (locates the log directory)")
+    forensics_parser.add_argument("--log", type=Path, default=None,
+                                  help="explicit path to a session_log_<sid>.jsonl")
+    forensics_parser.add_argument("--json", dest="as_json", action="store_true",
+                                  help="emit machine-readable JSON")
 
     # -- migrate (KA-SCHEMA-MIGRATE: governed deployment-facing schema/version uplift) --
     migrate_parser = subparsers.add_parser(
@@ -2244,9 +2312,24 @@ def _build_report_text(rag_path: Path, ns: argparse.Namespace) -> str:
     except OSError:
         rag_bytes = None
 
-    # -- explicit external args (all optional; absent -> n/a -> AMBER) --
+    # -- the test gate: MEASURED first, typed flag only as an explicit override --
+    #
+    # REPORT-TESTS-GATE-UNMEASURED (S186, root-caused S188): this cell used to be
+    # whatever the agent typed into --tests, so S184/S185 sealed `n/a` and S186/S187
+    # sealed numbers nothing had checked. Now the stamp written by `tests --run` is the
+    # authority; it carries the runtime + git HEAD it was measured against, so it
+    # decays to STALE by itself when the code moves. --tests still wins when given,
+    # because an operator override must remain possible — but it is no longer the
+    # DEFAULT source, and an absent stamp renders "UNMEASURED", never a stale pass.
+    from rag_kernel import test_gate as _test_gate
+
     tests = getattr(ns, "tests", None)
     tests_ok = None if tests is None else (not getattr(ns, "tests_failing", False))
+    if tests is None:
+        _stamp = _test_gate.read_stamp(hot)
+        tests_ok, tests, _ = _test_gate.verdict(
+            _stamp, live_head=git_head, live_runtime=version
+        )
 
     body = drift_render.render_status_report(
         store,
@@ -4027,6 +4110,10 @@ def _close_report_ns(sid: str, args: argparse.Namespace) -> argparse.Namespace:
         milestone=getattr(args, "milestone", None),
         handoff=getattr(args, "handoff", None),
         no_report=getattr(args, "no_report", False),
+        # CLOSE-STEP-ERRLOG gate (S188): the explicit "nothing to bank" declaration,
+        # forwarded so the seal can tell a clean session from a silent one.
+        no_errors=getattr(args, "no_errors", False),
+        force=getattr(args, "force", False),
     )
 
 
@@ -4300,6 +4387,43 @@ def _drive_close(
         )
         return 1
 
+    # ------------------------------------------------------------------
+    # CLOSE-STEP-ERRLOG-UNENFORCED (S186; root-caused S188).
+    #
+    # `steps["error_log"]` has been RECORDED since S139 and CHECKED by nothing.
+    # S184–S187 each sealed with it False. The S188 audit found the consequence:
+    # ERROR_LOG.md's last write is 2026-07-29 (E-096, S183), while S187 named two
+    # of its own errors to the operator in prose and banked neither. A step that
+    # is recorded and never gates is not a step, it is a comment.
+    #
+    # REFUSE-BY-DEFAULT, in the house style: a close either banks an ERROR_LOG
+    # entry or DECLARES there was nothing to bank (`--no-errors`). Absence of a
+    # declaration is not permission. The declaration is cheap and honest; what is
+    # no longer available is saying nothing at all.
+    # ------------------------------------------------------------------
+    if not steps.get("error_log") and not getattr(report_args, "no_errors", False) \
+            and not getattr(report_args, "force", False):
+        print(
+            "ERROR: CLOSE-STEP-ERRLOG gate — this close banked no ERROR_LOG entry "
+            "and did not declare that there was nothing to bank. transfer_ready "
+            "NOT set (marker SURFACE_PENDING, resumable).\n"
+            "  bank one : session-end --error-log-entry '<E-nnn (Snnn): ...>' "
+            "--error-log-id E-nnn\n"
+            "  or declare: session-end --no-errors   (asserts this session "
+            "produced no error worth a record)\n"
+            "  This gate exists because S184-S187 all sealed with error_log=false "
+            "while ERROR_LOG.md went unwritten for four sessions "
+            "(CLOSE-STEP-ERRLOG-UNENFORCED / E-088 recurrence).",
+            file=sys.stderr,
+        )
+        _write_close_marker(
+            rag_path,
+            _build_close_marker(sid, "SURFACE_PENDING", steps, started, None),
+        )
+        return 1
+    if not steps.get("error_log"):
+        print("[3b] ERROR_LOG: none banked — DECLARED clean by --no-errors.")
+
     _surface = None
     if close_report_path is not None:
         try:
@@ -4336,6 +4460,25 @@ def _drive_close(
         print(f"[5/5] Domain map resealed LAST: {_bm_path.name} (+.bak parity).")
     except Exception as _bm_exc:
         print(f"  WARN: could not reseal domain boot-map: {_bm_exc}", file=sys.stderr)
+    # SELF-DIAGNOSIS-UNSOURCED (S188) — emit the session's CONDUCT facts, rendered
+    # from the log, as part of the close. S187 explained a four-hour session by
+    # naming a five-second event, in front of an operator who had no independent
+    # view of the session's shape. Now the operator always gets the shape: wall
+    # time, failures with their real cost, the silent gaps that actually held the
+    # time, and any repeat burst. An account that contradicts these is visibly an
+    # account rather than a fact. Advisory: forensics must never strand a seal.
+    try:
+        from rag_kernel import session_forensics as _sf
+        from rag_kernel.session_logger import LOG_FILE_PREFIX, LOG_FILE_EXT
+        _log = rag_dir / f"{LOG_FILE_PREFIX}{sid}{LOG_FILE_EXT}"
+        if _log.exists():
+            print("")
+            print(_sf.render_text(_sf.analyze_file(_log)))
+            print("")
+    except Exception as _sf_exc:  # noqa: BLE001 — observability, never a blocker
+        print(f"  WARN: could not render session forensics: {_sf_exc}",
+              file=sys.stderr)
+
     verb = "resumed and completed" if resuming else "ended cleanly"
     print(
         f"Session {sid} {verb}: checkpoint + ERROR_LOG + close + audit all green; "
@@ -4363,6 +4506,76 @@ def _drive_close(
             file=sys.stderr,
         )
     return 0
+
+
+# ---------------------------------------------------------------------------
+# CLOSE-DOUBLE-SEAL (S187, found by the S188 forensic audit)
+# ---------------------------------------------------------------------------
+#
+# session_log_S187.jsonl carries TWO session_end records — seq 63 at 15:27:18Z and
+# seq 72 at 15:31:02Z — with eight canonical mutations between them (un-add ×2,
+# add ×2, note, bootmap, render, audit). The first seal therefore attested a state
+# that then changed underneath it, which is the same class of lie as a stale report
+# surface: the artifact is authentic and the state it describes is gone.
+#
+# SEAL-REPORT-STALE-SURFACE catches the report drifting from state. Nothing caught
+# STATE drifting after the seal. This does: once a session is sealed COMPLETE with
+# transfer_ready=true, a mutating verb naming THAT SAME session is refused. The
+# repair is named in the refusal — either start the next session (the normal path)
+# or reopen this one through `session-resume`, which un-sets transfer_ready and
+# makes the close resumable again.
+#
+# Read-only verbs are untouched: inspecting a sealed session must always be free.
+
+#: Verbs that write canonical state and are therefore refused after a seal.
+_SEAL_GUARDED_VERBS = frozenset({
+    "add", "un-add", "resolve", "start", "defer", "reopen", "discard", "supersede",
+    "note", "priority", "add-rule", "update-rule", "refresh-current-status",
+    "prune-current-status", "meta", "register-asset", "decide", "ingest",
+    "checkpoint", "migrate", "transplant", "birth-adopt", "dedup-sessions",
+})
+
+
+def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
+    """Refuse a canonical write aimed at an already-sealed session. -> ``None`` | rc.
+
+    Returns ``None`` when the call may proceed (the overwhelmingly common case), or
+    an exit code when it must not. Deliberately fail-OPEN on any inability to read
+    the marker: a guard that cannot read state must not become an outage, and every
+    downstream verb still has its own guards.
+    """
+    if command not in _SEAL_GUARDED_VERBS:
+        return None
+    session = getattr(args, "session", None)
+    if not session:
+        return None
+    rag = getattr(args, "rag", None)
+    if rag is None:
+        return None
+    try:
+        hot = json.loads(Path(rag).read_text(encoding="utf-8-sig"))
+        marker = hot.get("session_close")
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(marker, dict):
+        return None
+    if not marker.get("transfer_ready", False):
+        return None
+    if str(marker.get("session_id") or marker.get("session") or "") != str(session):
+        return None
+
+    print(
+        f"ERROR: CLOSE-DOUBLE-SEAL guard — session {session} is already sealed "
+        f"COMPLETE (transfer_ready=true, sealed "
+        f"{marker.get('completed_utc') or marker.get('ended_utc') or 'earlier'}). "
+        f"Refusing `{command}`: a write after the seal makes the sealed report and "
+        f"the sealed boot-map describe a state that no longer exists — the S187 "
+        f"double-close defect.\n"
+        f"  repair: run the next session (`session-start`) and bank it there, or "
+        f"re-open this close with `session-resume` if the seal was premature.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _report_state_drift(rag_path, report_text: str):
@@ -5622,6 +5835,224 @@ def cmd_refresh_current_status(args: argparse.Namespace) -> int:
                   f"--strict to fail loud)")
     if wrote:
         print("  .bak refreshed to byte-parity (HOT == BAK).")
+    return 0
+
+
+def cmd_meta(args: argparse.Namespace) -> int:
+    """Read or SET a declared ``meta.*`` scalar — the governed close of META-SETTER-GAP.
+
+    ``refresh-current-status`` re-stamps ``current_status`` tokens and
+    ``prune-current-status`` removes archived keys, but neither can touch ``meta``.
+    So a wrong ``meta.written_by_session`` or a drifted ``meta.policy_version`` had no
+    governed repair at all — only the hand edit ``tool_contract`` forbids. This is that
+    path, and it is deliberately narrow: REFUSE-BY-DEFAULT over a declared allowlist,
+    containers refused by name with a pointer to the verb that owns them, typed
+    coercion that fails loud, and a no-op write when the value is already correct.
+    """
+    from rag_kernel.meta_setter import (
+        CONTAINER_KEYS,
+        SETTABLE,
+        MetaSetterError,
+        get_meta_scalar,
+        set_meta_scalar_file,
+    )
+    from rag_kernel.drift_store import DriftStoreError, load_hot
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    try:
+        hot = load_hot(rag_path)
+    except DriftStoreError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    if args.get_key:
+        val = get_meta_scalar(hot, args.get_key)
+        if val is None and args.get_key not in (hot.get("meta") or {}):
+            print(f"Error: meta.{args.get_key} is not present", file=sys.stderr)
+            return 1
+        print(val)
+        return 0
+
+    if args.list_keys or not args.set_kv:
+        print(f"Declared settable meta scalars ({len(SETTABLE)}):")
+        for k, typ in sorted(SETTABLE.items()):
+            print(f"  {k} <{typ.__name__}> = {get_meta_scalar(hot, k)!r}")
+        print(f"\nRefused containers ({len(CONTAINER_KEYS)}) — each has its own verb:")
+        for k, why in sorted(CONTAINER_KEYS.items()):
+            print(f"  {k}: {why}")
+        if not args.set_kv:
+            print("\nSet one with:  rag_kernel meta --set KEY=VALUE --session S<n>")
+        return 0
+
+    if "=" not in args.set_kv:
+        print("Error: --set expects KEY=VALUE", file=sys.stderr)
+        return 1
+    key, _, raw = args.set_kv.partition("=")
+    key, raw = key.strip(), raw.strip()
+
+    try:
+        old, new, wrote = set_meta_scalar_file(
+            rag_path, key, raw, session=args.session or "", dry_run=args.dry_run
+        )
+    except (MetaSetterError, DriftStoreError) as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        print(f"[DRY RUN] meta.{key}: {old!r} -> {new!r} [session {args.session}]")
+    elif wrote:
+        print(f"meta.{key}: {old!r} -> {new!r} [session {args.session}]")
+        print("  .bak refreshed to byte-parity (HOT == BAK).")
+    else:
+        print(f"meta.{key} already {new!r} — no write (HOT == BAK preserved).")
+    return 0
+
+
+def cmd_tests(args: argparse.Namespace) -> int:
+    """Measure the suite and stamp it, or grade the stamp (REPORT-TESTS-GATE-UNMEASURED).
+
+    The seal used to repeat whatever number the agent typed into ``--tests``. S184 and
+    S185 sealed with ``n/a``; nothing checked. Here the count is produced by an actual
+    run and stored with the runtime version and git HEAD it was measured against, so
+    "green" decays into "STALE" by itself the moment the code moves — which is the only
+    way a cached pass stops lying.
+    """
+    import json as _json
+
+    from rag_kernel import test_gate
+    from rag_kernel.drift_store import DriftStoreError, load_hot
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+
+    try:
+        hot = load_hot(rag_path)
+    except DriftStoreError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    live_runtime = None
+    try:
+        import rag_kernel as _rk
+        live_runtime = getattr(_rk, "__version__", None)
+    except Exception:
+        pass
+    live_head = _resolve_git_head(rag_path)
+
+    if args.run:
+        if not args.session:
+            print("Error: --session is required with --run: a measurement must be "
+                  "attributable", file=sys.stderr)
+            return 1
+        try:
+            repo = (args.repo.resolve() if args.repo
+                    else test_gate.resolve_repo_root(rag_path, hot))
+            print(f"tests: measuring {repo} (timeout {args.timeout}s) …", flush=True)
+            result = test_gate.run_suite(repo, timeout=args.timeout)
+            stamp, wrote = test_gate.set_test_gate_file(
+                rag_path, result, session=args.session,
+                runtime=live_runtime, git_head=live_head,
+            )
+        except (test_gate.TestGateError, DriftStoreError) as ex:
+            print(f"Error: {ex}", file=sys.stderr)
+            return 1
+        ok, cell, reason = test_gate.verdict(
+            stamp, live_head=live_head, live_runtime=live_runtime
+        )
+        if args.as_json:
+            print(_json.dumps({"stamp": stamp, "ok": ok, "cell": cell}, indent=2))
+        else:
+            print(f"  {result['summary_line']}")
+            print(f"  stamped meta.test_gate: {cell}")
+            print(f"  measured against runtime {live_runtime} @ {(live_head or '?')[:7]}")
+            if wrote:
+                print("  .bak refreshed to byte-parity (HOT == BAK).")
+        return 0 if ok else 1
+
+    stamp = test_gate.read_stamp(hot)
+
+    if args.show:
+        if args.as_json:
+            print(_json.dumps(stamp, indent=2))
+        elif stamp is None:
+            print("meta.test_gate: (unstamped)")
+        else:
+            for k in sorted(stamp):
+                print(f"  {k} = {stamp[k]!r}")
+        return 0 if stamp else 1
+
+    ok, cell, reason = test_gate.verdict(
+        stamp, live_head=live_head, live_runtime=live_runtime
+    )
+    if args.as_json:
+        print(_json.dumps({"ok": ok, "cell": cell, "reason": reason,
+                           "stamp": stamp}, indent=2))
+    else:
+        state = "GREEN" if ok else ("RED" if ok is False else "UNVERIFIED")
+        print(f"test gate: {state} — {cell}")
+        print(f"  {reason}")
+        if ok is None and stamp is None:
+            print("  repair: rag_kernel tests --run --session S<n>")
+    return 0 if ok else 1
+
+
+def cmd_forensics(args: argparse.Namespace) -> int:
+    """Render a session's conduct from its log (SELF-DIAGNOSIS-UNSOURCED, S188).
+
+    S187 explained a four-hour session by naming a five-second event. It had the log
+    open and did not read it. This verb is the answer to "why did that take so long":
+    the denominators, the failures with their REAL cost, the silent gaps that
+    actually held the time, the repeat bursts that shadow polling, and whether the
+    session sealed more than once. It measures conduct, not intent.
+    """
+    import json as _json
+
+    from rag_kernel import session_forensics as sf
+    from rag_kernel.session_logger import LOG_FILE_PREFIX, LOG_FILE_EXT
+
+    if args.log:
+        log_path = args.log.resolve()
+    else:
+        rag_dir = args.rag.resolve().parent
+        if args.session_id:
+            log_path = rag_dir / f"{LOG_FILE_PREFIX}{args.session_id}{LOG_FILE_EXT}"
+        else:
+            logs = sorted(rag_dir.glob(f"{LOG_FILE_PREFIX}*{LOG_FILE_EXT}"),
+                          key=lambda p: p.stat().st_mtime)
+            if not logs:
+                print(f"Error: no session logs under {rag_dir}", file=sys.stderr)
+                return 1
+            log_path = logs[-1]
+
+    try:
+        facts = sf.analyze_file(log_path)
+    except sf.ForensicsError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 1
+
+    if args.as_json:
+        print(_json.dumps({
+            "session_id": facts.session_id,
+            "wall_seconds": facts.wall_seconds,
+            "invocations": facts.invocations,
+            "failures": facts.failures,
+            "failure_seconds": facts.failure_seconds,
+            "gaps": facts.gaps,
+            "gap_seconds": facts.gap_seconds,
+            "gap_share": facts.gap_share,
+            "bursts": facts.bursts,
+            "session_ends": facts.session_ends,
+            "double_sealed": facts.double_sealed,
+            "mutations_after_first_end": facts.mutations_after_first_end,
+        }, indent=2))
+    else:
+        print(sf.render_text(facts))
     return 0
 
 
@@ -6895,6 +7326,9 @@ def main(argv: list[str] | None = None) -> int:
         "update-rule": cmd_update_rule,
         "refresh-current-status": cmd_refresh_current_status,
         "prune-current-status": cmd_prune_current_status,
+        "meta": cmd_meta,
+        "tests": cmd_tests,
+        "forensics": cmd_forensics,
         "migrate": cmd_migrate,
         "transplant": cmd_transplant,
         "birth-adopt": cmd_birth_adopt,
@@ -6915,6 +7349,9 @@ def main(argv: list[str] | None = None) -> int:
         "adopt-preflight": cmd_adopt_preflight,
         "bootmap": cmd_bootmap,
     }
+    rc = _refuse_mutation_after_seal(args.command, args)
+    if rc is not None:
+        return rc
     return _dispatch_with_bootstrap_log(
         args.command, commands[args.command], args
     )

@@ -176,7 +176,7 @@ def test_session_end_checkpoints_then_closes_then_audits(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(m, "cmd_audit", lambda args: (seen.__setitem__("audit", True), 0)[1])
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1",
                "--summary", "did the thing"])
     assert rc == 0
 
@@ -196,7 +196,7 @@ def test_session_end_aborts_before_close_when_checkpoint_fails(tmp_path, monkeyp
     called = {"audit": False}
     monkeypatch.setattr(m, "cmd_audit", lambda args: called.__setitem__("audit", True) or 0)
 
-    rc = main(["session-end", "--rag", str(tmp_path / "missing.json"),
+    rc = main(["session-end", "--no-errors", "--rag", str(tmp_path / "missing.json"),
                "--session", "S1", "--summary", "x"])
     assert rc != 0
     assert called["audit"] is False  # audit never reached
@@ -208,7 +208,7 @@ def test_session_end_fails_loud_when_audit_fails(tmp_path, monkeypatch):
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 1)  # audit fails
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"])
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x"])
     assert rc != 0  # a red audit fails the whole ritual
     # checkpoint + close still happened (audit is the last, verifying step)
     assert json.loads(rag.read_text(encoding="utf-8"))["meta"]["written_by_session"] == "S1"

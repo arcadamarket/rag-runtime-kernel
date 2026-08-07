@@ -928,6 +928,30 @@ def check_record_coverage(
     """
     findings: list[AuditFinding] = []
     store = TrackedItemStore.from_hot(hot)
+
+    def _cutover(kind_name: str, ids: set) -> bool:
+        """Is coverage enforced for this record kind?
+
+        INFERENCE-KIND-LATENT-COUPLING (S169, defused S188). The gate below used to
+        be purely IMPLICIT: the FIRST non-retired item of a kind switched coverage
+        on for EVERY legacy record of that kind. So banking one honest ``kind=ERROR``
+        finding retroactively demanded canonical items for all 44 legacy ``E-###``
+        headings and turned a green audit red — a landmine the S187 handoff had to
+        warn the next session about in prose ("bank findings as kind=TASK until it
+        lands"). A rule you must remember not to trip is not a rule, it is a trap.
+
+        The cutover is now DECLARABLE: ``meta.record_cutover`` maps a kind name to a
+        bool. A declaration wins; absence falls back to the historical implicit
+        behaviour, so every existing deployment audits byte-identically until it
+        chooses to declare. Migration state becomes a stated fact instead of an
+        emergent side effect of the first insert.
+        """
+        meta = hot.get("meta") if isinstance(hot, dict) else None
+        declared = (meta or {}).get("record_cutover") if isinstance(meta, dict) else None
+        if isinstance(declared, dict) and kind_name in declared:
+            return bool(declared[kind_name])
+        return bool(ids)
+
     # Count only NON-RETIRED members of each forensic kind. A SUPERSEDED/DISCARDED
     # item has been withdrawn from the live canonical set, so it must NOT keep the
     # per-kind cutover gate latched ON: a mis-kinded item that is discarded (or an
@@ -945,7 +969,7 @@ def check_record_coverage(
     # deliberate increment-6 cutover the legacy stores remain authoritative, so an
     # empty canonical set is the correct pre-migration state, not a coverage gap.
     led = hot.get(INFERENCE_LEDGER_KEY, []) if isinstance(hot, dict) else []
-    if inf_ids:
+    if _cutover("INFERENCE", inf_ids):
         for e in led or []:
             rid = e.get("id")
             if rid and rid not in inf_ids:
@@ -954,7 +978,7 @@ def check_record_coverage(
                     detail=f"inference_ledger {rid} not migrated into tracked_items (kind=INFERENCE)",
                     item_id=rid))
 
-    if error_log_path is not None and err_ids:
+    if error_log_path is not None and _cutover("ERROR", err_ids):
         p = Path(error_log_path)
         if p.exists():
             text = p.read_text(encoding="utf-8")
@@ -2480,6 +2504,75 @@ def _as_store(source) -> TrackedItemStore:
     return TrackedItemStore(source)
 
 
+def check_kernel_copy_lockstep(
+    hot: dict,
+    root: Optional[Path | str],
+    rag_dir: Optional[Path | str],
+) -> list[AuditFinding]:
+    """KERNEL-COPY-LOCKSTEP-UNGATED (S187) — the DEPLOYED kernel must equal the TESTED one.
+
+    This project runs its governance kernel from ``RAG/rag_kernel`` and tests it in
+    the git worktree named by ``meta.reconciliation_docs_root``. Through S187 the two
+    were kept byte-identical BY HAND, with no invariant: a divergence means the code
+    that passed 2,409 tests is not the code enforcing the rules, and nothing would
+    say so. The S188 audit found them identical — which is luck, not a guarantee, and
+    luck is what an invariant replaces.
+
+    Compares ``*.py`` under both trees (``__pycache__`` excluded — bytecode is a build
+    artifact and differs legitimately by interpreter). ERROR on any content mismatch
+    or any module present in one tree and missing from the other. Self-skips clean
+    when either tree is absent, so a deployment that does not use the two-tree layout
+    audits clean.
+    """
+    findings: list[AuditFinding] = []
+    if root is None or rag_dir is None:
+        return findings
+    meta = hot.get("meta") or {}
+    declared = meta.get("reconciliation_docs_root")
+    if not declared:
+        return findings
+
+    deployed = Path(rag_dir) / "rag_kernel"
+    tested = Path(root) / str(declared).replace("\\", "/") / "rag_kernel"
+    if not deployed.is_dir() or not tested.is_dir():
+        return findings
+
+    def _modules(base: Path) -> dict[str, Path]:
+        return {
+            str(p.relative_to(base)).replace("\\", "/"): p
+            for p in base.rglob("*.py")
+            if "__pycache__" not in p.parts
+        }
+
+    dep, tst = _modules(deployed), _modules(tested)
+    for name in sorted(set(dep) - set(tst)):
+        findings.append(AuditFinding(
+            check="kernel_copy_lockstep", severity=ERROR,
+            detail=(f"deployed kernel has {name} but the tested worktree copy does "
+                    f"not — the running kernel contains code no test has seen"),
+            item_id="KERNEL-COPY-LOCKSTEP-UNGATED"))
+    for name in sorted(set(tst) - set(dep)):
+        findings.append(AuditFinding(
+            check="kernel_copy_lockstep", severity=ERROR,
+            detail=(f"tested worktree has {name} but the deployed kernel does not — "
+                    f"a tested capability is not actually deployed"),
+            item_id="KERNEL-COPY-LOCKSTEP-UNGATED"))
+    for name in sorted(set(dep) & set(tst)):
+        try:
+            a = dep[name].read_bytes()
+            b = tst[name].read_bytes()
+        except OSError:
+            continue
+        if a != b:
+            findings.append(AuditFinding(
+                check="kernel_copy_lockstep", severity=ERROR,
+                detail=(f"{name} differs between the deployed kernel ({len(a)} bytes) "
+                        f"and the tested worktree copy ({len(b)} bytes) — tested code "
+                        f"is not running code; re-deploy the worktree copy"),
+                item_id="KERNEL-COPY-LOCKSTEP-UNGATED"))
+    return findings
+
+
 def audit_hot(
     hot: dict,
     *,
@@ -2557,6 +2650,9 @@ def audit_hot(
         if rag_dir is not None:
             from rag_kernel import bootmap  # lazy: keep module import graph acyclic
             findings += bootmap.check_map_coverage(hot, root, rag_dir)
+        # KERNEL-COPY-LOCKSTEP-UNGATED (S187): deployed kernel == tested kernel.
+        # Filesystem-backed, so gated by ``root``; self-skips on a single-tree deploy.
+        findings += check_kernel_copy_lockstep(hot, root, rag_dir)
     return AuditReport(tuple(findings))
 
 

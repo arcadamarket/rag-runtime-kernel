@@ -62,7 +62,7 @@ def test_session_end_sets_complete_transfer_ready_marker(tmp_path, monkeypatch):
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1",
                "--summary", "did the thing"])
     assert rc == 0
 
@@ -99,7 +99,7 @@ def test_session_end_machine_renders_close_report(tmp_path, monkeypatch, capsys)
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1",
                "--summary", "x", "--released", "--release-ref", "runtime-vX",
                "--tests", "1,731 green", "--claims-ok"])
     assert rc == 0
@@ -119,13 +119,63 @@ def test_session_end_machine_renders_close_report(tmp_path, monkeypatch, capsys)
     assert _marker(rag)["steps"]["report_presented"] is True
 
 
+# --- CLOSE-STEP-ERRLOG gate (S188) -------------------------------------------
+#
+# `steps["error_log"]` was recorded from S139 and checked by nothing. S184, S185,
+# S186 and S187 each sealed COMPLETE with it false while ERROR_LOG.md went unwritten
+# from 2026-07-29 onward — four sessions, including two errors S187 named to the
+# operator in prose and banked nowhere. A step that cannot fail is a comment.
+
+def test_close_refuses_to_seal_on_silence(tmp_path, monkeypatch, capsys):
+    """No entry AND no declaration -> REFUSED, resumable, transfer_ready unset."""
+    rag = _write_rag(tmp_path, "S0", seq=1)
+    _start_logger(tmp_path, "S1")
+    monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
+
+    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "CLOSE-STEP-ERRLOG" in err
+    assert "--no-errors" in err, "a refusal must name its repair"
+    marker = _marker(rag)
+    assert marker["transfer_ready"] is False
+    assert marker["phase"] == "SURFACE_PENDING", "the close must stay resumable"
+
+
+def test_close_seals_when_the_session_is_DECLARED_clean(tmp_path, monkeypatch, capsys):
+    rag = _write_rag(tmp_path, "S0", seq=1)
+    _start_logger(tmp_path, "S1")
+    monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
+
+    rc = main(["session-end", "--no-errors", "--rag", str(rag),
+               "--session", "S1", "--summary", "x"])
+    assert rc == 0
+    assert _marker(rag)["transfer_ready"] is True
+    assert "DECLARED clean" in capsys.readouterr().out
+
+
+def test_close_seals_when_an_entry_is_actually_banked(tmp_path, monkeypatch, capsys):
+    """The other way to satisfy the gate: bank the record it exists to protect."""
+    rag = _write_rag(tmp_path, "S0", seq=1)
+    _start_logger(tmp_path, "S1")
+    monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
+
+    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x",
+               "--error-log-entry", "E-999 (S1): something went wrong -- and here it is",
+               "--error-log-id", "E-999"])
+    assert rc == 0
+    marker = _marker(rag)
+    assert marker["steps"]["error_log"] is True
+    assert marker["transfer_ready"] is True
+
+
 def test_session_end_no_report_suppresses_render(tmp_path, monkeypatch, capsys):
     """--no-report opts out of the machine render (kept for exceptional cases)."""
     rag = _write_rag(tmp_path, "S0", seq=1)
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1",
                "--summary", "x", "--no-report"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -143,7 +193,7 @@ def test_session_end_writes_attested_report_artifact(tmp_path, monkeypatch, caps
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"])
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x"])
     assert rc == 0
 
     artifact = tmp_path / "AUDIT_CANONICAL_REPORT_S1.md"
@@ -167,7 +217,7 @@ def test_session_end_no_report_writes_no_artifact(tmp_path, monkeypatch):
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1",
                "--summary", "x", "--no-report"])
     assert rc == 0
     assert not (tmp_path / "AUDIT_CANONICAL_REPORT_S1.md").exists()
@@ -210,7 +260,7 @@ def test_audit_failure_leaves_resumable_closed_marker(tmp_path, monkeypatch):
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 1)   # red audit
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"])
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x"])
     assert rc != 0
     mk = _marker(rag)
     assert mk["transfer_ready"] is False          # NOT handed off
@@ -223,12 +273,15 @@ def test_session_resume_completes_without_second_checkpoint(tmp_path, monkeypatc
     rag = _write_rag(tmp_path, "S0", seq=1)
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 1)
-    assert main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"]) != 0
+    assert main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x"]) != 0
     seq_after_abort = json.loads(rag.read_text())["meta"]["last_checkpoint_seq"]
 
     # audit now green — resume should finish the close and NOT re-checkpoint.
+    # The resume carries the same CLOSE-STEP-ERRLOG declaration as the session-end
+    # that started this close: a resume must not be able to launder silence into a
+    # seal that the direct path would have refused (S188).
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
-    rc = main(["session-resume", "--rag", str(rag)])
+    rc = main(["session-resume", "--no-errors", "--rag", str(rag)])
     assert rc == 0
     data = json.loads(rag.read_text())
     assert data["session_close"]["transfer_ready"] is True
@@ -243,7 +296,7 @@ def test_session_resume_noop_when_complete(tmp_path, monkeypatch, capsys):
     rag = _write_rag(tmp_path, "S0", seq=1)
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
-    assert main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x"]) == 0
+    assert main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x"]) == 0
     capsys.readouterr()
     assert main(["session-resume", "--rag", str(rag)]) == 0
     assert "No incomplete close" in capsys.readouterr().out
@@ -300,7 +353,7 @@ def test_session_end_refuses_when_other_session_close_pending(tmp_path, monkeypa
     called = {"audit": False}
     monkeypatch.setattr(m, "cmd_audit", lambda args: called.__setitem__("audit", True) or 0)
 
-    rc = main(["session-end", "--rag", str(rag), "--session", "S6", "--summary", "x"])
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S6", "--summary", "x"])
     assert rc == 1
     assert called["audit"] is False   # never started the close
 
@@ -311,7 +364,7 @@ def test_report_rendered_attestation_recorded(tmp_path, monkeypatch):
     rag = _write_rag(tmp_path, "S0", seq=1)
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
-    rc = main(["session-end", "--rag", str(rag), "--session", "S1", "--summary", "x",
+    rc = main(["session-end", "--no-errors", "--rag", str(rag), "--session", "S1", "--summary", "x",
                "--report-rendered"])
     assert rc == 0
     assert _marker(rag)["steps"]["report_rendered"] is True
