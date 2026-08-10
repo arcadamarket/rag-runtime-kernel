@@ -33,7 +33,21 @@ def _write_rag(tmp_path: Path, written_by: str, seq: int = 1) -> Path:
     rag_path = tmp_path / "RAG_MASTER.json"
     rag_path.write_text(
         json.dumps({
-            "meta": {"written_by_session": written_by, "last_checkpoint_seq": seq},
+            "meta": {
+                "written_by_session": written_by,
+                "last_checkpoint_seq": seq,
+                # CLOSE-TESTGATE-STALE-BLOCKS (S191): the seal refuses a kernel
+                # whose suite was never measured at the commit it ships from.
+                # These tests are about close ORDERING, not about the test
+                # gate, so the fixture supplies the sealable precondition the
+                # gate now requires. git_head is left None deliberately: an
+                # absent head cannot be stale, while a wrong one would make
+                # these tests depend on the real repository's HEAD.
+                "test_gate": {
+                    "passed": 1, "failed": 0, "collected": 1,
+                    "session": written_by, "git_head": None,
+                },
+            },
             "sessions_recent": [],
         }),
         encoding="utf-8",

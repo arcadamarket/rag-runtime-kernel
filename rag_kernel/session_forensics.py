@@ -90,6 +90,16 @@ BURST_MIN_REPEATS = 4
 #: transitions are supposed to come in pairs.
 _BURST_EXEMPT = frozenset({"wait-for", "run", "start", "resolve"})
 
+#: FORENSICS-CALLER-ATTRIBUTION (S191, E-111). Tools that drive the kernel
+#: through the same CLI the agent uses stamp their identity here, so their
+#: probes are counted as MACHINE conduct and not charged to the agent. The
+#: auditor's own gc/audit calls made an otherwise clean S190 read as two
+#: bursts and eight failures. Attribution is declared by the spawning process,
+#: never inferred from the verb name — inference would also excuse the agent's
+#: own gc/audit polling, which is a real violation.
+CALLER_ENV = "RAG_KERNEL_CALLER"
+CALLER_AGENT = "agent"
+
 #: Silent gaps tolerated in a close before the conduct gate refuses. Two is the
 #: allowance for the human on the other end (a meal, a meeting); the third is a
 #: session that was not being conducted.
@@ -165,6 +175,11 @@ class SessionForensics:
     mutations_after_first_end: list[str] = field(default_factory=list)
     started: Optional[datetime] = None
     ended: Optional[datetime] = None
+    #: Calls made by tooling rather than the agent (S191). Reported, never
+    #: charged: they are part of the session's cost but not of its conduct.
+    machine_invocations: int = 0
+    machine_failures: list[dict] = field(default_factory=list)
+    machine_callers: dict = field(default_factory=dict)
 
     @property
     def wall_seconds(self) -> float:
@@ -212,6 +227,18 @@ def _verb(rec: dict) -> str:
     if isinstance(msg, str) and msg.startswith("cli "):
         return msg[4:].strip()
     return str(cmd or msg or "?").strip()
+
+
+def _caller(rec: dict) -> str:
+    """Who made this call. Absent stamp = the agent (S191).
+
+    Defaulting to the agent is deliberate: an unstamped record is an ordinary
+    agent invocation, and a forensics tool that defaulted the other way could be
+    silenced by simply not writing the field.
+    """
+    data = rec.get("data") or {}
+    val = data.get("caller")
+    return (val.strip() or CALLER_AGENT) if isinstance(val, str) else CALLER_AGENT
 
 
 def _rc(rec: dict) -> Optional[int]:
@@ -268,8 +295,22 @@ def analyze_log(records: Iterable[dict]) -> SessionForensics:
             out.invocations += 1
             verb = _verb(rec)
             rc = _rc(rec)
+            caller = _caller(rec)
             secs = (rec.get("data") or {}).get("duration_ms")
             secs = (secs / 1000.0) if isinstance(secs, (int, float)) else None
+            if caller != CALLER_AGENT:
+                # Machine-driven call. Counted and reportable, but not the
+                # agent's conduct, so it neither fails the gate nor pollutes
+                # the burst window the agent is judged on.
+                out.machine_invocations += 1
+                out.machine_callers[caller] = out.machine_callers.get(caller, 0) + 1
+                if rc not in (0, None):
+                    out.machine_failures.append({
+                        "seq": rec.get("seq"), "verb": verb, "caller": caller,
+                        "rc": rc, "ts": rec.get("ts"), "seconds": secs,
+                    })
+                prev = (rec, ts)
+                continue
             if rc not in (0, None):
                 out.failures.append({
                     "seq": rec.get("seq"), "verb": verb,
@@ -346,6 +387,13 @@ def render_text(f: SessionForensics) -> str:
        f"(rendered from the log, not from memory) ===")
     ap(f"  wall time        : {_hms(f.wall_seconds)}")
     ap(f"  governed calls   : {f.invocations} ({f.records} log records)")
+    if f.machine_invocations:
+        who = ", ".join(f"{k} x{v}" for k, v in sorted(f.machine_callers.items()))
+        ap(f"  of which machine : {f.machine_invocations} — {who}"
+           f" (reported, not charged to the agent)")
+        if f.machine_failures:
+            ap(f"                     {len(f.machine_failures)} of them failed"
+               f" — a tool's own probe failing is a tool finding, not conduct")
 
     if f.failures:
         by_verb: dict[str, list[dict]] = {}

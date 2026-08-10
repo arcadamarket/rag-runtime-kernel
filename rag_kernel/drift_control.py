@@ -470,6 +470,49 @@ class TrackedItem:
             )
         return replace(self, note=note, session=session)
 
+    def with_citation(
+        self,
+        artifacts: "tuple[str, ...] | list[str]",
+        *,
+        session: str,
+        reason: str = "",
+    ) -> TrackedItem:
+        """Return a new TrackedItem carrying additional evidence. No status move.
+
+        EVIDENCE-AMENDMENT (S191). Artifacts live on a StatusEvent, so evidence
+        could only ever be attached AT a transition. RESOLVED is terminal with
+        no outgoing edges (E-030), which made the standing directive - "backfill
+        evidence on the 131 evidence-free RESOLVED items with resolve
+        --artifact" - literally unexecutable: the audit permanently failed a
+        check whose only prescribed remedy the ledger forbids.
+
+        A citation is not a lifecycle move. It asserts nothing new about what
+        happened; it records WHERE the proof of what happened lives. So this
+        appends a StatusEvent whose from_status equals its to_status - a
+        no-move event - and never touches ``status``. E-030 is untouched: a
+        closed item still never resurfaces, because nothing here can reopen it.
+
+        Idempotent: artifacts already cited anywhere in this item's history are
+        skipped, and a call that would add nothing returns ``self`` unchanged
+        rather than growing the history with an empty event.
+        """
+        if isinstance(artifacts, str):
+            raise ItemValidationError(
+                "artifacts must be a sequence of paths, not a single string"
+            )
+        seen = {a for ev in self.history for a in ev.artifacts}
+        fresh = tuple(dict.fromkeys(a for a in artifacts if a and a not in seen))
+        if not fresh:
+            return self
+        event = StatusEvent(
+            from_status=self.status,
+            to_status=self.status,
+            session=session,
+            reason=reason,
+            artifacts=fresh,
+        )
+        return replace(self, session=session, history=self.history + (event,))
+
     def with_priority(self, priority_group: str, *, session: str) -> TrackedItem:
         """Return a new TrackedItem in a different Rule 21 ``priority_group``.
 

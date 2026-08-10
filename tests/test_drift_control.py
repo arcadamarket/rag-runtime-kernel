@@ -382,3 +382,59 @@ def test_round_trip_preserves_priority_group():
     # a lifecycle transition preserves the priority bucket (replace() carries it)
     assert it.priority_group == "P4"
     assert TrackedItem.from_dict(it.to_dict()) == it
+
+
+# ---------------------------------------------------------------------------
+# EVIDENCE-AMENDMENT (S191) — citing a terminal item
+#
+# Artifacts live on a StatusEvent, so evidence could only ever be attached AT a
+# transition. RESOLVED is terminal, which made the standing directive ("backfill
+# evidence on the 131 evidence-free RESOLVED items with resolve --artifact")
+# literally unexecutable: the audit failed a check whose only prescribed remedy
+# the ledger forbade. with_citation closes exactly that gap and nothing else.
+# ---------------------------------------------------------------------------
+
+def _resolved(**kw):
+    it = _item(status=ItemStatus.OPEN, **kw)
+    it = it.with_status(ItemStatus.IN_PROGRESS, session="S1")
+    return it.with_status(ItemStatus.RESOLVED, session="S1")
+
+
+def test_a_resolved_item_can_be_cited():
+    it = _resolved()
+    assert it.is_terminal
+    out = it.with_citation(["rag_kernel/drift_store.py"], session="S191")
+    assert [a for ev in out.history for a in ev.artifacts] == ["rag_kernel/drift_store.py"]
+
+
+def test_citing_never_changes_status_so_e030_still_holds():
+    it = _resolved()
+    out = it.with_citation(["a.py"], session="S191", reason="backfill")
+    assert out.status is ItemStatus.RESOLVED
+    ev = out.history[-1]
+    # a no-move event: the citation records where proof lives, not a lifecycle move
+    assert ev.from_status is ev.to_status is ItemStatus.RESOLVED
+
+
+def test_citing_is_idempotent_and_adds_no_empty_event():
+    it = _resolved().with_citation(["a.py"], session="S191")
+    n = len(it.history)
+    again = it.with_citation(["a.py"], session="S192")
+    assert again is it
+    assert len(again.history) == n
+
+
+def test_citing_dedupes_within_one_call_and_keeps_only_the_new():
+    it = _resolved().with_citation(["a.py"], session="S191")
+    out = it.with_citation(["a.py", "b.py", "b.py"], session="S191")
+    assert out.history[-1].artifacts == ("b.py",)
+
+
+def test_a_bare_string_is_rejected_rather_than_cited_character_by_character():
+    with pytest.raises(ItemValidationError):
+        _resolved().with_citation("a.py", session="S191")
+
+
+def test_a_cited_item_round_trips():
+    it = _resolved().with_citation(["a.py"], session="S191")
+    assert TrackedItem.from_dict(it.to_dict()) == it

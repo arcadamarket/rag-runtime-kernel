@@ -30,7 +30,19 @@ from rag_kernel.session_logger import LOG_FILE_PREFIX, LOG_FILE_EXT
 
 def _write_rag(tmp_path: Path, *, reconcile_docs_root=None,
                written_by="S0", seq=1, under_rag_dir=False) -> Path:
-    meta = {"written_by_session": written_by, "last_checkpoint_seq": seq}
+    meta = {
+        "written_by_session": written_by,
+        "last_checkpoint_seq": seq,
+        # CLOSE-TESTGATE-STALE-BLOCKS (S191): the seal refuses a kernel whose
+        # suite was never measured at the commit it ships from. These tests are
+        # about docs-root reconciliation, not the test gate, so the fixture
+        # supplies the sealable precondition. git_head None: an absent head
+        # cannot be stale, while a wrong one would couple these to real HEAD.
+        "test_gate": {
+            "passed": 1, "failed": 0, "collected": 1,
+            "session": written_by, "git_head": None,
+        },
+    }
     if reconcile_docs_root is not None:
         meta["reconciliation_docs_root"] = reconcile_docs_root
     root = tmp_path

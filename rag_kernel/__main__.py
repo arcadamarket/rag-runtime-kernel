@@ -60,6 +60,7 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "intent-audit": "Session-START plan-vs-settled gate: verify a stated plan honors the next_session_directive (ID-binding + normalized-exact restatement) and load the SOURCE decisions — KA-INTENT-FIDELITY inc2",
     "render": "Render legacy open_tasks/deferred_items/backlog/ERROR_LOG from tracked_items; --apply rewrites the legacy arrays atomically (DRIFT-ELIM increment 4)",
     "note": "Refresh a tracked item's one-line note through the guarded API (status untouched) — DRIFT-ELIM increment 5 (INS-038)",
+    "cite": "Attach evidence to a tracked item without moving its status — the only path that can cite an already-RESOLVED item (EVIDENCE-AMENDMENT, S191)",
     "priority": "Set a tracked item's Rule 21 priority_group (P1..P5, or \"\" to clear) through the guarded API (status untouched) — REPORT-PRIORITY-GROUPS inc1",
     "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5",
     "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
@@ -96,6 +97,7 @@ from pathlib import Path
 
 from rag_kernel.api import DEFAULT_PORT, KernelApp, create_server
 from rag_kernel.mcp_transport import MCPServer
+from rag_kernel.session_forensics import CALLER_AGENT, CALLER_ENV
 
 # KA-9: a whole-value human-fill session-zero placeholder ("<from user>",
 # "<absolute path>") — an angle-bracket token carrying a lowercase letter or
@@ -695,6 +697,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session id stamped as last-touched (audit trail)",
     )
     note_parser.add_argument("--dry-run", action="store_true", help="Validate without writing")
+
+    # -- cite (EVIDENCE-AMENDMENT S191: attach evidence without a status move) --
+    cite_parser = subparsers.add_parser(
+        "cite",
+        help="Attach evidence to a tracked item without moving its status — the only path "
+             "that can cite an already-RESOLVED item.",
+    )
+    cite_parser.add_argument("item_id", type=str, help="id of the tracked item")
+    cite_parser.add_argument(
+        "--artifact", action="append", default=[], required=True,
+        help="Evidence path that MUST exist, relative to the RAG dir (repeatable).",
+    )
+    cite_parser.add_argument(
+        "--rag", type=Path, default=_default_rag_path(),
+        help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
+    )
+    cite_parser.add_argument(
+        "--session", type=str, required=True,
+        help="Session id stamped on the citation (audit trail)",
+    )
+    cite_parser.add_argument(
+        "--reason", type=str, default="",
+        help="One-line reason recorded with the citation",
+    )
+    cite_parser.add_argument("--dry-run", action="store_true", help="Validate without writing")
 
     # -- priority (REPORT-PRIORITY-GROUPS inc1: guarded priority-group assignment) --
     priority_parser = subparsers.add_parser(
@@ -2605,6 +2632,73 @@ def cmd_note(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
     print(f"Note updated on {args.item_id} (status untouched; .bak refreshed).")
+    return 0
+
+
+def cmd_cite(args: argparse.Namespace) -> int:
+    """Attach evidence to a tracked item without moving its status.
+
+    EVIDENCE-AMENDMENT (S191). ``resolve --artifact`` can only cite evidence AT
+    the moment of resolution, and RESOLVED is terminal, so the 131 already-
+    resolved items that cite nothing had no reachable remedy — the audit failed
+    a check the ledger forbade fixing. This verb closes that gap and nothing
+    else: it never changes status, so a closed item still never resurfaces.
+
+    Every cited path MUST exist, exactly as ``resolve --artifact`` requires. An
+    evidence verb that accepted unresolvable paths would launder the very
+    problem it exists to fix.
+    """
+    from rag_kernel.drift_store import (
+        DriftStoreError,
+        TrackedItemStore,
+        cite_in_file,
+        load_hot,
+    )
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    rag_dir = rag_path.parent
+    missing = [a for a in args.artifact if not (rag_dir / a).exists()]
+    if missing:
+        print(
+            "Error: cited artifact(s) do not exist, nothing written: "
+            + ", ".join(missing),
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        store = TrackedItemStore.from_hot(load_hot(rag_path))
+        if args.item_id not in store:
+            print(f"Error: no tracked item with id {args.item_id!r}", file=sys.stderr)
+            return 1
+        current = store.get(args.item_id)
+        already = {a for ev in current.history for a in ev.artifacts}
+        fresh = [a for a in args.artifact if a not in already]
+        if not fresh:
+            print(
+                f"{args.item_id}: already cites {len(args.artifact)} of "
+                f"{len(args.artifact)} given artifact(s) — nothing to add."
+            )
+            return 0
+        if args.dry_run:
+            print(
+                f"[dry-run] would cite {fresh} on {args.item_id} "
+                f"(status {current.status.value}, unchanged)"
+            )
+            return 0
+        cite_in_file(
+            rag_path, args.item_id, fresh,
+            session=args.session, reason=args.reason,
+        )
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print(
+        f"{args.item_id}: cited {len(fresh)} artifact(s) "
+        f"(status {current.status.value}, untouched; .bak refreshed)."
+    )
     return 0
 
 
@@ -4698,6 +4792,53 @@ def _drive_close(
         return 1
 
     # ------------------------------------------------------------------
+    # CLOSE-TESTGATE-STALE-BLOCKS (S191, E-115) — the seal refuses an
+    # unproven kernel.
+    #
+    # S190 ran the suite, THEN committed, and never re-measured. The stamp
+    # said 2,509 green @ e8fbb96 while the kernel shipped at 9d68bf0, and the
+    # commit in between carried `_boot_axis1_audit` with no `import
+    # subprocess`. Every S191 boot died with a NameError before it could
+    # render the operating frame. The grand audit DID catch it — "test gate
+    # GREEN and current :: STALE (measured @ e8fbb96, live @ 9d68bf0)" — but
+    # that check only reports, and the close never consults it, so the
+    # finding cost a whole session anyway.
+    #
+    # A detector nobody consults is not a guard. `verdict` is already
+    # tri-state and already compares the stamp against the LIVE head, so the
+    # seal simply has to obey it: only True (measured, green, current) may
+    # seal. None (UNMEASURED or STALE) and False (red) both refuse, with the
+    # resumable marker shape the other close gates use.
+    # ------------------------------------------------------------------
+    try:
+        from rag_kernel import test_gate as _tg
+        from rag_kernel.drift_store import load_hot as _load_hot
+
+        _hot = _load_hot(rag_path)
+        _tg_ok, _tg_cell, _tg_why = _tg.verdict(
+            _tg.read_stamp(_hot),
+            live_head=_resolve_git_head(rag_path),
+            live_runtime=(_hot.get("meta") or {}).get("runtime_version"),
+        )
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot measure must not pass
+        _tg_ok, _tg_cell, _tg_why = None, "n/a", f"test-gate probe raised {exc}"
+    if _tg_ok is not True:
+        print(
+            f"ERROR: CLOSE-TESTGATE-STALE-BLOCKS -- test gate is {_tg_cell} "
+            f"({_tg_why}). transfer_ready NOT set (marker SURFACE_PENDING, "
+            "resumable). Run `rag_kernel tests --run` against the CURRENT "
+            "tree, then re-run session-resume. A kernel that was never "
+            "measured at the commit it ships from is the S190 defect that "
+            "cost S191 its boot.",
+            file=sys.stderr,
+        )
+        _write_close_marker(
+            rag_path,
+            _build_close_marker(sid, "SURFACE_PENDING", steps, started, None),
+        )
+        return 1
+
+    # ------------------------------------------------------------------
     # FORENSICS-AS-GATE (S190, P1-A) — the conduct facts now BLOCK the seal.
     #
     # Until now this ran AFTER the transfer marker, and two comments there
@@ -4858,7 +4999,7 @@ def _drive_close(
 #: Verbs that write canonical state and are therefore refused after a seal.
 _SEAL_GUARDED_VERBS = frozenset({
     "add", "un-add", "resolve", "start", "defer", "reopen", "discard", "supersede",
-    "note", "priority", "add-rule", "update-rule", "refresh-current-status",
+    "note", "cite", "priority", "add-rule", "update-rule", "refresh-current-status",
     "prune-current-status", "meta", "register-asset", "decide", "ingest",
     "checkpoint", "migrate", "transplant", "birth-adopt", "dedup-sessions",
     "errlog-migrate",
@@ -5187,6 +5328,8 @@ def _boot_axis1_audit(rag_dir: Path, timeout: int = 240) -> "tuple[str, list[str
                       Advisory: a missing auditor must not brick the project, and
                       an unfinished probe may not produce a finding (L1).
     """
+    import subprocess
+
     script = Path(rag_dir) / "scripts" / "grand_audit.py"
     if not script.exists():
         return "UNKNOWN", [f"auditor not found at {script}"]
@@ -7799,6 +7942,16 @@ def _dispatch_with_bootstrap_log(
                 extra: dict = {}
                 if real_error:
                     extra["error_type"] = type(exc).__name__
+                # FORENSICS-CALLER-ATTRIBUTION (S191, E-111). The auditor drives
+                # the kernel through the same CLI the agent uses, so its own
+                # probes (gc x4, audit x8) landed in the session log as agent
+                # conduct: a clean session read as bursty and failing, and the
+                # conduct gate would have taught the agent to declare its way
+                # past someone else's calls. Attribution is stamped at the
+                # source by the process that spawns the call, never inferred
+                # from the verb name — a heuristic on verb names would also
+                # excuse the agent's own gc/audit polling, which is real.
+                extra["caller"] = os.environ.get(CALLER_ENV, CALLER_AGENT).strip() or CALLER_AGENT
                 logger = SessionLogger(
                     sid, log_dir=rag_dir, log_filename=log_path.name
                 )
@@ -7954,6 +8107,7 @@ def main(argv: list[str] | None = None) -> int:
         "render": cmd_render,
         "report": cmd_report,
         "note": cmd_note,
+        "cite": cmd_cite,
         "priority": cmd_priority,
         "dedup-sessions": cmd_dedup_sessions,
         "audit": cmd_audit,

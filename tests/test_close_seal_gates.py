@@ -118,3 +118,50 @@ class TestGuardedVerbSet:
         """session-resume must stay reachable — it is the named repair."""
         for verb in ("session-resume", "session-start", "session-end", "doctor"):
             assert verb not in _SEAL_GUARDED_VERBS
+
+
+class TestCloseTestGateStaleBlocks:
+    """CLOSE-TESTGATE-STALE-BLOCKS (S191, E-115).
+
+    S190 measured the suite at e8fbb96, then committed 9d68bf0, then sealed.
+    The commit in between shipped `_boot_axis1_audit` with no `import
+    subprocess`, so every S191 boot died before rendering the operating frame.
+    The grand audit had already flagged the stamp STALE — but only as a report,
+    and the close never consulted it. A detector nobody consults is not a guard.
+
+    These pin the tri-state contract the seal now obeys: ONLY a measured, green,
+    current stamp may seal.
+    """
+
+    def _verdict(self, **kw):
+        from rag_kernel import test_gate
+        stamp = {"passed": 2509, "failed": 0, "collected": 2509,
+                 "session": "S190", "git_head": "e8fbb96abc"}
+        stamp.update(kw.pop("stamp", {}))
+        return test_gate.verdict(stamp, **kw)
+
+    def test_the_exact_s190_stamp_does_not_seal(self):
+        ok, cell, _ = self._verdict(live_head="9d68bf0def")
+        assert ok is not True
+        assert "STALE" in cell
+
+    def test_a_red_suite_does_not_seal(self):
+        ok, _, _ = self._verdict(stamp={"failed": 1}, live_head="e8fbb96abc")
+        assert ok is False
+
+    def test_an_unmeasured_gate_does_not_seal(self):
+        from rag_kernel import test_gate
+        ok, _, _ = test_gate.verdict(None, live_head="e8fbb96abc")
+        assert ok is None
+
+    def test_zero_collected_does_not_seal_even_with_no_failures(self):
+        # measuring the wrong tree yields 0 collected and 0 failed; that must
+        # never read as green.
+        ok, _, _ = self._verdict(
+            stamp={"passed": 0, "collected": 0}, live_head="e8fbb96abc"
+        )
+        assert ok is None
+
+    def test_only_measured_green_and_current_seals(self):
+        ok, _, _ = self._verdict(live_head="e8fbb96abc")
+        assert ok is True

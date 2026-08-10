@@ -283,6 +283,26 @@ class TrackedItemStore:
         self._items[item_id] = updated
         return updated
 
+    def cite(
+        self,
+        item_id: str,
+        artifacts: Sequence[str],
+        *,
+        session: str,
+        reason: str = "",
+    ) -> TrackedItem:
+        """Attach evidence to an item through the guarded core. No status move.
+
+        Routes through :meth:`TrackedItem.with_citation` — the only sanctioned
+        evidence-amendment path — so a citation is never added by hand-editing
+        ``tracked_items``. Works on terminal items by design: that is the whole
+        point (see ``with_citation``). Unknown id -> UnknownItemError.
+        """
+        current = self.get(item_id)
+        updated = current.with_citation(artifacts, session=session, reason=reason)
+        self._items[item_id] = updated
+        return updated
+
     def set_priority(
         self, item_id: str, priority_group: str, *, session: str
     ) -> TrackedItem:
@@ -427,6 +447,32 @@ def set_note_in_file(
     return mutate_hot(
         path,
         lambda store: store.set_note(item_id, note, session=session),
+        now=now,
+    )
+
+
+def cite_in_file(
+    path: Path | str,
+    item_id: str,
+    artifacts: Sequence[str],
+    *,
+    session: str,
+    reason: str = "",
+    now: Optional[str] = None,
+) -> dict:
+    """Atomically attach evidence to one item in a RAG file. No status move.
+
+    EVIDENCE-AMENDMENT (S191). The guarded counterpart to
+    :func:`transition_in_file` for the case where the fact is already settled
+    and only its proof is missing — the 131 RESOLVED items that cite nothing.
+    Load -> ``store.cite`` -> atomic write (tmp -> verify -> .bak -> rename).
+    Fails loud and writes nothing on an unknown id.
+    """
+    return mutate_hot(
+        path,
+        lambda store: store.cite(
+            item_id, artifacts, session=session, reason=reason
+        ),
         now=now,
     )
 

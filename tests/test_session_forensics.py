@@ -20,6 +20,8 @@ import pytest
 
 from rag_kernel.session_forensics import (
     BURST_MIN_REPEATS,
+    CALLER_AGENT,
+    CALLER_ENV,
     ForensicsError,
     analyze_file,
     analyze_log,
@@ -27,10 +29,13 @@ from rag_kernel.session_forensics import (
 )
 
 
-def _rec(seq, ts, event="tool_invocation", verb="audit", rc=0, sid="S187", ms=None):
+def _rec(seq, ts, event="tool_invocation", verb="audit", rc=0, sid="S187", ms=None,
+         caller=None):
     data = {"command": verb, "exit_code": rc}
     if ms is not None:
         data["duration_ms"] = ms
+    if caller is not None:
+        data["caller"] = caller
     return {"seq": seq, "ts": ts, "sid": sid, "event": event,
             "msg": f"cli {verb}", "data": data}
 
@@ -195,3 +200,53 @@ class TestCleanSession:
         out = render_text(f)
         assert "failed calls     : none" in out
         assert "SEALS            : 1 (clean)" in out
+
+
+class TestCallerAttribution:
+    """FORENSICS-CALLER-ATTRIBUTION (S191, E-111).
+
+    The grand auditor drives the kernel through the same CLI the agent uses. In
+    S190 its own probes — gc x4, audit x8 — were logged indistinguishably from
+    agent calls, so a session whose agent had done nothing wrong closed with two
+    polling bursts and eight failures against its name. A conduct gate fed that
+    input does not teach discipline; it teaches the agent to declare its way
+    past findings that were never its own.
+    """
+
+    def _burst(self, verb, caller=None, base=0):
+        n = BURST_MIN_REPEATS + 1
+        return [_rec(base + i, "2026-01-01T00:00:%02d+00:00" % i,
+                     verb=verb, caller=caller) for i in range(n)]
+
+    def test_auditor_burst_is_not_charged_to_the_agent(self):
+        f = analyze_log(self._burst("audit", caller="auditor"))
+        assert f.bursts == []
+        assert f.machine_invocations == BURST_MIN_REPEATS + 1
+        assert f.machine_callers == {"auditor": BURST_MIN_REPEATS + 1}
+
+    def test_the_agents_own_burst_is_still_caught(self):
+        # The exemption is by declared caller, never by verb name: the same
+        # verb, unstamped, remains a violation.
+        f = analyze_log(self._burst("audit"))
+        assert len(f.bursts) == 1
+        assert f.machine_invocations == 0
+
+    def test_auditor_failures_are_reported_but_not_agent_failures(self):
+        rows = [_rec(1, "2026-01-01T00:00:00+00:00", verb="gc", rc=2,
+                     caller="auditor"),
+                _rec(2, "2026-01-01T00:00:05+00:00", verb="resolve", rc=1)]
+        f = analyze_log(rows)
+        assert [x["verb"] for x in f.failures] == ["resolve"]
+        assert [x["verb"] for x in f.machine_failures] == ["gc"]
+        out = render_text(f)
+        assert "of which machine : 1" in out
+
+    def test_an_unstamped_record_defaults_to_the_agent(self):
+        # A forensics tool that defaulted the other way could be silenced by
+        # simply not writing the field.
+        f = analyze_log([_rec(1, "2026-01-01T00:00:00+00:00", verb="gc", rc=3)])
+        assert len(f.failures) == 1
+        assert f.machine_invocations == 0
+
+    def test_the_env_var_the_kernel_stamps_from_is_the_one_tools_set(self):
+        assert (CALLER_ENV, CALLER_AGENT) == ("RAG_KERNEL_CALLER", "agent")
