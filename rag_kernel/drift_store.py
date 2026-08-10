@@ -229,16 +229,19 @@ class TrackedItemStore:
         session: str,
         reason: str = "",
         superseded_by: Optional[str] = None,
+        artifacts: "tuple[str, ...] | list[str] | None" = None,
     ) -> TrackedItem:
         """Transition one item to ``new_status`` through the lifecycle guard.
 
         Unknown id -> UnknownItemError; illegal move -> ItemStateError (from the
         inc-1 core). On success the store holds the new immutable item (with an
-        appended history event) and the old one is discarded.
+        appended history event) and the old one is discarded. ``artifacts`` are
+        the evidence paths recorded on that event (RESOLVE-REQUIRES-EVIDENCE).
         """
         current = self.get(item_id)
         updated = current.with_status(
-            new_status, session=session, reason=reason, superseded_by=superseded_by
+            new_status, session=session, reason=reason, superseded_by=superseded_by,
+            artifacts=artifacts,
         )
         self._items[item_id] = updated
         return updated
@@ -392,13 +395,15 @@ def transition_in_file(
     session: str,
     reason: str = "",
     superseded_by: Optional[str] = None,
+    artifacts: "tuple[str, ...] | list[str] | None" = None,
     now: Optional[str] = None,
 ) -> dict:
     """Atomically apply a single guarded transition to one item in a RAG file."""
     return mutate_hot(
         path,
         lambda store: store.transition(
-            item_id, new_status, session=session, reason=reason, superseded_by=superseded_by
+            item_id, new_status, session=session, reason=reason,
+            superseded_by=superseded_by, artifacts=artifacts,
         ),
         now=now,
     )

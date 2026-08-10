@@ -66,7 +66,10 @@ def _status_of(path, item_id):
 
 class TestLegalTransitions:
     def test_resolve_in_progress(self, rag_path):
-        rc = main(["resolve", "PROG-1", "--rag", str(rag_path), "--session", "S50"])
+        # RESOLVE-REQUIRES-EVIDENCE (S190): a DONE claim must name a file that
+        # exists. The RAG under test is itself a real path, so it serves.
+        rc = main(["resolve", "PROG-1", "--rag", str(rag_path), "--session", "S50",
+                   "--artifact", str(rag_path)])
         assert rc == 0
         assert _status_of(rag_path, "PROG-1") == "RESOLVED"
 
@@ -101,14 +104,17 @@ class TestLegalTransitions:
         assert item["superseded_by"] == "OPEN-2"
 
     def test_transition_appends_history(self, rag_path):
-        main(["resolve", "PROG-1", "--rag", str(rag_path), "--session", "S50", "--reason", "done"])
+        main(["resolve", "PROG-1", "--rag", str(rag_path), "--session", "S50",
+              "--reason", "done", "--artifact", str(rag_path)])
         item = next(it for it in _load(rag_path)["tracked_items"] if it["id"] == "PROG-1")
         assert len(item["history"]) == 1
         ev = item["history"][0]
         assert ev["from_status"] == "IN_PROGRESS"
         assert ev["to_status"] == "RESOLVED"
         assert ev["session"] == "S50"
-        assert ev["reason"] == "done"
+        assert ev["reason"] == "done", "the author's sentence is recorded VERBATIM"
+        # S190: evidence is a field of its own, never appended to the reason.
+        assert ev["artifacts"] == [str(rag_path)]
 
 
 # ===== Fail-loud paths (must write nothing) =====
@@ -145,7 +151,8 @@ class TestFailLoud:
 class TestDryRun:
     def test_dry_run_legal_no_write(self, rag_path):
         before = rag_path.read_text(encoding="utf-8")
-        rc = main(["resolve", "PROG-1", "--rag", str(rag_path), "--session", "S50", "--dry-run"])
+        rc = main(["resolve", "PROG-1", "--rag", str(rag_path), "--session", "S50",
+                   "--artifact", str(rag_path), "--dry-run"])
         assert rc == 0
         assert rag_path.read_text(encoding="utf-8") == before
 

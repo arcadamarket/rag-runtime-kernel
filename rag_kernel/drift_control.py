@@ -262,14 +262,26 @@ class StatusEvent:
     to_status: ItemStatus
     session: str
     reason: str = ""
+    #: Paths to the evidence for this transition (RESOLVE-REQUIRES-EVIDENCE,
+    #: S190). A first-class field, not prose inside ``reason``: the S189 audit had
+    #: to guess at 175 items' evidence by reading sentences, and 131 of them had
+    #: none to read. A machine can check a field; it cannot check a sentence.
+    #: Omitted from ``to_dict`` when empty, so existing history rows are unchanged.
+    artifacts: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "artifacts", tuple(self.artifacts or ()))
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "from_status": self.from_status.value,
             "to_status": self.to_status.value,
             "session": self.session,
             "reason": self.reason,
         }
+        if self.artifacts:
+            out["artifacts"] = list(self.artifacts)
+        return out
 
     @classmethod
     def from_dict(cls, d: dict) -> StatusEvent:
@@ -278,6 +290,7 @@ class StatusEvent:
             to_status=_coerce_status(d["to_status"]),
             session=d.get("session", ""),
             reason=d.get("reason", ""),
+            artifacts=tuple(d.get("artifacts") or ()),
         )
 
 
@@ -410,6 +423,7 @@ class TrackedItem:
         session: str,
         reason: str = "",
         superseded_by: str | None = None,
+        artifacts: "tuple[str, ...] | list[str] | None" = None,
     ) -> TrackedItem:
         """Return a new TrackedItem in ``new_status``, fail-loud if illegal.
 
@@ -425,6 +439,7 @@ class TrackedItem:
             to_status=dst,
             session=session,
             reason=reason,
+            artifacts=tuple(artifacts or ()),
         )
         return replace(
             self,

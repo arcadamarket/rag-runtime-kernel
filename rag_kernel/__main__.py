@@ -63,6 +63,8 @@ Satisfies: M-026 (CLI entry point), V33-BOOTSTRAP (init command), ENH-008 (sessi
     "priority": "Set a tracked item's Rule 21 priority_group (P1..P5, or \"\" to clear) through the guarded API (status untouched) — REPORT-PRIORITY-GROUPS inc1",
     "audit": "Fail-loud session auditor: renders match canonical, supersede refs resolve, notes don't contradict status, no side stores — DRIFT-ELIM increment 5",
     "add": "Add a NEW canonical tracked item through the guarded atomic store (fail-loud on duplicate id)",
+    "errlog-migrate": "Fold every ERROR_LOG.md E-number into tracked_items as kind=ERROR in one atomic, idempotent write (ERRLOG-MIGRATION, S190)",
+    "acceptance": "Boot-readiness acceptance check for the kernel and every registered deployment — the question `audit` cannot answer: would a successor session actually start? (S190 P3 wiring)",
     "add-rule": "Append a NEW operating_protocol rule through the guarded atomic store (FIX-5/P3, fail-loud on existing key)",
     "update-rule": "Re-set an EXISTING operating_protocol rule (string or dict/JSON value) or one sub-key of a dict rule through the guarded atomic store (UPDATE-RULE-VERB, fail-loud on a missing target unless --create)",
     "migrate": "Migrate a DEPLOYMENT's RAG meta up to the schema this kernel speaks — declared additive ladder, reads the target's own meta, refuses to downgrade a deploy that is ahead, fails loud on an unknown origin version, no-op when already current (KA-SCHEMA-MIGRATE)",
@@ -281,9 +283,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--rag", type=Path, default=_default_rag_path(),
         help="Path to RAG_MASTER.json (default: RAG/RAG_MASTER.json)",
     )
+    # GC-BOOTROOT-FIX (S190, P1-B): the default was Path(".") = CWD, and the
+    # sanctioned boot runs from RAG/. The collector therefore walked RAG/ for its
+    # whole life while 283 MB of TLC state sat one level up, unseen: proven at
+    # S189 as gc(root)=3 vs gc(RAG)=1. The default is now the PROJECT ROOT
+    # (rag_dir.parent), resolved at the call site; --gc-path stays an override.
     sstart_parser.add_argument(
-        "--gc-path", type=Path, default=Path("."),
-        help="Project root to scan in the gc dry-run (default: . — run from root_project)",
+        "--gc-path", type=Path, default=None,
+        help="Root to scan in the gc dry-run (default: the PROJECT ROOT, i.e. the "
+             "parent of the RAG directory — not the CWD).",
+    )
+    sstart_parser.add_argument(
+        "--no-boot-audit", action="store_true",
+        help="Skip the axis-1 (TOOL FITNESS) boot gate. The session then opens "
+             "without having proven its transports work THIS session "
+             "(GRAND-AUDIT-AT-BOOT).",
     )
     sstart_parser.add_argument("--strict", action="store_true", help="Treat audit warnings as gate failures too")
     sstart_parser.add_argument(
@@ -382,6 +396,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="DECLARE that this session produced no error worth an ERROR_LOG "
              "record. Required when no --error-log-entry is given; the close "
              "REFUSES to seal on silence (CLOSE-STEP-ERRLOG-UNENFORCED).")
+    # FORENSICS-AS-GATE (S190) — the only way past a conduct finding, and it is
+    # recorded in the close marker. There is deliberately no boolean form: an
+    # override without a reason is what advisory forensics already was.
+    send_parser.add_argument(
+        "--accept-conduct", type=str, default=None, metavar="REASON",
+        help="DECLARE the session's conduct findings (repeat bursts, failed "
+             "governed calls, excess silent gaps) as accepted, with a reason "
+             "that is recorded in the close marker. Without this the close "
+             "REFUSES on any finding (FORENSICS-AS-GATE).",
+    )
     # KA-13 — wire the Rule 11 published-doc reconciliation into the close audit.
     send_parser.add_argument(
         "--docs-root", type=str, default=None,
@@ -430,6 +454,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-errors", action="store_true",
         help="DECLARE that this session produced no error worth an ERROR_LOG "
              "record (same gate as session-end; a resume cannot launder silence).",
+    )
+    sresume_parser.add_argument(
+        "--accept-conduct", type=str, default=None, metavar="REASON",
+        help="DECLARE the session's conduct findings as accepted, with a reason "
+             "recorded in the close marker (same gate as session-end; a resume "
+             "cannot launder conduct either — FORENSICS-AS-GATE).",
     )
 
     # -- checkpoint --
@@ -510,6 +540,20 @@ def build_parser() -> argparse.ArgumentParser:
         )
         vp.add_argument("--reason", type=str, default="", help="One-line reason recorded in history")
         vp.add_argument("--dry-run", action="store_true", help="Check legality without writing")
+        # RESOLVE-REQUIRES-EVIDENCE (S190, P1-C) — repeatable, and REQUIRED by
+        # `resolve`: a DONE claim is a claim about a file that exists.
+        vp.add_argument(
+            "--artifact", action="append", default=None, metavar="PATH",
+            help="Evidence for this transition: a path that MUST exist "
+                 "(repeatable). REQUIRED by `resolve` — 131 of 175 RESOLVED "
+                 "items cite none, and that is where DONE stopped meaning done.",
+        )
+        # SEMANTIC-PRECONDITION-GATE (S190, P1-D)
+        vp.add_argument(
+            "--cite", type=str, default=None, metavar="ITEM_ID",
+            help="Live tracked item this write is really about. Required to "
+                 "write against a TERMINAL item (resolve/defer/reopen).",
+        )
         if _verb == "supersede":
             vp.add_argument("--by", type=str, required=True, help="id of the item that supersedes this one")
 
@@ -671,6 +715,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session id stamped as last-touched (audit trail)",
     )
     priority_parser.add_argument("--dry-run", action="store_true", help="Validate without writing")
+    # SEMANTIC-PRECONDITION-GATE (S190, P1-D) — `priority` is the verb that leaves
+    # status alone, so the lifecycle guard never saw it; S189 prioritised a
+    # terminal item and every gate agreed.
+    priority_parser.add_argument(
+        "--cite", type=str, default=None, metavar="ITEM_ID",
+        help="Live tracked item this priority write is really about. Required "
+             "when the named item is TERMINAL.",
+    )
 
     # -- dedup-sessions (KA-2 increment B: governed sessions_recent row-repair) --
     dedup_parser = subparsers.add_parser(
@@ -760,6 +812,29 @@ def build_parser() -> argparse.ArgumentParser:
     add_item_parser.add_argument("--note", type=str, default="", help="one-line note")
     add_item_parser.add_argument("--by", type=str, default=None, help="superseding item id (required if --status SUPERSEDED)")
     add_item_parser.add_argument("--dry-run", action="store_true", help="validate without writing")
+
+    # -- acceptance (S190, P3: wire scripts/acceptance_check.py instead of deleting it) --
+    acc_parser = subparsers.add_parser(
+        "acceptance",
+        help="Boot-readiness acceptance check for the kernel and every registered "
+             "deployment: verify, audit, boot-map coverage, identity, seal, and a "
+             "real read-only successor session-start.",
+    )
+    acc_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    acc_parser.add_argument("--script", type=str, default=None, help="acceptance_check.py path (default: RAG/scripts/)")
+    acc_parser.add_argument("--timeout", type=int, default=1800, help="seconds before the check is abandoned as inconclusive")
+
+    # -- errlog-migrate (S190, P2: ERROR_LOG.md -> tracked_items, kind=ERROR) --
+    errmig_parser = subparsers.add_parser(
+        "errlog-migrate",
+        help="Fold every ERROR_LOG.md E-number into tracked_items as kind=ERROR "
+             "in ONE atomic write (idempotent) — closes the 106-orphan gap in "
+             "the ledger-continuity axis.",
+    )
+    errmig_parser.add_argument("--rag", type=Path, default=_default_rag_path(), help="Path to RAG_MASTER.json")
+    errmig_parser.add_argument("--session", type=str, required=True, help="session id recorded on the migrated items")
+    errmig_parser.add_argument("--error-log", type=str, default=None, help="ERROR_LOG.md path (default: beside the RAG)")
+    errmig_parser.add_argument("--dry-run", action="store_true", help="report what would be migrated, write nothing")
 
     # -- un-add (KA-CUTOVER-GATE: guarded, atomic INVERSE of add for a pristine mis-add) --
     unadd_parser = subparsers.add_parser(
@@ -1846,6 +1921,119 @@ def cmd_graph(args: argparse.Namespace) -> int:
     return 1 if isinstance(result, dict) and "error" in result else 0
 
 
+#: Verbs whose write is meaningless once the item they name is terminal
+#: (SEMANTIC-PRECONDITION-GATE, S190, P1-D).
+_PRECONDITION_VERBS = frozenset({"priority", "reopen", "resolve", "defer"})
+
+
+def _resolve_artifact(raw: str, rag_path: Path) -> "Path | None":
+    """Locate a claimed evidence artifact, or None if it does not exist.
+
+    Tried as given (absolute or CWD-relative), then relative to the RAG dir, then
+    relative to the project root — the three places a path is honestly written
+    from. Existence is the whole test: a path that resolves to nothing is not
+    evidence, it is a sentence.
+    """
+    cand = Path(raw).expanduser()
+    tries = [cand]
+    if not cand.is_absolute():
+        tries += [rag_path.parent / cand, rag_path.parent.parent / cand]
+    for t in tries:
+        try:
+            if t.exists():
+                return t.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def _refuse_without_evidence(args: argparse.Namespace, rag_path: Path) -> "list[str] | None":
+    """RESOLVE-REQUIRES-EVIDENCE (S190, P1-C). Returns resolved artifact paths.
+
+    The S189 grand audit found 131 of 175 RESOLVED items citing no artifact at
+    all, and 11 more citing only dead paths — 81% of the project's completion
+    record unfalsifiable. A DONE claim is now a claim ABOUT A FILE, and the file
+    must exist at the moment of the claim. Prints and returns None on refusal.
+    """
+    raw = list(getattr(args, "artifact", None) or [])
+    if not raw:
+        print(
+            f"ERROR: RESOLVE-REQUIRES-EVIDENCE — refusing to mark {args.item_id} "
+            "RESOLVED with no artifact.\n"
+            "  resolve <id> --session <sid> --artifact <path> [--artifact <path>...]\n"
+            "  The path must EXIST when the claim is made (absolute, or relative "
+            "to the RAG dir or the project root). 131 of 175 RESOLVED items carry "
+            "no artifact; this is where that stops.",
+            file=sys.stderr,
+        )
+        return None
+    resolved, missing = [], []
+    for r in raw:
+        got = _resolve_artifact(r, rag_path)
+        (resolved.append(str(got)) if got else missing.append(r))
+    if missing:
+        print(
+            "ERROR: RESOLVE-REQUIRES-EVIDENCE — artifact(s) do not exist: "
+            + ", ".join(missing)
+            + "\n  A dead path is the same evidence as no path (11 items already "
+              "cite only dead paths). Nothing was written.",
+            file=sys.stderr,
+        )
+        return None
+    return resolved
+
+
+def _refuse_terminal_write(verb: str, item, cite: "str | None", store) -> "int | None":
+    """SEMANTIC-PRECONDITION-GATE (S190, P1-D). 1 = refused, None = proceed.
+
+    The lifecycle guard already refuses illegal STATUS moves, so a terminal item
+    cannot be re-resolved. It says nothing about the writes that leave status
+    alone: S189 set a priority_group on MARKETING-LANDING, an item that was
+    already terminal, and every gate in the kernel agreed. Priority on a closed
+    item is not a small mistake — it is a plan being made against a world that no
+    longer exists.
+
+    The escape is ``--cite <id>``, and it must resolve to a LIVE tracked item:
+    the successor the write is really about. A citation that names nothing, or
+    names another corpse, is not an argument.
+    """
+    if verb not in _PRECONDITION_VERBS or not item.is_terminal:
+        return None
+    where = f"{item.id} is {item.status.value} (terminal)"
+    if not cite:
+        print(
+            f"ERROR: SEMANTIC-PRECONDITION-GATE — refusing `{verb}` on a terminal "
+            f"item: {where}.\n"
+            "  A terminal item takes no plans. If this write belongs to a live "
+            "successor, name it:\n"
+            f"    {verb} {item.id} ... --cite <live-item-id>\n"
+            "  (S189 wrote a priority onto a terminal item and nothing objected.)",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        cited = store.get(cite)
+    except Exception:
+        cited = None
+    if cited is None or cite not in store:
+        print(
+            f"ERROR: SEMANTIC-PRECONDITION-GATE — --cite {cite!r} resolves to no "
+            f"tracked item; {where}. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    if cited.is_terminal:
+        print(
+            f"ERROR: SEMANTIC-PRECONDITION-GATE — --cite {cite!r} is itself "
+            f"{cited.status.value} (terminal); {where}. Cite a LIVE item or open "
+            "one. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"  SEMANTIC-PRECONDITION: {where}; proceeding on citation of live item {cite}.")
+    return None
+
+
 def cmd_item_transition(args: argparse.Namespace) -> int:
     """Apply one guarded lifecycle transition to a tracked item (DRIFT-ELIM inc 3).
 
@@ -1884,6 +2072,21 @@ def cmd_item_transition(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    # SEMANTIC-PRECONDITION-GATE (P1-D) and RESOLVE-REQUIRES-EVIDENCE (P1-C).
+    # Both run BEFORE --dry-run returns, so a dry run tells the truth about
+    # whether the real thing would be accepted.
+    if _refuse_terminal_write(args.command, current, getattr(args, "cite", None), store):
+        return 1
+    evidence: "list[str]" = []
+    # The evidence gate applies to a transition that is otherwise LEGAL. An
+    # illegal move must report its illegality — telling an author to attach an
+    # artifact to a move the lifecycle forbids is a false repair.
+    if args.command == "resolve" and legal_status_transition(current.status, target):
+        got = _refuse_without_evidence(args, rag_path)
+        if got is None:
+            return 1
+        evidence = got
+
     if args.dry_run:
         if not legal_status_transition(current.status, target):
             print(
@@ -1894,6 +2097,15 @@ def cmd_item_transition(args: argparse.Namespace) -> int:
         print(f"[DRY RUN] {args.item_id}: {current.status.value} -> {target} (no write)")
         return 0
 
+    # The evidence travels INTO the ledger with the transition, as a FIELD:
+    # a claim whose artifact lives only in a chat window is the 131-item problem
+    # restated, and one buried in prose is a problem for the next auditor.
+    # ``reason`` stays verbatim — it is the author's sentence, not a carrier bag.
+    cite = getattr(args, "cite", None)
+    recorded = list(evidence)
+    if cite:
+        recorded.append(f"cite:{cite}")
+
     try:
         transition_in_file(
             rag_path,
@@ -1902,6 +2114,7 @@ def cmd_item_transition(args: argparse.Namespace) -> int:
             session=args.session,
             reason=args.reason,
             superseded_by=superseded_by,
+            artifacts=recorded,
         )
     except (ItemStateError, ItemValidationError, DriftStoreError) as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -2427,6 +2640,11 @@ def cmd_priority(args: argparse.Namespace) -> int:
         store = TrackedItemStore.from_hot(load_hot(rag_path))
         if args.item_id not in store:
             print(f"Error: no tracked item with id {args.item_id!r}", file=sys.stderr)
+            return 1
+        # SEMANTIC-PRECONDITION-GATE (S190, P1-D) — before the dry-run branch, so
+        # a dry run reports the decision the real write would make.
+        if _refuse_terminal_write("priority", store.get(args.item_id),
+                                  getattr(args, "cite", None), store):
             return 1
         if args.dry_run:
             current = store.get(args.item_id)
@@ -3831,7 +4049,7 @@ def _session_start_phase1(
     #    sealed baseline and returned into context so the agent is never boot-blind.
     if not getattr(args, "no_gc", False):
         print("[2/4] GC (dry-run):")
-        cmd_gc(argparse.Namespace(path=args.gc_path, dry_run=True))
+        cmd_gc(argparse.Namespace(path=_boot_gc_root(args, rag_dir), dry_run=True))
     else:
         print("[2/4] GC: skipped (--no-gc).")
     try:
@@ -3849,6 +4067,32 @@ def _session_start_phase1(
         print(f"[2/4] {bootmap.session_start_line(boot_root, rag_dir)}")
     except Exception as exc:  # boot-map is advisory at start; never block the open
         print(f"[2/4] Domain map: unavailable ({exc}).", file=sys.stderr)
+
+    # GRAND-AUDIT-AT-BOOT (S190, P2) — prove the transports THIS session before
+    # the session is allowed to believe anything else. Axis 1 is the audit's own
+    # first law; a FAIL here means every measurement below it is unsafe, so the
+    # boot REFUSES rather than opening a session that cannot be trusted.
+    if not getattr(args, "no_boot_audit", False):
+        _state, _lines = _boot_axis1_audit(rag_dir)
+        if _state == "FAIL":
+            print(
+                "ERROR: GRAND-AUDIT-AT-BOOT — axis 1 (TOOL FITNESS) FAILED; "
+                "refusing to open the session.\n"
+                + "".join(f"  - {ln}\n" for ln in _lines)
+                + "  Nothing measured below a broken transport is trustworthy "
+                  "(the auditor's own L1). Repair the tool, or start with "
+                  "--no-boot-audit and say so in the close.",
+                file=sys.stderr,
+            )
+            return 1
+        if _state == "UNKNOWN":
+            print(f"[2/4] Boot audit (axis 1): UNKNOWN — {_lines[0] if _lines else ''} "
+                  "(advisory: a missing or unfinished auditor is not a defect).",
+                  file=sys.stderr)
+        else:
+            print(f"[2/4] Boot audit (axis 1): PASS — {_lines[0] if _lines else 'tools fit'}")
+    else:
+        print("[2/4] Boot audit (axis 1): SKIPPED (--no-boot-audit).")
 
     # 3a. Legacy one-shot bypass (UNSAFE) — kept for CI and emergencies.
     if getattr(args, "no_attest_gate", False):
@@ -4004,6 +4248,8 @@ def _derive_next_sid(rag_path: Path) -> "str | None":
 def _build_close_marker(
     sid: str, phase: str, steps: dict, started_utc: str,
     completed_utc: "str | None", *, transfer_ready: bool = False,
+    conduct: "list[str] | None" = None, conduct_measured: bool = False,
+    conduct_accepted: "str | None" = None,
 ) -> dict:
     return {
         "session": sid,
@@ -4011,6 +4257,14 @@ def _build_close_marker(
         "transfer_ready": transfer_ready,
         "started_utc": started_utc,
         "completed_utc": completed_utc,
+        # FORENSICS-AS-GATE (S190): the conduct record travels with the seal, so a
+        # successor can see what was accepted and on whose word, not just that the
+        # marker said COMPLETE.
+        "conduct": {
+            "measured": bool(conduct_measured),
+            "findings": list(conduct or []),
+            "accepted_reason": conduct_accepted,
+        },
         "steps": {
             "checkpoint": bool(steps.get("checkpoint")),
             "error_log": bool(steps.get("error_log")),
@@ -4114,6 +4368,9 @@ def _close_report_ns(sid: str, args: argparse.Namespace) -> argparse.Namespace:
         # forwarded so the seal can tell a clean session from a silent one.
         no_errors=getattr(args, "no_errors", False),
         force=getattr(args, "force", False),
+        # FORENSICS-AS-GATE (S190): the conduct declaration, forwarded so the
+        # close can tell a declared burst from an unnoticed one.
+        accept_conduct=getattr(args, "accept_conduct", None),
     )
 
 
@@ -4440,10 +4697,73 @@ def _drive_close(
         )
         return 1
 
+    # ------------------------------------------------------------------
+    # FORENSICS-AS-GATE (S190, P1-A) — the conduct facts now BLOCK the seal.
+    #
+    # Until now this ran AFTER the transfer marker, and two comments there
+    # declared it advisory by design — it was allowed to print and forbidden to
+    # act. (The phrases are quoted in E-106 and in the S189 audit, not here: a
+    # gate that repeats them in its own source is what the wiring axis looks
+    # for.) S188 sealed GREEN while its own forensics printed two polling
+    # bursts and 1h09 of silence; S189 would have been refused three times over.
+    # The evidence was produced every session and thrown away every session.
+    # It now runs BEFORE the marker, and a close carrying repeat bursts,
+    # undeclared failed calls, or excess silent gaps REFUSES unless the operator
+    # DECLARES it with --accept-conduct <reason>, which is recorded in the
+    # marker. Un-measurable conduct is blocking too (L2: UNKNOWN is not a pass).
+    # ------------------------------------------------------------------
+    _accept_conduct = getattr(report_args, "accept_conduct", None)
+    _conduct: "list[str]" = []
+    _conduct_measured = False
+    try:
+        from rag_kernel import session_forensics as _sf
+        from rag_kernel.session_logger import LOG_FILE_PREFIX, LOG_FILE_EXT
+        _log = rag_dir / f"{LOG_FILE_PREFIX}{sid}{LOG_FILE_EXT}"
+        if _log.exists():
+            _f = _sf.analyze_file(_log)
+            print("")
+            print(_sf.render_text(_f))
+            print("")
+            _conduct = _sf.conduct_findings(_f)
+            _conduct_measured = True
+        else:
+            _conduct = [f"session log absent ({_log.name}) — conduct not measurable"]
+    except Exception as _sf_exc:  # noqa: BLE001 — a probe that failed is not a pass
+        _conduct = [f"forensics could not run: {_sf_exc}"]
+
+    if _conduct and not _accept_conduct:
+        print(
+            "ERROR: FORENSICS-AS-GATE — this close is REFUSED on its own conduct "
+            "record. transfer_ready NOT set (marker SURFACE_PENDING, resumable).\n"
+            + "".join(f"  - {c}\n" for c in _conduct)
+            + "  Fix the conduct, or DECLARE it:\n"
+            "    session-end --accept-conduct '<why these numbers are acceptable>'\n"
+            "  The declaration is recorded in the close marker and travels with "
+            "the seal. Advisory forensics is how S188 sealed green over two "
+            "polling bursts and 1h09 of silence (FORENSICS-ADVISORY-ONLY, S189).",
+            file=sys.stderr,
+        )
+        _write_close_marker(
+            rag_path,
+            _build_close_marker(sid, "SURFACE_PENDING", steps, started, None,
+                                conduct=_conduct, conduct_measured=_conduct_measured),
+        )
+        return 1
+    if _conduct:
+        print("[4/4] CONDUCT DECLARED (gate overridden and recorded):")
+        for _c in _conduct:
+            print(f"  - {_c}")
+        print(f"  reason: {_accept_conduct}")
+    else:
+        print("[4/4] Conduct gate: clean — no bursts, no undeclared failures, "
+              "gaps within allowance.")
+
     _write_close_marker(
         rag_path,
         _build_close_marker(
-            sid, "COMPLETE", steps, started, _utcnow_iso(), transfer_ready=True
+            sid, "COMPLETE", steps, started, _utcnow_iso(), transfer_ready=True,
+            conduct=_conduct, conduct_measured=_conduct_measured,
+            conduct_accepted=_accept_conduct,
         ),
     )
     print("[4/4] Transfer marker: transfer_ready=true (phase COMPLETE).")
@@ -4452,32 +4772,40 @@ def _drive_close(
     # LAST, once every artifact this close produces exists on disk: the
     # session log, the canonical report and the transfer marker. Sealing
     # earlier is what handed a successor a coverage gap on an otherwise
-    # clean close. Advisory-fail: a map hiccup must not strand a green seal.
+    # clean close.
+    #
+    # BOOTMAP-ADVISORY-ENDED (S190). This step used to WARN and carry on, under
+    # "a map hiccup must not strand a green seal" — the same sentence that kept
+    # forensics toothless until this session. It was the last advisory-only
+    # governance module the wiring axis could name. A close whose map did not
+    # reseal hands the successor a coverage gap, which is exactly the defect
+    # this step exists to prevent, so it now REFUSES. Nothing is stranded: the
+    # marker goes back to SURFACE_PENDING and `session-resume` finishes the
+    # close once the map can be written.
     try:
         from rag_kernel import bootmap
         _bm_path = bootmap.refresh_baseline(rag_dir.parent, rag_dir, sid)
         bootmap.ensure_meta_pointer(rag_path)
         print(f"[5/5] Domain map resealed LAST: {_bm_path.name} (+.bak parity).")
     except Exception as _bm_exc:
-        print(f"  WARN: could not reseal domain boot-map: {_bm_exc}", file=sys.stderr)
-    # SELF-DIAGNOSIS-UNSOURCED (S188) — emit the session's CONDUCT facts, rendered
-    # from the log, as part of the close. S187 explained a four-hour session by
-    # naming a five-second event, in front of an operator who had no independent
-    # view of the session's shape. Now the operator always gets the shape: wall
-    # time, failures with their real cost, the silent gaps that actually held the
-    # time, and any repeat burst. An account that contradicts these is visibly an
-    # account rather than a fact. Advisory: forensics must never strand a seal.
-    try:
-        from rag_kernel import session_forensics as _sf
-        from rag_kernel.session_logger import LOG_FILE_PREFIX, LOG_FILE_EXT
-        _log = rag_dir / f"{LOG_FILE_PREFIX}{sid}{LOG_FILE_EXT}"
-        if _log.exists():
-            print("")
-            print(_sf.render_text(_sf.analyze_file(_log)))
-            print("")
-    except Exception as _sf_exc:  # noqa: BLE001 — observability, never a blocker
-        print(f"  WARN: could not render session forensics: {_sf_exc}",
-              file=sys.stderr)
+        print(
+            f"ERROR: SEAL-BOOTMAP-ORDER-GAP — could not reseal the domain "
+            f"boot-map: {_bm_exc}. transfer_ready WITHDRAWN (marker "
+            "SURFACE_PENDING, resumable). A successor booting on a stale map is "
+            "boot-blind over every file this session touched; fix the map and "
+            "run `session-resume`.",
+            file=sys.stderr,
+        )
+        _write_close_marker(
+            rag_path,
+            _build_close_marker(sid, "SURFACE_PENDING", steps, started, None,
+                                conduct=_conduct, conduct_measured=_conduct_measured,
+                                conduct_accepted=_accept_conduct),
+        )
+        return 1
+    # SELF-DIAGNOSIS-UNSOURCED (S188) — the session's CONDUCT facts were rendered
+    # ABOVE, before the transfer marker, because since S190 they gate the seal
+    # rather than decorate it (FORENSICS-AS-GATE). Do not move them back down.
 
     verb = "resumed and completed" if resuming else "ended cleanly"
     print(
@@ -4533,6 +4861,7 @@ _SEAL_GUARDED_VERBS = frozenset({
     "note", "priority", "add-rule", "update-rule", "refresh-current-status",
     "prune-current-status", "meta", "register-asset", "decide", "ingest",
     "checkpoint", "migrate", "transplant", "birth-adopt", "dedup-sessions",
+    "errlog-migrate",
 })
 
 
@@ -4713,21 +5042,236 @@ def cmd_session_resume(args: argparse.Namespace) -> int:
     )
 
 
+#: An ERROR_LOG entry number. The same vocabulary the continuity axis counts with,
+#: deliberately identical so the migration and the auditor can never disagree.
+_ERRLOG_NUM = re.compile(r"\bE-\d{3}\b")
+
+
+def parse_errlog(text: str) -> "list[tuple[str, str]]":
+    """Every E-number in an ERROR_LOG.md, with the line that introduces it.
+
+    ERRLOG-MIGRATION (S190, P2). The ledger's continuity axis requires every
+    ERROR_LOG entry to exist as a tracked item; 106 of 106 were orphaned, so the
+    error record and the canonical item store had no edge between them at all.
+    (S188 reported 44 — it counted headings of one shape and stopped.)
+
+    Returns ``[(e_number, title)]`` in first-appearance order, deduplicated. The
+    title is the introducing line stripped of markdown furniture; when an
+    E-number first appears mid-prose the title is that sentence, which is still
+    a truer record than a synthesized one.
+    """
+    seen: "dict[str, str]" = {}
+    for raw in (text or "").splitlines():
+        # EVERY E-number on the line, not just the first: a line that renumbers
+        # one error in terms of another carries two, and taking one of them is
+        # how a count of 106 becomes a count of 103.
+        nums = _ERRLOG_NUM.findall(raw)
+        if not nums:
+            continue
+        title = raw.strip().lstrip("#").strip().strip("*_ ").replace("`", "")
+        for num in nums:
+            if num not in seen:
+                seen[num] = title[:180] or num
+    return list(seen.items())
+
+
+def cmd_acceptance(args: argparse.Namespace) -> int:
+    """Boot-readiness acceptance check for every deployment (P3 wiring, S190).
+
+    ``scripts/acceptance_check.py`` has existed since S178 and answered the one
+    question ``audit`` cannot — *would a successor session actually start?* — by
+    driving verify / audit / boot-map coverage / identity / seal / a real
+    read-only ``session-start`` against the kernel and every registered
+    deployment. Nothing referenced it, so the S189 census counted it abandoned
+    at 11 days old and the P3 instruction was: wire it or delete it.
+
+    It is wired. The script stays the single authority (no second copy to
+    drift); this verb is the edge that makes it reachable, and callable from a
+    close or a CI job the same way every other governed check is.
+    """
+    script = Path(args.script) if args.script else (args.rag.resolve().parent
+                                                    / "scripts" / "acceptance_check.py")
+    if not script.exists():
+        print(f"Error: acceptance checker not found: {script}", file=sys.stderr)
+        return 1
+    try:
+        r = subprocess.run([sys.executable, str(script)], text=True,
+                           timeout=args.timeout, cwd=str(script.parent.parent))
+    except subprocess.TimeoutExpired:
+        print(f"Error: acceptance check did not finish within {args.timeout}s "
+              "— no conclusion (L1: an unfinished probe is not a failure).",
+              file=sys.stderr)
+        return 1
+    return r.returncode
+
+
+def cmd_errlog_migrate(args: argparse.Namespace) -> int:
+    """Fold every ERROR_LOG.md entry into tracked_items as ``kind=ERROR``.
+
+    ONE atomic write for the whole migration, not one governed call per record:
+    a hundred sequential CLI writes would be a hundred chances to half-finish,
+    and would read as a polling burst in the session's own forensics.
+
+    Status is RESOLVED and the note says exactly what that asserts — that the
+    incident is RECORDED, not that any fix was re-verified. Overstating it here
+    would be the same disease as the 131 evidence-free RESOLVED items this
+    session is closing. Re-running is idempotent (existing ids are skipped).
+    """
+    from rag_kernel.drift_store import DriftStoreError, add_items_file, load_hot
+
+    rag_path = args.rag.resolve()
+    if not rag_path.exists():
+        print(f"Error: RAG file not found: {rag_path}", file=sys.stderr)
+        return 1
+    log_path = Path(args.error_log) if args.error_log else rag_path.parent / "ERROR_LOG.md"
+    if not log_path.exists():
+        print(f"Error: ERROR_LOG not found: {log_path}", file=sys.stderr)
+        return 1
+
+    entries = parse_errlog(log_path.read_text(encoding="utf-8", errors="replace"))
+    try:
+        hot = load_hot(rag_path)
+    except DriftStoreError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    existing = {str(it.get("id")) for it in (hot.get("tracked_items") or [])}
+    missing = [(n, t) for n, t in entries if n not in existing]
+
+    print(f"ERROR_LOG: {log_path}")
+    print(f"  E-numbers found : {len(entries)}")
+    print(f"  already tracked : {len(entries) - len(missing)}")
+    print(f"  to migrate      : {len(missing)}")
+    if not missing:
+        print("  Nothing to do — the error record and the item store agree.")
+        return 0
+    for n, t in missing[:10]:
+        print(f"    {n}  {t[:96]}")
+    if len(missing) > 10:
+        print(f"    … {len(missing) - 10} more")
+    if args.dry_run:
+        print("  [DRY RUN] nothing written.")
+        return 0
+
+    specs = [{
+        "id": n,
+        "title": t,
+        "status": "RESOLVED",
+        "kind": "ERROR",
+        "session": args.session,
+        "note": f"record migrated from {log_path.name} (S190); RESOLVED asserts "
+                "the incident is RECORDED, not that a fix was re-verified",
+    } for n, t in missing]
+    try:
+        add_items_file(rag_path, specs, allow_existing=True)
+    except DriftStoreError as e:
+        print(f"Error: {e} — nothing written.", file=sys.stderr)
+        return 1
+    print(f"  Migrated {len(specs)} ERROR_LOG entries into tracked_items "
+          "(kind=ERROR, one atomic write, .bak refreshed).")
+    return 0
+
+
+def _boot_axis1_audit(rag_dir: Path, timeout: int = 240) -> "tuple[str, list[str]]":
+    """Run the grand audit's axis 1 (TOOL FITNESS) as a boot gate.
+
+    GRAND-AUDIT-AT-BOOT (S190, P2). Axis 1 is the audit's own first law: nothing
+    measured below it is trustworthy until the transports are proven to work THIS
+    session. It is also the only axis cheap enough to run at every boot, so the
+    gate selects it with ``--only 1`` rather than taxing the operator with all
+    eleven.
+
+    Returns ``(state, lines)`` where state is:
+      ``"OK"``      — axis 1 ran, no FAIL;
+      ``"FAIL"``    — axis 1 ran and found defects (lines name them): REFUSE;
+      ``"UNKNOWN"`` — the probe itself did not complete, or the script is absent.
+                      Advisory: a missing auditor must not brick the project, and
+                      an unfinished probe may not produce a finding (L1).
+    """
+    script = Path(rag_dir) / "scripts" / "grand_audit.py"
+    if not script.exists():
+        return "UNKNOWN", [f"auditor not found at {script}"]
+    try:
+        r = subprocess.run(
+            [sys.executable, str(script), "--only", "1", "--fast",
+             "--root", str(Path(rag_dir).resolve().parent)],
+            capture_output=True, text=True, timeout=timeout, cwd=str(rag_dir),
+        )
+    except subprocess.TimeoutExpired:
+        return "UNKNOWN", [f"axis-1 probe did not finish within {timeout}s"]
+    except Exception as exc:  # noqa: BLE001 — an auditor crash is not a verdict
+        return "UNKNOWN", [f"axis-1 probe raised {exc}"]
+    out = (r.stdout or "") + (r.stderr or "")
+    # The report lists defects under "FAIL detail:" and unfinished probes under
+    # "UNKNOWN detail:". Only the first section refuses a boot (L1: an
+    # unfinished probe is not a defect).
+    section, fails = None, []
+    for ln in out.splitlines():
+        s = ln.strip()
+        if s.startswith("FAIL detail"):
+            section = "FAIL"; continue
+        if s.startswith("UNKNOWN detail"):
+            section = "UNKNOWN"; continue
+        if section == "FAIL" and s.startswith("[1-") and "::" in s:
+            fails.append(s)
+    if fails:
+        return "FAIL", fails
+    if "1-TOOLS" not in out:
+        return "UNKNOWN", ["axis-1 probe produced no rows"]
+    return "OK", [ln.strip() for ln in out.splitlines() if "RESULT:" in ln]
+
+
+def _boot_gc_root(args: argparse.Namespace, rag_dir: Path) -> Path:
+    """The root the boot-time GC sweep walks. ONE authority, so it can be probed.
+
+    GC-BOOTROOT-FIX (S190, P1-B). The sweep used to inherit ``--gc-path``'s
+    default of ``Path(".")``, i.e. the CWD, and the sanctioned boot runs from
+    ``RAG/``. So the collector spent its whole life scanning the RAG directory
+    while the project root above it accumulated 283 MB of TLC state and 17
+    abandoned files. S189 measured it: gc(root)=3 items vs gc(RAG)=1.
+
+    The default is now the project root — the parent of the RAG directory, the
+    same root ``bootmap`` already seals against (BOOTMAP-BOOTROOT-FIX, S170).
+    An explicit ``--gc-path`` still wins, so the override survives.
+    """
+    override = getattr(args, "gc_path", None)
+    return Path(override).resolve() if override else Path(rag_dir).resolve().parent
+
+
 def cmd_gc(args: argparse.Namespace) -> int:
     """Garbage collector — scan and clean temp artifacts within project root.
 
-    Targets:
+    Targets (COLLECTED — removed on a non-dry run):
     - __pycache__/ directories and .pyc files
     - .tmp files
     - Orphaned single-digit/short numeric files at project root (stdout captures)
     - .bat files (Desktop Commander artifacts)
+    - TLC model-checking state directories under formal/states/ (S190: 283 MB of
+      regenerable metadata that no prior sweep had a word for), skipping any dir
+      touched in the last two hours so a live run is never collected
+    - .boot/*.log transcripts older than BOOT_LOG_AGE_DAYS
 
-    Always reports before deleting. In --dry-run mode, reports only.
+    Targets (SEEN — reported, never deleted; P3: archive, never blind-delete):
+    - zero-byte files (S189 planted zero.log and the collector did not see it)
+    - one-off session-stamped scripts, e.g. ``foo_s188_probe.py``
+
+    Always reports before deleting. In --dry-run mode, reports only. The report is
+    the point: a collector that cannot NAME a thing cannot be said to know it
+    exists, which is how 17 files reached 96 days old inside a governed project.
     """
     import re
 
     project_root = args.path.resolve()
     dry_run = args.dry_run
+
+    #: A boot transcript older than this is history, not context.
+    BOOT_LOG_AGE_DAYS = 30
+    #: A TLC state dir touched more recently than this may belong to a live run.
+    TLC_ACTIVE_SECONDS = 2 * 3600
+    #: Zero-byte files that MEAN zero bytes.
+    ZERO_BYTE_KEEP = {"__init__.py", ".gitkeep", ".keep", "py.typed", ".gitignore"}
+    #: A one-off: `<something>_s188_<something>.py`, the shape P3 census counted.
+    ONE_OFF_SCRIPT = re.compile(r"_s\d{2,4}(?:_|\.)", re.I)
+    now = time.time()
 
     print(f"RAG Runtime Kernel - Garbage Collector")
     print(f"Scanning: {project_root}")
@@ -4742,6 +5286,13 @@ def cmd_gc(args: argparse.Namespace) -> int:
         "tmp_files": [],
         "orphan_files": [],
         "bat_files": [],
+        "tlc_state_dirs": [],
+        "aged_boot_logs": [],
+    }
+    # SEEN-NOT-COLLECTED: named in the report, never removed by this verb.
+    review: dict[str, list[str]] = {
+        "zero_byte_files": [],
+        "one_off_scripts": [],
     }
 
     for dirpath, dirnames, filenames in os.walk(project_root):
@@ -4749,12 +5300,29 @@ def cmd_gc(args: argparse.Namespace) -> int:
 
         # Skip .venv, .git, node_modules
         skip_dirs = {".venv", ".git", "node_modules", ".playwright-mcp"}
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        # An archive is a decision already taken (P3, S190): its contents were
+        # examined, recorded in a manifest and moved out of the live tree. Re-
+        # flagging them every sweep would train the reader to ignore the report.
+        dirnames[:] = [d for d in dirnames
+                       if d not in skip_dirs and not d.startswith("_ARCHIVE")]
 
         # __pycache__ directories
         if os.path.basename(dirpath) == "__pycache__":
             findings["pycache_dirs"].append(rel)
             continue
+
+        # TLC state directories: formal/states/<run>/ — regenerable metadata, and
+        # the single largest thing this collector never had a word for.
+        if os.path.basename(os.path.dirname(dirpath)) == "states" \
+                and "formal" in rel.replace("\\", "/").split("/"):
+            try:
+                idle = now - os.path.getmtime(dirpath)
+            except OSError:
+                idle = 0
+            if idle > TLC_ACTIVE_SECONDS:
+                findings["tlc_state_dirs"].append(rel)
+                dirnames[:] = []
+                continue
 
         for fname in filenames:
             fpath = os.path.join(dirpath, fname)
@@ -4772,6 +5340,25 @@ def cmd_gc(args: argparse.Namespace) -> int:
             elif fname.endswith(".bat") and dirpath == str(project_root):
                 findings["bat_files"].append(rel_file)
 
+            # aged boot transcripts
+            elif os.path.basename(dirpath) == ".boot" and fname.endswith(".log"):
+                try:
+                    age_days = (now - os.path.getmtime(fpath)) / 86400.0
+                except OSError:
+                    age_days = 0.0
+                if age_days > BOOT_LOG_AGE_DAYS:
+                    findings["aged_boot_logs"].append(
+                        f"{rel_file} ({age_days:.0f}d)")
+
+            # SEEN, not collected
+            if fname.endswith(".py") and ONE_OFF_SCRIPT.search(fname):
+                review["one_off_scripts"].append(rel_file)
+            try:
+                if os.path.getsize(fpath) == 0 and fname not in ZERO_BYTE_KEEP:
+                    review["zero_byte_files"].append(rel_file)
+            except OSError:
+                pass
+
     # Orphaned numeric files at project root (stdout captures from wsl-exec)
     for fname in os.listdir(project_root):
         fpath = os.path.join(project_root, fname)
@@ -4785,9 +5372,10 @@ def cmd_gc(args: argparse.Namespace) -> int:
                 pass
 
     # Report
-    total = sum(len(v) for v in findings.values())
+    total = sum(len(v) for v in findings.values()) + sum(len(v) for v in review.values())
     if total == 0:
         print("  No garbage found. Project is clean.")
+        print(f"\n  Total: {total} items")
         return 0
 
     if findings["pycache_dirs"]:
@@ -4815,16 +5403,42 @@ def cmd_gc(args: argparse.Namespace) -> int:
         for f in findings["bat_files"]:
             print(f"    {f}")
 
+    if findings["tlc_state_dirs"]:
+        print(f"  TLC state directories ({len(findings['tlc_state_dirs'])}):")
+        for d in findings["tlc_state_dirs"]:
+            print(f"    {d}/")
+
+    if findings["aged_boot_logs"]:
+        print(f"  Aged boot transcripts >{BOOT_LOG_AGE_DAYS}d "
+              f"({len(findings['aged_boot_logs'])}):")
+        for f in findings["aged_boot_logs"]:
+            print(f"    {f}")
+
+    seen = sum(len(v) for v in review.values())
+    if seen:
+        print(f"\n  SEEN, NOT COLLECTED ({seen}) — reported for a decision, never "
+              "deleted by this verb:")
+        if review["zero_byte_files"]:
+            print(f"  Zero-byte files ({len(review['zero_byte_files'])}):")
+            for f in review["zero_byte_files"]:
+                print(f"    {f}")
+        if review["one_off_scripts"]:
+            print(f"  One-off session-stamped scripts ({len(review['one_off_scripts'])}):")
+            for f in review["one_off_scripts"]:
+                print(f"    {f}")
+
     print(f"\n  Total: {total} items")
 
     if dry_run:
         print("\n  [DRY RUN] Run without --dry-run to delete.")
         return 0
 
-    # Delete
+    # Delete — collected classes only. The review classes above are deliberately
+    # absent from this loop: a collector that deletes what it merely suspects is
+    # how evidence disappears (P3: archive, never blind-delete).
     deleted = 0
 
-    for d in findings["pycache_dirs"]:
+    for d in findings["pycache_dirs"] + findings["tlc_state_dirs"]:
         full = os.path.join(project_root, d)
         try:
             shutil.rmtree(full)
@@ -4832,15 +5446,18 @@ def cmd_gc(args: argparse.Namespace) -> int:
         except OSError as e:
             print(f"  WARNING: Could not delete {d}: {e}")
 
-    for category in ["pyc_files", "tmp_files", "orphan_files", "bat_files"]:
+    for category in ["pyc_files", "tmp_files", "orphan_files", "bat_files",
+                     "aged_boot_logs"]:
         for f in findings[category]:
-            full = os.path.join(project_root, f)
+            full = os.path.join(project_root, f.split(" (")[0])
             try:
                 os.remove(full)
                 deleted += 1
             except OSError as e:
                 print(f"  WARNING: Could not delete {f}: {e}")
 
+    if seen:
+        print(f"  Left in place for a decision: {seen} seen-not-collected items.")
     print(f"\n  Deleted: {deleted} items")
     return 0
 
@@ -6682,6 +7299,27 @@ def cmd_reuse_check(args: argparse.Namespace) -> int:
     rag_dir = _resolve_context_dir(args.rag_dir)
     project_root = args.project_root.resolve() if args.project_root else rag_dir.parent
 
+    # RULE-25 REPAIR (S190, P2). Rule 25 commands "run `rag_kernel reuse-check`
+    # BEFORE authoring anything new"; the bare invocation the rule names answered
+    # `Error: reuse_check needs at least one of path or purpose`, so the S189
+    # audit concluded the verb did not exist at all. It does. A bare call now
+    # RENDERS THE REGISTRY — the one thing an author about to write something
+    # wants to see — and is silent about failure, because nothing was claimed.
+    if not args.path and not args.purpose:
+        from rag_kernel.asset_registry import list_assets
+        try:
+            assets = list_assets(rag_dir)
+        except AssetRegistryError as ex:
+            print(f"Error: {ex}", file=sys.stderr)
+            return 1
+        print(f"reuse-check: {len(assets)} baked asset(s) registered. Narrow with "
+              "--path <candidate> or --purpose <what you are about to write>.")
+        for a in assets:
+            purpose = getattr(a, "purpose", "") or ""
+            print(f"  - {getattr(a, 'path', '') or getattr(a, 'asset_id', '')}"
+                  + (f"  :: {purpose[:90]}" if purpose else ""))
+        return 0
+
     try:
         hits = reuse_check(
             rag_dir, path=args.path, purpose=args.purpose, project_root=project_root
@@ -7320,7 +7958,8 @@ def main(argv: list[str] | None = None) -> int:
         "dedup-sessions": cmd_dedup_sessions,
         "audit": cmd_audit,
         "doctor": cmd_doctor,
-        "add": cmd_add,
+        "add": cmd_add, "errlog-migrate": cmd_errlog_migrate,
+        "acceptance": cmd_acceptance,
         "un-add": cmd_unadd,
         "add-rule": cmd_add_rule,
         "update-rule": cmd_update_rule,

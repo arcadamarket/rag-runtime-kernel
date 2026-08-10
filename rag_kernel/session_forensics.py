@@ -63,6 +63,9 @@ __all__ = [
     "render_text",
     "GAP_SECONDS",
     "BURST_SECONDS",
+    "GAP_ALLOWANCE",
+    "GAP_SHARE_MAX",
+    "conduct_findings",
 ]
 
 
@@ -86,6 +89,66 @@ BURST_MIN_REPEATS = 4
 #: server-side (it IS the anti-poll primitive) and the state machine's two-step
 #: transitions are supposed to come in pairs.
 _BURST_EXEMPT = frozenset({"wait-for", "run", "start", "resolve"})
+
+#: Silent gaps tolerated in a close before the conduct gate refuses. Two is the
+#: allowance for the human on the other end (a meal, a meeting); the third is a
+#: session that was not being conducted.
+GAP_ALLOWANCE = 2
+
+#: Fraction of wall time that may be un-governed before the close refuses. Past
+#: half, the account of the session is mostly about time nobody measured.
+GAP_SHARE_MAX = 0.5
+
+
+def conduct_findings(f: "SessionForensics") -> list[str]:
+    """The conduct facts that must block a seal (FORENSICS-AS-GATE, S190).
+
+    S188 sealed GREEN while its own forensics printed two polling bursts and a
+    69-minute silence, because the close called this module for observability and
+    gave it no power. The findings are unchanged; what changes is that a close
+    that produces any of them must now either fix the session or DECLARE it via
+    ``--accept-conduct <reason>``, which is recorded in the close marker.
+
+    Returns a list of human-readable findings; empty means the conduct is clean.
+    """
+    out: list[str] = []
+    if f.bursts:
+        detail = ", ".join(
+            "%s x%d" % (b.get("verb", "?"), b.get("count", 0)) for b in f.bursts[:5]
+        )
+        out.append(
+            "%d repeat burst(s) — polling is a protocol violation (E-081): %s"
+            % (len(f.bursts), detail)
+        )
+    if f.failures:
+        detail = ", ".join(
+            "%s(rc=%s)" % (x.get("verb", "?"), x.get("rc")) for x in f.failures[:5]
+        )
+        out.append(
+            "%d failed governed call(s), %.0fs of wall time, undeclared: %s"
+            % (len(f.failures), f.failure_seconds, detail)
+        )
+    if len(f.gaps) > GAP_ALLOWANCE:
+        out.append(
+            "%d silent gaps over %dm (allowance %d) totalling %.0fm"
+            % (len(f.gaps), GAP_SECONDS // 60, GAP_ALLOWANCE, f.gap_seconds / 60.0)
+        )
+    if f.wall_seconds and f.gap_share > GAP_SHARE_MAX:
+        out.append(
+            "%.0f%% of the session was un-governed silence (max %.0f%%)"
+            % (f.gap_share * 100.0, GAP_SHARE_MAX * 100.0)
+        )
+    if f.double_sealed:
+        out.append("%d session-end events in one log (double seal)" % len(f.session_ends))
+    if f.mutations_after_first_end:
+        out.append(
+            "%d state mutation(s) after the first close: %s"
+            % (
+                len(f.mutations_after_first_end),
+                ", ".join(f.mutations_after_first_end[:5]),
+            )
+        )
+    return out
 
 
 @dataclass
