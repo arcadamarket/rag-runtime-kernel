@@ -371,6 +371,48 @@ def register_asset(
     return candidate, "created"
 
 
+def deregister_asset(
+    rag_dir: "Path | str",
+    *,
+    asset_id: str,
+    session: str,
+    reason: str = "",
+    dry_run: bool = False,
+) -> "tuple[dict, str]":
+    """Retire an asset record. -> ``(removed_record, action)``.
+
+    ASSET-DEREGISTER-BEFORE-MOVE (S191). The registry could register and
+    re-hash in place, but never RETIRE. So archiving a registered file — the
+    sanctioned way to retire something — left a record pointing at a path that
+    no longer existed, and the audit reported "registered asset missing on
+    disk" about a file that had been correctly dispositioned. The only way to
+    keep the audit clean was to leave junk in the live tree, which is exactly
+    backwards. S191 walked straight into it archiving a zero-byte ingest stub.
+
+    Unknown id fails loud rather than silently succeeding: a no-op that reports
+    success is how a registry drifts from the tree it claims to describe. The
+    removed record is returned so the caller can say what was retired and why.
+    """
+    if not isinstance(asset_id, str) or not asset_id.strip():
+        raise AssetRegistryError("asset_id must be a non-empty string")
+    reg = load_registry(rag_dir)
+    rows = [a for a in reg.get("assets", []) if isinstance(a, dict)]
+    keep = [a for a in rows if a.get("asset_id") != asset_id]
+    if len(keep) == len(rows):
+        raise AssetRegistryError(
+            f"no registered asset with id {asset_id!r} — nothing to deregister"
+        )
+    removed = next(a for a in rows if a.get("asset_id") == asset_id)
+    if dry_run:
+        return removed, "would-deregister"
+    reg = {**reg, "assets": keep}
+    reg.setdefault("_protocol", DEFAULT_PROTOCOL)
+    mgr = _manager(rag_dir)
+    mgr.path.parent.mkdir(parents=True, exist_ok=True)
+    mgr.update_partition(PARTITION_NAME, reg)
+    return removed, "deregistered"
+
+
 # --------------------------------------------------------------------------- #
 # Reuse-check — the pre-write guard (never writes)
 # --------------------------------------------------------------------------- #

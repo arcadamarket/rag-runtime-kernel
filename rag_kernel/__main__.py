@@ -1143,8 +1143,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reg_asset_parser.add_argument("path", type=Path,
                                   help="path to the asset file (relative to project root or absolute)")
-    reg_asset_parser.add_argument("--purpose", type=str, required=True,
-                                  help="one-line description of what the asset does (matched by reuse-check)")
+    # Not argparse-required: --deregister retires a record and needs no purpose.
+    # The handler enforces it for every other path, so registering without one
+    # is still fail-loud.
+    reg_asset_parser.add_argument("--purpose", type=str, default=None,
+                                  help="one-line description of what the asset does (matched by reuse-check). "
+                                       "Required unless --deregister.")
+    reg_asset_parser.add_argument("--deregister", action="store_true",
+                                  help="RETIRE the record for this path/id: the counterpart of registering, "
+                                       "for a file that has been archived or removed. The file itself is "
+                                       "never touched. Fail-loud when the id is not registered.")
     reg_asset_parser.add_argument("--id", dest="asset_id", type=str, default=None,
                                   help="stable asset id (default: the project-relative POSIX path)")
     reg_asset_parser.add_argument("--session", type=str, required=True,
@@ -7389,12 +7397,39 @@ def cmd_register_asset(args: argparse.Namespace) -> int:
     fail-loud (exit 1). The file being registered must exist (its sha256 is the record).
     """
     from rag_kernel.asset_registry import (
-        AssetRegistryError, PARTITION_NAME, normalize_path, register_asset,
+        AssetRegistryError, PARTITION_NAME, deregister_asset, normalize_path,
+        register_asset,
     )
 
     rag_dir = _resolve_context_dir(args.rag_dir)
     project_root = args.project_root.resolve() if args.project_root else rag_dir.parent
     asset_id = args.asset_id or normalize_path(args.path, project_root)
+
+    # ASSET-DEREGISTER-BEFORE-MOVE (S191): retiring is the counterpart of
+    # registering. Without it, archiving a registered file — the sanctioned
+    # way to retire something — left the registry pointing at a path that no
+    # longer exists, so the only way to keep the audit clean was to leave junk
+    # in the live tree.
+    if getattr(args, "deregister", False):
+        try:
+            removed, action = deregister_asset(
+                rag_dir, asset_id=asset_id, session=args.session,
+                reason=getattr(args, "purpose", "") or "", dry_run=args.dry_run,
+            )
+        except AssetRegistryError as ex:
+            print(f"Error: {ex}", file=sys.stderr)
+            return 1
+        print(f"register-asset: {action} [session {args.session}]:")
+        print(f"  id:      {removed.get('asset_id')}")
+        print(f"  path:    {removed.get('path')}")
+        print(f"  sha256:  {str(removed.get('sha256'))[:16]}…")
+        print("  -> the record is retired; the file itself was NOT touched.")
+        return 0
+
+    if not (args.purpose or "").strip():
+        print("Error: --purpose is required when registering an asset "
+              "(only --deregister may omit it)", file=sys.stderr)
+        return 1
 
     try:
         rec, action = register_asset(
