@@ -7952,6 +7952,20 @@ def _dispatch_with_bootstrap_log(
                 # from the verb name — a heuristic on verb names would also
                 # excuse the agent's own gc/audit polling, which is real.
                 extra["caller"] = os.environ.get(CALLER_ENV, CALLER_AGENT).strip() or CALLER_AGENT
+                # FORENSICS-BURST-TARGET (S191, E-117). Burst detection counted
+                # a verb repeating inside a window and called it polling. It
+                # cannot be: `cite` x22 over 22 DISTINCT items is the scripted
+                # batch PY-SCRIPT-MANDATE asks for, while `audit` x5 against the
+                # same state is the violation. Without the target the two are
+                # indistinguishable, so the check flagged correct work. Logging
+                # what the call ACTED ON makes the distinction measurable.
+                _tgt = next(
+                    (getattr(args, a) for a in ("item_id", "asset_id", "rule_id", "path")
+                     if isinstance(getattr(args, a, None), str)),
+                    None,
+                )
+                if _tgt:
+                    extra["target"] = _tgt
                 logger = SessionLogger(
                     sid, log_dir=rag_dir, log_filename=log_path.name
                 )

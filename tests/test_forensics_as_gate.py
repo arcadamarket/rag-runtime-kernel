@@ -33,13 +33,17 @@ from rag_kernel.__main__ import _build_close_marker, _drive_close, build_parser
 T0 = datetime(2026, 8, 9, 12, 0, 0)
 
 
-def _rec(seq, offset_s, verb, rc=0, event="tool_invocation", duration_ms=1000):
+def _rec(seq, offset_s, verb, rc=0, event="tool_invocation", duration_ms=1000,
+         error_type=None):
+    data = {"command": verb, "rc": rc, "duration_ms": duration_ms}
+    if error_type is not None:
+        data["error_type"] = error_type
     return {
         "seq": seq,
         "sid": "STEST",
         "ts": (T0 + timedelta(seconds=offset_s)).isoformat(),
         "event": event,
-        "data": {"command": verb, "rc": rc, "duration_ms": duration_ms},
+        "data": data,
     }
 
 
@@ -58,9 +62,18 @@ class TestConductFindings:
         assert any("repeat burst" in f for f in found), found
 
     def test_a_failed_governed_call_is_a_finding(self):
-        log = _clean_log() + [_rec(90, 200, "audit", rc=1)]
+        # S191 (E-118): a non-zero exit is only a FAILURE when something
+        # actually broke. `audit` returning 1 because it found findings is a
+        # guard working and no longer a conduct finding — so the call that
+        # must still be caught here is one that raised.
+        log = _clean_log() + [_rec(90, 200, "checkpoint", rc=1, error_type="OSError")]
         found = sf.conduct_findings(sf.analyze_log(log))
         assert any("failed governed call" in f for f in found), found
+
+    def test_a_guard_refusing_is_no_longer_a_conduct_finding(self):
+        log = _clean_log() + [_rec(90, 200, "resolve", rc=1)]
+        found = sf.conduct_findings(sf.analyze_log(log))
+        assert not any("failed governed call" in f for f in found), found
 
     def test_gaps_within_the_allowance_pass(self):
         log = [_rec(i, i * (sf.GAP_SECONDS + 60), "items") for i in range(sf.GAP_ALLOWANCE + 1)]

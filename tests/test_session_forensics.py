@@ -30,12 +30,16 @@ from rag_kernel.session_forensics import (
 
 
 def _rec(seq, ts, event="tool_invocation", verb="audit", rc=0, sid="S187", ms=None,
-         caller=None):
+         caller=None, target=None, error_type=None):
     data = {"command": verb, "exit_code": rc}
     if ms is not None:
         data["duration_ms"] = ms
     if caller is not None:
         data["caller"] = caller
+    if target is not None:
+        data["target"] = target
+    if error_type is not None:
+        data["error_type"] = error_type
     return {"seq": seq, "ts": ts, "sid": sid, "event": event,
             "msg": f"cli {verb}", "data": data}
 
@@ -68,9 +72,14 @@ def _s187_shape():
 class TestS187Reconstruction:
     def test_the_stated_cause_is_seconds_and_the_session_is_hours(self):
         f = analyze_log(_s187_shape())
-        assert len(f.failures) == 6
-        assert all(x["verb"] == "resolve" for x in f.failures)
-        assert f.failure_seconds < 10, "the blamed retries cost seconds"
+        # S191: those six non-zero resolves were the lifecycle gate REFUSING,
+        # so they are counted as refusals, not agent failures (E-118). The point
+        # of this test is unchanged and is the whole reason the module exists:
+        # the thing S187 blamed cost seconds, the session cost hours.
+        blamed = f.refusals + f.failures
+        assert len(blamed) == 6
+        assert all(x["verb"] == "resolve" for x in blamed)
+        assert sum(x["seconds"] or 0 for x in blamed) < 10, "the blamed retries cost seconds"
         assert f.wall_seconds > 3 * 3600, "the session cost hours"
 
     def test_the_gaps_are_where_the_time_went(self):
@@ -103,18 +112,23 @@ class TestExitCodeShapes:
     """
 
     def test_int_exit_code(self):
+        # The subject here is EXIT-CODE LEGIBILITY, not classification: a
+        # non-zero exit must be seen at all. Which bucket it lands in (refusal
+        # vs failure) is TestRefusalIsNotFailure's business.
         rows = [{"seq": 1, "ts": "2026-01-01T00:00:00+00:00", "sid": "S1",
                  "event": "tool_invocation", "msg": "cli resolve",
                  "data": {"command": "resolve", "exit_code": 1}}]
-        assert len(analyze_log(rows).failures) == 1
+        f = analyze_log(rows)
+        assert len(f.failures) + len(f.refusals) == 1
 
     def test_rendered_status_string(self):
         rows = [{"seq": 1, "ts": "2026-01-01T00:00:00+00:00", "sid": "S1",
                  "event": "tool_invocation", "msg": "cli resolve",
                  "data": {"command": "cli", "status": "exit 1"}}]
         f = analyze_log(rows)
-        assert len(f.failures) == 1
-        assert f.failures[0]["verb"] == "resolve", "verb falls back to the message"
+        seen = f.failures + f.refusals
+        assert len(seen) == 1
+        assert seen[0]["verb"] == "resolve", "verb falls back to the message"
 
     def test_rendered_status_zero_is_not_a_failure(self):
         rows = [{"seq": 1, "ts": "2026-01-01T00:00:00+00:00", "sid": "S1",
@@ -234,9 +248,10 @@ class TestCallerAttribution:
     def test_auditor_failures_are_reported_but_not_agent_failures(self):
         rows = [_rec(1, "2026-01-01T00:00:00+00:00", verb="gc", rc=2,
                      caller="auditor"),
-                _rec(2, "2026-01-01T00:00:05+00:00", verb="resolve", rc=1)]
+                _rec(2, "2026-01-01T00:00:05+00:00", verb="checkpoint", rc=1,
+                     error_type="OSError")]
         f = analyze_log(rows)
-        assert [x["verb"] for x in f.failures] == ["resolve"]
+        assert [x["verb"] for x in f.failures] == ["checkpoint"]
         assert [x["verb"] for x in f.machine_failures] == ["gc"]
         out = render_text(f)
         assert "of which machine : 1" in out
@@ -244,9 +259,87 @@ class TestCallerAttribution:
     def test_an_unstamped_record_defaults_to_the_agent(self):
         # A forensics tool that defaulted the other way could be silenced by
         # simply not writing the field.
-        f = analyze_log([_rec(1, "2026-01-01T00:00:00+00:00", verb="gc", rc=3)])
+        f = analyze_log([_rec(1, "2026-01-01T00:00:00+00:00", verb="gc", rc=3,
+                              error_type="RuntimeError")])
         assert len(f.failures) == 1
         assert f.machine_invocations == 0
 
     def test_the_env_var_the_kernel_stamps_from_is_the_one_tools_set(self):
         assert (CALLER_ENV, CALLER_AGENT) == ("RAG_KERNEL_CALLER", "agent")
+
+
+class TestBurstNeedsNoProgress:
+    """FORENSICS-BURST-TARGET (S191, E-117).
+
+    Repetition alone is not polling. S191 was charged four "polling bursts";
+    every one was a scripted batch — `cite` x22 over twenty-two DISTINCT items,
+    `add` x4, `priority` x4 — i.e. exactly the behaviour PY-SCRIPT-MANDATE asks
+    for. Meanwhile the agent's REAL polling never appeared, because it went
+    through tmux and never touched the governed log. A check that flags correct
+    work and misses the violation trains the wrong lesson.
+    """
+
+    def _rows(self, verb, targets, base_ts=0):
+        return [_rec(i, "2026-01-01T00:00:%02d+00:00" % (base_ts + i),
+                     verb=verb, target=t)
+                for i, t in enumerate(targets)]
+
+    def test_a_batch_over_distinct_items_is_not_a_burst(self):
+        f = analyze_log(self._rows("cite", [f"ITEM-{i}" for i in range(8)]))
+        assert f.bursts == []
+
+    def test_hammering_one_item_is_still_a_burst(self):
+        f = analyze_log(self._rows("cite", ["ITEM-1"] * 6))
+        assert len(f.bursts) == 1
+        assert f.bursts[0]["target"] == "ITEM-1"
+
+    def test_a_whole_state_verb_with_no_target_is_still_a_burst(self):
+        # audit/gc/report against unchanged state IS the E-081 violation and
+        # must stay detectable with or without a target field.
+        f = analyze_log([_rec(i, "2026-01-01T00:00:%02d+00:00" % i, verb="audit")
+                         for i in range(6)])
+        assert len(f.bursts) == 1
+
+    def test_a_per_item_verb_without_a_target_field_reads_as_batch(self):
+        # Records written before the target field existed must not be convicted
+        # on evidence that was never recorded.
+        f = analyze_log([_rec(i, "2026-01-01T00:00:%02d+00:00" % i, verb="cite")
+                         for i in range(6)])
+        assert f.bursts == []
+
+
+class TestRefusalIsNotFailure:
+    """FORENSICS-REFUSAL-VS-ERROR (S191, E-118).
+
+    S191 was charged 29 "failed governed calls". Twenty-four were `resolve`
+    refused by the lifecycle gate, three were `audit` exiting non-zero because
+    it found findings, one was a stale test gate reporting itself stale. Those
+    are the guards WORKING. Charging them makes a session look worse the more
+    its guards fire — which would teach an agent to avoid governed verbs.
+    """
+
+    def test_a_governed_refusal_is_not_charged_as_a_failure(self):
+        f = analyze_log([_rec(1, "2026-01-01T00:00:00+00:00", verb="resolve", rc=1)])
+        assert f.failures == []
+        assert [x["verb"] for x in f.refusals] == ["resolve"]
+
+    def test_a_real_crash_is_still_charged(self):
+        rec = _rec(1, "2026-01-01T00:00:00+00:00", verb="checkpoint", rc=1)
+        rec["data"]["error_type"] = "NameError"
+        f = analyze_log([rec])
+        assert [x["verb"] for x in f.failures] == ["checkpoint"]
+        assert f.refusals == []
+
+    def test_render_names_refusals_as_the_guards_working(self):
+        f = analyze_log([_rec(1, "2026-01-01T00:00:00+00:00", verb="audit", rc=1)])
+        out = render_text(f)
+        assert "guard refusals" in out
+        assert "failed calls     : none" in out
+
+
+def test_the_audit_gap_allowance_comes_from_this_module():
+    # GAP-ALLOWANCE-CONSISTENCY (S191, E-119): the audit demanded zero gaps
+    # while the close honoured an allowance of 2. Two gates disagreeing on one
+    # fact is drift, not strictness.
+    from rag_kernel.session_forensics import GAP_ALLOWANCE
+    assert GAP_ALLOWANCE == 2

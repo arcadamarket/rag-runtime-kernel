@@ -90,6 +90,19 @@ BURST_MIN_REPEATS = 4
 #: transitions are supposed to come in pairs.
 _BURST_EXEMPT = frozenset({"wait-for", "run", "start", "resolve"})
 
+#: Verbs that act on ONE named item. Repeating them is how a batch is spelled —
+#: twenty-two `cite` calls are twenty-two items, and repeating one against the
+#: SAME item is idempotent and returns "nothing to add", so it cannot be a way
+#: to poll for change. When a record carries no ``target`` (written before
+#: FORENSICS-BURST-TARGET, S191) these are read as batch rather than as polling.
+#: Whole-state verbs — audit, gc, report, render, items, health — are absent
+#: from this set on purpose: repeating THOSE against unchanged state is exactly
+#: the E-081 violation, and they must stay detectable with or without a target.
+_PER_ITEM_VERBS = frozenset({
+    "cite", "add", "un-add", "note", "priority", "defer", "reopen",
+    "discard", "supersede", "register-asset", "add-rule", "update-rule",
+})
+
 #: FORENSICS-CALLER-ATTRIBUTION (S191, E-111). Tools that drive the kernel
 #: through the same CLI the agent uses stamp their identity here, so their
 #: probes are counted as MACHINE conduct and not charged to the agent. The
@@ -180,6 +193,10 @@ class SessionForensics:
     machine_invocations: int = 0
     machine_failures: list[dict] = field(default_factory=list)
     machine_callers: dict = field(default_factory=dict)
+    #: Non-zero exits that were a GUARD REFUSING rather than a call breaking
+    #: (S191). Reported and never charged: a session does not become worse
+    #: conduct the more often its own guards fire.
+    refusals: list[dict] = field(default_factory=list)
 
     @property
     def wall_seconds(self) -> float:
@@ -227,6 +244,32 @@ def _verb(rec: dict) -> str:
     if isinstance(msg, str) and msg.startswith("cli "):
         return msg[4:].strip()
     return str(cmd or msg or "?").strip()
+
+
+def _target(rec: dict) -> Optional[str]:
+    """What this call acted on, when the verb names a target. None otherwise."""
+    data = rec.get("data") or {}
+    val = data.get("target")
+    return val.strip() if isinstance(val, str) and val.strip() else None
+
+
+def _is_refusal(rec: dict) -> bool:
+    """True when a non-zero exit was a GUARD REFUSING, not the call breaking.
+
+    FORENSICS-REFUSAL-VS-ERROR (S191, E-118). S191 was charged 29 "failed
+    governed calls". Twenty-four were ``resolve`` returning 1 because the
+    lifecycle gate correctly refused RESOLVED -> RESOLVED; three were ``audit``
+    returning 1 because it found findings; one was ``tests`` reporting a stale
+    gate. Those are the guards WORKING. Counting them as agent failures makes a
+    session look worse the more its guards fire, which is precisely backwards
+    and would train an agent to avoid governed verbs.
+
+    The distinction is already in the record and needs no new field:
+    ``_dispatch_with_bootstrap_log`` stamps ``error_type`` only when a real
+    exception escaped. A non-zero exit WITHOUT ``error_type`` is a handler that
+    ran to completion and chose to refuse.
+    """
+    return not (rec.get("data") or {}).get("error_type")
 
 
 def _caller(rec: dict) -> str:
@@ -312,24 +355,43 @@ def analyze_log(records: Iterable[dict]) -> SessionForensics:
                 prev = (rec, ts)
                 continue
             if rc not in (0, None):
-                out.failures.append({
+                row = {
                     "seq": rec.get("seq"), "verb": verb,
                     "rc": rc, "ts": rec.get("ts"), "seconds": secs,
-                })
+                }
+                if _is_refusal(rec):
+                    out.refusals.append(row)
+                else:
+                    out.failures.append(row)
             if first_end_seq is not None:
                 out.mutations_after_first_end.append(verb)
 
-            # burst detection over a sliding window
-            recent = [(v, t) for v, t in recent
+            # Burst detection over a sliding window, discriminated by TARGET.
+            #
+            # FORENSICS-BURST-TARGET (S191, E-117). Repetition alone is not
+            # polling. `cite` twenty-two times over twenty-two distinct items is
+            # a scripted batch — the behaviour PY-SCRIPT-MANDATE and token
+            # economy both ask for. `audit` five times against unchanged state
+            # is the E-081 violation. A burst therefore requires the same verb
+            # AND no forward progress: either it names no target at all, or it
+            # keeps hitting the SAME one.
+            tgt = _target(rec)
+            recent = [(v, g, t) for v, g, t in recent
                       if (ts - t).total_seconds() <= BURST_SECONDS]
-            recent.append((verb, ts))
+            recent.append((verb, tgt, ts))
             if verb not in _BURST_EXEMPT:
-                same = [t for v, t in recent if v == verb]
-                if len(same) >= BURST_MIN_REPEATS:
+                same = [t for v, g, t in recent if v == verb and g == tgt]
+                distinct = {g for v, g, t in recent if v == verb and g is not None}
+                # A per-item verb with no recorded target is a batch, not a poll
+                # (see _PER_ITEM_VERBS). A whole-state verb stays detectable.
+                untargeted_batch = tgt is None and verb in _PER_ITEM_VERBS
+                if (len(same) >= BURST_MIN_REPEATS
+                        and len(distinct) <= 1
+                        and not untargeted_batch):
                     span = (same[-1] - same[0]).total_seconds()
                     if not out.bursts or out.bursts[-1]["verb"] != verb:
                         out.bursts.append({
-                            "verb": verb, "count": len(same),
+                            "verb": verb, "count": len(same), "target": tgt,
                             "seconds": round(span, 1), "ts": rec.get("ts"),
                         })
                     else:
@@ -394,6 +456,13 @@ def render_text(f: SessionForensics) -> str:
         if f.machine_failures:
             ap(f"                     {len(f.machine_failures)} of them failed"
                f" — a tool's own probe failing is a tool finding, not conduct")
+    if f.refusals:
+        by_verb: dict[str, int] = {}
+        for x in f.refusals:
+            by_verb[x["verb"]] = by_verb.get(x["verb"], 0) + 1
+        parts = ", ".join(f"{v} x{n}" for v, n in sorted(by_verb.items()))
+        ap(f"  guard refusals   : {len(f.refusals)} ({parts})"
+           f" — governed refusals, i.e. the guards working; not charged")
 
     if f.failures:
         by_verb: dict[str, list[dict]] = {}
