@@ -4555,6 +4555,31 @@ def _drive_close(
         )
     else:
         print("[1/4] Checkpoint: already banked (resuming).")
+        # CLOSE-RESUME-CAN-BANK-ERRLOG (S191, E-122). The ERROR_LOG fold lived
+        # INSIDE the checkpoint step, and `steps["error_log"]` was only ever set
+        # there. So a close that checkpointed without an entry could never
+        # satisfy the CLOSE-STEP-ERRLOG gate on resume: the gate demanded an
+        # entry, and the only code path that could bank one was skipped as
+        # "already banked". S191 hit exactly that and the close became
+        # unresumable — a resumable close that cannot be resumed is not
+        # resumable. The fold is idempotent by design (it carries its own
+        # id marker), so running it here is safe and is the whole point.
+        if error_log_entry and not steps.get("error_log"):
+            print("[1b] ERROR_LOG: banking the entry supplied on resume.")
+            rc = cmd_checkpoint(argparse.Namespace(
+                rag=rag_path, session=sid, summary=summary, tasks=tasks,
+                status=status, dry_run=False, error_log_entry=error_log_entry,
+                error_log_id=error_log_id, error_log_path=error_log_path,
+                handoff=handoff,
+            ))
+            if rc != 0:
+                print("ERROR: ERROR_LOG fold failed on resume — nothing banked.",
+                      file=sys.stderr)
+                return rc
+            steps["error_log"] = True
+            _write_close_marker(
+                rag_path, _build_close_marker(sid, "CHECKPOINTED", steps, started, None)
+            )
 
     # Step 1b — KA-INTENT-FIDELITY inc1 SEAL GATE. If this close STATED a handoff,
     # refuse to advance toward transfer_ready unless it was persisted VERBATIM as
