@@ -113,7 +113,10 @@ def test_refusal_names_the_sanctioned_alternative():
 def test_refusal_tells_the_caller_to_declare_not_to_hand_edit():
     d = decide("transport", _ev("mcp__whatever__read"))
 
-    assert "meta.transport_policy.allowlist" in d.reason or "allowlist" in d.reason
+    # The refusal must name the REAL key. An earlier draft pointed at
+    # meta.transport_policy.allowlist, which does not exist — a refusal that
+    # sends the reader to a nonexistent setting teaches them to ignore it.
+    assert "operating_protocol.transport_allowlist" in d.reason
     assert "second source of truth" in d.reason
 
 

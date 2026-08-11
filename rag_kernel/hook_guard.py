@@ -519,9 +519,12 @@ def _gate_transport(event: dict, *, project_root: Optional[Path] = None,
             f"  Blocking wait on a detached job -> rag_wait, not a second poll.\n"
             f"  Canonical state -> `rag_kernel` verbs over tmux, never a file tool.\n"
             f"If this transport genuinely belongs here, DECLARE it: add the "
-            f"pattern to meta.transport_policy.allowlist in the RAG and re-render "
-            f"the projection. Editing the projection by hand recreates the second "
-            f"source of truth this gate exists to prevent."
+            f"pattern to operating_protocol.transport_allowlist in the RAG "
+            f"(`rag_kernel add-rule transport_allowlist --value-file ... "
+            f"--allow-overwrite`), bump the declared pattern count in that rule, "
+            f"then re-render with `python tools/render_transport_allowlist.py`. "
+            f"Editing the projection by hand recreates the second source of "
+            f"truth this gate exists to prevent."
         ),
     )
 
