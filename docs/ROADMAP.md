@@ -4,6 +4,28 @@
 
 ---
 
+## v0.4.56 — Released (2026-08-10)
+
+**The interval guards.** A gate that is correct at the moment it runs, and silent about
+every moment after, is how S191 sealed green over an uncommitted kernel — in the session
+it spent fixing exactly that. `SEAL-INTERVAL-RECHECK` re-runs four probes as the last act
+before `transfer_ready` (E-123). `BOOT-TESTGATE-STALE-BLOCKS` makes the boot refuse on a
+stale test gate — the check had lived only in the grand audit, which the boot never runs,
+so the safety net promised to the operator did not exist where it was promised (E-124).
+`ORPHAN-ENUM-BLOCKS` refuses a cited `E-nnn` with no tracked item behind it: prose does not
+transfer between sessions, tracked items do (E-125). Deploy parity now also runs at the seal
+instant, delegating to `check_kernel_copy_lockstep` (E-126).
+
+Two defects were found in the guards *by* the guards before shipping: a relative `rag_path`
+made all four report "no findings" against a RAG that was provably stale and dirty, and the
+head probe disagreed with the worktree probe about which repository "the kernel" meant.
+Both are documented in ERROR_LOG. Suite 2,569 → **2,591**.
+
+Next release targets the development process itself, not the kernel's features — see
+`RAG/PLAN_S193_PROCESS_FIX.md`.
+
+---
+
 ## v0.4.55 — Released (2026-08-07)
 
 **The S178–S187 forensic audit, and the gates it demanded.** A ten-session audit
