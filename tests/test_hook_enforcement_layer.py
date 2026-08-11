@@ -55,8 +55,16 @@ def _file(tool, path):
 # --------------------------------------------------------------------------- #
 
 def test_gate_names_are_stable():
-    assert GATES == ("poll", "sandbox-state", "canonical-read", "deploy-parity")
-    assert HOOK_GUARD_VERSION == "1.0.0"
+    # S197 added `transport` (default-deny at the boundary, E-133) and
+    # `post-transport-audit` (does the layer actually cover this call path).
+    # The version moves with them: a layer whose policy changed without a
+    # version bump is indistinguishable from one that stopped running.
+    assert GATES == (
+        "poll", "sandbox-state", "canonical-read",
+        "transport",
+        "deploy-parity", "post-transport-audit",
+    )
+    assert HOOK_GUARD_VERSION == "1.1.0"
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():

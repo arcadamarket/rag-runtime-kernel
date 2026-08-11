@@ -92,7 +92,7 @@ class TestToolDefinitions:
             assert tool["inputSchema"]["type"] == "object"
 
     def test_tool_count(self):
-        assert len(TOOLS) == 12
+        assert len(TOOLS) == 13  # +rag_wait (AGENT-SIDE-WAIT-GAP, S197)
 
     def test_expected_tools_present(self):
         names = {t["name"] for t in TOOLS}
@@ -101,6 +101,9 @@ class TestToolDefinitions:
             "rag_propose", "rag_commit", "rag_reject",
             "rag_checkpoint", "rag_wal", "rag_recover", "rag_close",
             "rag_graph_run",
+            # S197: the agent's blocking read. Behaviour is pinned in
+            # tests/test_agent_side_wait_gap.py; this set only pins presence.
+            "rag_wait",
         }
         assert names == expected
 
@@ -124,9 +127,10 @@ class TestToolsList:
     def test_tools_list(self, server):
         resp = call(server, "tools/list")
         tools = resp["result"]["tools"]
-        assert len(tools) == 12
+        assert len(tools) == 13
         names = {t["name"] for t in tools}
         assert "rag_status" in names
+        assert "rag_wait" in names
 
 
 # ===== tools/call =====
