@@ -99,6 +99,76 @@ def test_briefing_handles_missing_directive():
     assert "next_session_directive: (none)" in out
 
 
+# --- INSPECTED-COUNT-DISCLOSURE (S195, E-129 / E-130 / E-131) ---------------
+
+def _rag_with_items(items):
+    from rag_kernel.drift_store import TRACKED_ITEMS_KEY
+    return {"inference_ledger": [], "priority_actions": [],
+            TRACKED_ITEMS_KEY: items}
+
+
+def _it(item_id, status, kind="TASK", priority=None):
+    row = {"id": item_id, "title": f"title for {item_id}", "status": status,
+           "kind": kind, "session": "S194"}
+    if priority:
+        row["priority_group"] = priority
+    return row
+
+
+def test_briefing_names_p1_errors_not_just_p1_tasks():
+    """E-129 at the surface the successor actually reads.
+
+    The boot agenda named 7 P1 items while 6 more — every one a kind=ERROR —
+    existed and were invisible. A briefing that cannot name the top of its own
+    backlog is not a briefing.
+    """
+    rag = _rag_with_items([
+        _it("E-129", "OPEN", kind="ERROR", priority="P1"),
+        _it("HOOK-ENFORCEMENT-LAYER", "OPEN", priority="P1"),
+        _it("E-900", "OPEN", kind="ERROR", priority="P3"),
+    ])
+    out = _render_boot_briefing(rag, current_sid="S195")
+    assert "E-129" in out
+    assert "HOOK-ENFORCEMENT-LAYER" in out
+    assert "E-900" not in out  # P3 is not the agenda
+
+
+def test_briefing_states_the_set_it_inspected():
+    """E-130 prevention: report the denominator, not only the verdict.
+
+    A count with no stated denominator is exactly what let a truncated terminal
+    listing pass for the whole backlog.
+    """
+    rag = _rag_with_items([
+        _it("A-OPEN", "OPEN", priority="P1"),
+        _it("B-PROG", "IN_PROGRESS", priority="P2"),
+        _it("C-DONE", "RESOLVED", priority="P1"),
+        _it("E-1", "OPEN", kind="ERROR", priority="P1"),
+    ])
+    out = _render_boot_briefing(rag, current_sid="S195")
+    assert "INSPECTED: 3 live item(s)" in out  # RESOLVED is not live
+    assert "of 4 tracked" in out
+    assert "ERROR" in out and "TASK" in out  # the kinds it walked, named
+
+
+def test_briefing_warns_when_persisted_agenda_omits_a_live_p1():
+    """A stale projection must be announced at boot, not left to the auditor."""
+    rag = _rag_with_items([_it("E-129", "OPEN", kind="ERROR", priority="P1")])
+    rag["priority_actions"] = []
+    out = _render_boot_briefing(rag, current_sid="S195")
+    assert "WARNING" in out and "E-129" in out
+    assert "render --apply" in out
+
+
+def test_briefing_survives_a_store_it_cannot_parse():
+    """The briefing may never be the reason a boot dies."""
+    from rag_kernel.drift_store import TRACKED_ITEMS_KEY
+    rag = {"inference_ledger": [], "priority_actions": ["X [P1 · OPEN · S1]: t"],
+           TRACKED_ITEMS_KEY: [{"nonsense": True}]}
+    out = _render_boot_briefing(rag, current_sid="S195")
+    assert isinstance(out, str) and "inference_ledger" in out
+
+
 # --- phase-1 wiring: briefing + marker + notice ----------------------------
 
 def test_phase1_renders_briefing_and_notice(tmp_path, monkeypatch, capsys):

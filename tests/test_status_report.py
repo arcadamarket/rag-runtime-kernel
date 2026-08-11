@@ -103,7 +103,9 @@ class TestOverallRag:
 
 class TestRenderStructure:
     def test_version_bumped(self):
-        assert DRIFT_RENDER_VERSION == "1.4.0"
+        # 1.5.0 — AGENDA-KIND-SCOPE (S195, E-129): render_priority_actions no
+        # longer borrows BACKLOG_KINDS, so a P1 kind=ERROR reaches the agenda.
+        assert DRIFT_RENDER_VERSION == "1.5.0"
 
     def test_heading_and_seven_sections_in_order(self):
         out = render_status_report(_store(), session="S136", meta=_META, ledger=_LEDGER)

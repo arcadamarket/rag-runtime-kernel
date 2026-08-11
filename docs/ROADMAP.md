@@ -4,6 +4,34 @@
 
 ---
 
+## v0.4.57 — Released (2026-08-11)
+
+**Scope-of-check, and the first enforcement that does not run on memory.** Three defects
+in one family shipped as one patch: a check or render whose declared question is wider
+than the set it actually inspects. `render_priority_actions` borrowed `BACKLOG_KINDS` and
+so could not name a P1 `kind=ERROR` — thirteen P1 items existed and the boot briefing said
+seven (E-129). The `no unprioritized live items` check scoped to OPEN and DEFERRED and
+could not see IN_PROGRESS, so an untriaged live item passed the guard that exists to catch
+exactly that (E-131). Both are now enumerated over the full set, and every completeness
+surface **reports the denominator it inspected** rather than only its verdict — the
+prevention owed for E-130 under `PLAN-FEASIBILITY-GATE`.
+
+`HOOK-ENFORCEMENT-LAYER` lands with them. Every recurring defect in the error log is a
+rule the agent had loaded, could recite, and broke anyway; E-081 recurred as E-116 and
+again as E-128. The rules were not forgotten, they were unenforceable, because the agent
+was both the governed party and the check. Four gates now fire from `.claude/settings.json`
+before the call happens — polling a running command, a sandbox shell touching canonical
+state, a direct read or hand-edit of `RAG_MASTER.json`, and a deploy-parity notice at the
+edit instead of at the seal. The decision function is pure and unit-tested; the layer's one
+hope, its own liveness, is measured by `hook-guard --selftest` rather than assumed.
+Suite 2,591 → **2,637**.
+
+Next: `AGENT-SIDE-WAIT-GAP` (the agent still has no blocking read — `get-command-result`
+is poll-based, which is why the poll gate has to exist at all), then `GATE-OR-HOPE-PRINCIPLE`
+and `OPERATOR-ONE-NUMBER`. See `RAG/PLAN_S193_PROCESS_FIX.md`.
+
+---
+
 ## v0.4.56 — Released (2026-08-10)
 
 **The interval guards.** A gate that is correct at the moment it runs, and silent about

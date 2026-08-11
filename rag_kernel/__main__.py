@@ -95,6 +95,8 @@ import sys
 import time
 from pathlib import Path
 
+from rag_kernel import hook_guard
+from rag_kernel.hook_guard import run_gate, selftest
 from rag_kernel.api import DEFAULT_PORT, KernelApp, create_server
 from rag_kernel.mcp_transport import MCPServer
 from rag_kernel.session_forensics import CALLER_AGENT, CALLER_ENV
@@ -1168,6 +1170,24 @@ def build_parser() -> argparse.ArgumentParser:
                                   help="project root for portable relative-path storage (default: parent of rag-dir)")
     reg_asset_parser.add_argument("--dry-run", action="store_true",
                                   help="validate + render the record without writing")
+
+    hook_guard_parser = subparsers.add_parser(
+        "hook-guard",
+        help="HOOK-ENFORCEMENT-LAYER: the decision engine behind .claude/settings.json. "
+             "Reads one Claude Code hook payload on stdin and refuses the call when it "
+             "violates a process rule (polling a running command, a sandbox shell or "
+             "file tool touching canonical state); --selftest drives every gate through "
+             "a known-bad payload and asserts the refusal, so 'the hooks are installed' "
+             "is a measurement rather than a claim.",
+    )
+    hook_guard_parser.add_argument("--gate", type=str, default=None,
+                                   help="which gate to evaluate: " + ", ".join(hook_guard.GATES))
+    hook_guard_parser.add_argument("--selftest", action="store_true",
+                                   help="drive every gate through a known-bad payload; exit 1 on any gate that fails to refuse")
+    hook_guard_parser.add_argument("--project-root", type=Path, default=None,
+                                   help="project root used to resolve the deploy-parity twin (default: walk up from the edited file)")
+    hook_guard_parser.add_argument("--state-dir", type=Path, default=None,
+                                   help="directory for the poll window state file (default: $RAG_HOOK_STATE_DIR or ~/.rag_kernel_hooks)")
 
     reuse_check_parser = subparsers.add_parser(
         "reuse-check",
@@ -4217,17 +4237,64 @@ def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None) -> str
     # S187 PRIORITY-ACTIONS-STALE-SNAPSHOT: priority_actions is now a render of the
     # ACTIVE P1 set, so the boot can brief the live agenda by id instead of a count
     # over a frozen prose blob. Ids only — the titles live one `render` call away.
-    if pa:
+    #
+    # INSPECTED-COUNT-DISCLOSURE (S195, E-130 prevention, PLAN-FEASIBILITY-GATE).
+    # The agenda is now enumerated from ``tracked_items`` — the canonical array —
+    # rather than parsed out of the persisted ``priority_actions`` projection, and
+    # the briefing STATES THE SET IT WALKED: how many items it inspected, out of
+    # how many tracked, over which kinds. A count with no denominator is what let
+    # a truncated view be mistaken for the whole set (E-130), and a check that
+    # reports only its verdict is what let E-129 and E-131 pass while blind. Every
+    # completeness surface in this kernel now reports what it looked at.
+    _live_all: list = []
+    _p1_ids: list[str] = []
+    _n_tracked = 0
+    try:
+        from rag_kernel import drift_render as _dr
+        from rag_kernel.drift_store import TRACKED_ITEMS_KEY, TrackedItemStore
+
+        _n_tracked = len(rag.get(TRACKED_ITEMS_KEY, []) or [])
+        _store = TrackedItemStore.from_hot(rag)
+        _live_all = [it for it in _store if it.status in _dr.ACTIVE_STATUSES]
+        _p1_ids = [
+            it.id
+            for it in _live_all
+            if it.priority_group == "P1" and it.kind in _dr.AGENDA_KINDS
+        ]
+    except Exception:  # pragma: no cover - briefing must never fail the boot
         _p1_ids = [
             str(x).split(" [", 1)[0].strip()
             for x in pa
             if isinstance(x, str) and " [P1 · " in x
         ]
-        if _p1_ids:
-            import textwrap as _tw2
-            lines.append(f"  P1 (live, from tracked_items.priority_group) — {len(_p1_ids)}:")
-            for _ln in _tw2.wrap(", ".join(_p1_ids), width=92):
-                lines.append(f"    {_ln}")
+    if _live_all:
+        _kinds = sorted({it.kind.value for it in _live_all})
+        lines.append(
+            f"  INSPECTED: {len(_live_all)} live item(s) (OPEN+IN_PROGRESS) of "
+            f"{_n_tracked} tracked, kinds {'/'.join(_kinds)} — the set every count "
+            f"below was taken over."
+        )
+    if _p1_ids:
+        import textwrap as _tw2
+        lines.append(
+            f"  P1 (live, enumerated from tracked_items.priority_group) — "
+            f"{len(_p1_ids)}:"
+        )
+        for _ln in _tw2.wrap(", ".join(_p1_ids), width=92):
+            lines.append(f"    {_ln}")
+        # Agenda-vs-projection disagreement is a render_parity defect the boot must
+        # not swallow: the successor reads THIS text, not the audit log.
+        _pa_ids = {
+            str(x).split(" [", 1)[0].strip()
+            for x in pa
+            if isinstance(x, str) and " [P1 · " in x
+        }
+        _missing = sorted(set(_p1_ids) - _pa_ids)
+        if _missing:
+            lines.append(
+                f"  WARNING: persisted priority_actions omits {len(_missing)} live "
+                f"P1 item(s) — {', '.join(_missing)}. Run `rag_kernel render --apply`."
+            )
     return "\n".join(lines)
 
 
@@ -7888,6 +7955,41 @@ def cmd_register_asset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hook_guard(args: argparse.Namespace) -> int:
+    """HOOK-ENFORCEMENT-LAYER (S195): evaluate one hook payload, or self-test.
+
+    Two modes, one purpose — make a process rule refusable instead of remembered:
+
+    ``--gate <name>``   read a Claude Code hook payload on stdin and emit the
+                        hook-contract verdict. Wired from ``.claude/settings.json``;
+                        never invoked by hand in normal operation.
+    ``--selftest``      drive every gate through a known-bad payload and assert
+                        the refusal. This exists because the layer's ONE hope is
+                        its own liveness: a hook that silently stopped running
+                        looks exactly like a session with no violations.
+    """
+    if args.selftest:
+        failures, lines = selftest(state_dir=args.state_dir)
+        for line in lines:
+            print(line)
+        if failures:
+            print(f"\nHOOK-ENFORCEMENT-LAYER: {failures} gate(s) NOT gating.",
+                  file=sys.stderr)
+            return 1
+        print("\nHOOK-ENFORCEMENT-LAYER: every gate refused its known-bad payload.")
+        return 0
+    if not args.gate:
+        print("Error: --gate is required (or use --selftest); known gates: "
+              + ", ".join(hook_guard.GATES), file=sys.stderr)
+        return 2
+    if args.gate not in hook_guard.GATES:
+        print(f"Error: unknown gate {args.gate!r}; known gates: "
+              + ", ".join(hook_guard.GATES), file=sys.stderr)
+        return 2
+    return run_gate(args.gate, sys.stdin.read(), state_dir=args.state_dir,
+                    project_root=args.project_root)
+
+
 def cmd_reuse_check(args: argparse.Namespace) -> int:
     """Pre-write reuse guard (REUSE-REGISTRY-GUARD): report baked assets already
     covering a path/purpose. Fail-loud (exit 1) on a hit so the caller reuses instead
@@ -8602,6 +8704,7 @@ def main(argv: list[str] | None = None) -> int:
         "decisions": cmd_decisions,
         "register-asset": cmd_register_asset,
         "reuse-check": cmd_reuse_check,
+        "hook-guard": cmd_hook_guard,
         "inventory": cmd_inventory,
         "run": _cmd_run_detach_await,
         "wait-for": cmd_wait_for,

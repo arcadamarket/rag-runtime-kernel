@@ -68,7 +68,7 @@ state, never re-authors it.
   "module": "rag_kernel.drift_render",
   "capability": "state_render",
   "description": "Deterministic, idempotent renderers projecting the canonical tracked_items array into the legacy open_tasks / deferred_items arrays, the Rule 12 status-report backlog, and the ERROR_LOG backlog summary (DRIFT-ELIM increment 4: renders make tracked_items the sole authority)",
-  "exports": ["ACTIVE_STATUSES", "BACKLOG_KINDS", "render_open_tasks",
+  "exports": ["ACTIVE_STATUSES", "BACKLOG_KINDS", "AGENDA_KINDS", "render_open_tasks",
               "render_deferred_items", "render_backlog_section",
               "render_backlog_markdown", "render_error_log_backlog",
               "render_records_by_kind", "render_status_report",
@@ -115,7 +115,16 @@ from rag_kernel.persistence import atomic_write_json
 #         a hand-authored S133 prose snapshot, is written by ``apply_renders`` and
 #         is covered by the auditor's render_parity check — so the boot briefing
 #         can no longer name a superseded agenda.
-DRIFT_RENDER_VERSION = "1.4.0"
+# 1.5.0 — AGENDA-KIND-SCOPE (S195, E-129): ``render_priority_actions`` gets its
+#         OWN kind scope (``AGENDA_KINDS``) instead of borrowing ``BACKLOG_KINDS``.
+#         The agenda answers "what is P1 right now"; BACKLOG_KINDS answers "what
+#         is task backlog". Those are different questions, and sharing the
+#         narrower set meant a P1 kind=ERROR item — the six most urgent records
+#         in the project — could never appear on the boot agenda while every
+#         downstream count still called itself complete. The legacy task arrays
+#         (open_tasks / deferred_items / backlog) keep BACKLOG_KINDS and stay
+#         byte-identical, so the E-040 parity check is untouched.
+DRIFT_RENDER_VERSION = "1.5.0"
 
 # The non-terminal, actionable statuses — the "open backlog".
 ACTIVE_STATUSES: frozenset[ItemStatus] = frozenset(
@@ -132,6 +141,17 @@ ACTIVE_STATUSES: frozenset[ItemStatus] = frozenset(
 # holds) instead of suddenly absorbing ~80 error/inference rows.
 BACKLOG_KINDS: frozenset[ItemKind] = frozenset(
     {ItemKind.TASK, ItemKind.MILESTONE, ItemKind.RELEASE}
+)
+
+# AGENDA-KIND-SCOPE (S195, E-129). The kinds the *agenda* answers for. The
+# priority agenda is not the task backlog: it answers "what is P1 right now",
+# and a kind=ERROR record carrying priority_group P1 is exactly that — an
+# unrepaired defect the operator has ranked top. Borrowing BACKLOG_KINDS made
+# every P1 ERROR structurally invisible on the boot briefing while the render
+# still reported itself complete, which is E-129. INFERENCE stays out: an
+# inference-ledger row is a forensic capture, not an action.
+AGENDA_KINDS: frozenset[ItemKind] = frozenset(
+    {ItemKind.TASK, ItemKind.MILESTONE, ItemKind.RELEASE, ItemKind.ERROR}
 )
 
 # Substrings that mark an OPEN/IN_PROGRESS item as blocked or awaiting the user.
@@ -243,16 +263,24 @@ def render_priority_actions(
     own text said it was superseded, re-briefed verbatim at every boot while it
     contradicted the live P1 set. It becomes a projection like ``open_tasks``.
 
-    Holds ONLY the *actionable* P1 backlog — ``priority_group == "P1"`` AND a
-    non-terminal status AND a backlog kind — id-sorted, one stable line each.
-    A RESOLVED P1 item drops out: a closed item is not an action. An empty P1
-    set renders an empty list, which is the honest state, not a stale agenda.
+    Holds ONLY the *actionable* P1 set — ``priority_group == "P1"`` AND a
+    non-terminal status AND an ``AGENDA_KINDS`` kind — id-sorted, one stable
+    line each. A RESOLVED P1 item drops out: a closed item is not an action. An
+    empty P1 set renders an empty list, which is the honest state, not a stale
+    agenda.
+
+    AGENDA-KIND-SCOPE (S195, E-129). This render previously scoped to
+    ``BACKLOG_KINDS``, so a P1 record of kind=ERROR could not appear on the
+    agenda at all. Six of the project's thirteen P1 items were errors at the
+    time the defect was found, and the boot briefing named seven — silently, and
+    with no line saying what it had left out. The scope is now ``AGENDA_KINDS``,
+    which includes ERROR.
     """
     store = _as_store(source)
     out: list[str] = []
     for it in store:  # id-sorted
-        if it.kind not in BACKLOG_KINDS:
-            continue  # INFERENCE / ERROR records are not task backlog
+        if it.kind not in AGENDA_KINDS:
+            continue  # INFERENCE records are forensic capture, not actions
         if it.status not in ACTIVE_STATUSES:
             continue
         if it.priority_group != "P1":

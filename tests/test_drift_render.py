@@ -19,6 +19,8 @@ from rag_kernel.drift_control import ItemKind, ItemStatus, TrackedItem
 from rag_kernel.drift_store import TRACKED_ITEMS_KEY, TrackedItemStore
 from rag_kernel.drift_render import (
     ACTIVE_STATUSES,
+    AGENDA_KINDS,
+    BACKLOG_KINDS,
     DRIFT_RENDER_VERSION,
     apply_renders,
     apply_renders_file,
@@ -29,6 +31,7 @@ from rag_kernel.drift_render import (
     render_deferred_items,
     render_error_log_backlog,
     render_open_tasks,
+    render_priority_actions,
     render_priority_burndown,
     render_status_report,
 )
@@ -65,8 +68,55 @@ def _hot_from(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_active_statuses():
-    assert DRIFT_RENDER_VERSION == "1.4.0"
+    assert DRIFT_RENDER_VERSION == "1.5.0"
     assert ACTIVE_STATUSES == frozenset({ItemStatus.OPEN, ItemStatus.IN_PROGRESS})
+
+
+# ---------------------------------------------------------------------------
+# AGENDA-KIND-SCOPE (S195, E-129)
+# ---------------------------------------------------------------------------
+
+def test_agenda_kinds_is_backlog_kinds_plus_error():
+    """The agenda answers a wider question than the task backlog.
+
+    E-129: sharing ``BACKLOG_KINDS`` made every P1 kind=ERROR record structurally
+    unnameable on the boot agenda. The two scopes must be distinct sets, and the
+    agenda must be the superset that carries ERROR.
+    """
+    assert AGENDA_KINDS == BACKLOG_KINDS | {ItemKind.ERROR}
+    assert ItemKind.ERROR not in BACKLOG_KINDS  # backlog arrays stay unchanged
+    assert ItemKind.INFERENCE not in AGENDA_KINDS  # forensic capture, not action
+
+
+def test_priority_actions_includes_p1_error_records():
+    """A P1 ERROR must appear on the agenda — the E-129 regression test."""
+    store = TrackedItemStore([
+        _item("E-129", ItemStatus.OPEN, kind=ItemKind.ERROR,
+              priority_group="P1", session="S193"),
+        _item("TASK-P1", ItemStatus.OPEN, priority_group="P1", session="S193"),
+        _item("E-999", ItemStatus.OPEN, kind=ItemKind.ERROR,
+              priority_group="P3", session="S193"),
+        _item("E-DONE", ItemStatus.RESOLVED, kind=ItemKind.ERROR,
+              priority_group="P1", session="S190"),
+    ])
+    ids = [ln.split(" [", 1)[0] for ln in render_priority_actions(store)]
+    assert ids == ["E-129", "TASK-P1"]  # id-sorted, P1-only, non-terminal only
+
+
+def test_priority_actions_error_scope_does_not_leak_into_backlog_arrays():
+    """Widening the agenda must not widen open_tasks / deferred_items.
+
+    The E-040 render_parity check pins those arrays; absorbing ~130 ERROR rows
+    into them would be a different defect, not a fix.
+    """
+    store = TrackedItemStore([
+        _item("E-129", ItemStatus.OPEN, kind=ItemKind.ERROR,
+              priority_group="P1", session="S193"),
+        _item("E-PARK", ItemStatus.DEFERRED, kind=ItemKind.ERROR, session="S193"),
+    ])
+    assert render_open_tasks(store) == []
+    assert render_deferred_items(store) == []
+    assert len(render_priority_actions(store)) == 1
 
 
 # ---------------------------------------------------------------------------
