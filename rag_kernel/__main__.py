@@ -3399,6 +3399,326 @@ def _unsealed_prior_session(
     return worst
 
 
+# ---------------------------------------------------------------------------
+# S192 — THE INTERVAL GUARDS (E-123, E-124, E-125, E-126)
+# ---------------------------------------------------------------------------
+#
+# The operator's diagnosis, which is the correct one: when state fails to reach
+# the next session there are exactly two causes — either the agent disregarded a
+# rule the RAG already carried, or the RAG could not carry the fact at all. Every
+# probe below is one of those two, converted into a refusal.
+#
+#   DISREGARDED  meta.test_gate held "STALE" in canonical state the whole time.
+#                grand_audit axis 2 printed it. Nothing at boot ever asked, so an
+#                agent who did not feel like asking simply did not. -> _probe_test_gate
+#                is now wired into the boot gate, where it exits non-zero. A rule
+#                that returns an exit code cannot be disregarded.
+#
+#   UNCARRIED    three findings (E-111/E-114/E-115) lived as prose in ERROR_LOG.md
+#                and as ids in source comments, with no tracked item behind them.
+#                Prose does not transfer; only tracked items do. -> _probe_orphan_enums
+#                makes an uncarried finding a boot-blocking defect, so the next
+#                session cannot start on top of a fact the RAG never learned.
+#
+#   UNCARRIED    the RAG had NO representation whatsoever of "the kernel that is
+#                running is not the kernel that is committed" — the E-109/E-123
+#                defect class — because the deployed tree (RAG/rag_kernel) and the
+#                git worktree are two separate copies. -> _probe_worktree_clean and
+#                _probe_deploy_parity give that fact a home and a gate.
+#
+# All four are ASSERTED, never auto-repairable: re-measuring a suite, banking an
+# id, committing a tree and copying a kernel are all real acts with real content.
+# Auto-performing them would be exactly the self-concealing repair GATE-AUTO-RECONCILE
+# was written to forbid.
+
+def _declares_git_deployment(rag_path: Path) -> bool:
+    """Does this RAG declare a root that is ACTUALLY a git-backed kernel tree?
+
+    The probes below must fail CLOSED — an unresolvable probe has to refuse, not
+    shrug — but "fail closed on everything" would make every fixture RAG in the
+    suite unbootable, and a guard that has to be disabled to get work done is a
+    guard that gets disabled. So the probes need a predicate for "is there
+    anything here to be answerable for", and getting that predicate wrong in
+    either direction is its own defect:
+
+      too NARROW  the guard passes on the deployment it was written for. That is
+                  the fail-open hole this whole block exists to close.
+      too BROAD   the guard refuses on trees that were never making the claim.
+                  Two versions of this predicate were wrong that way before this
+                  one. Both keyed off ``meta.reconciliation_docs_root`` being
+                  declared — but that field names the docs tree the CLOSE
+                  reconciles against, which is not the same claim as "a kernel is
+                  deployed here", and every KA-13 fixture sets it to a bare path
+                  with no kernel anywhere near it. A guard that cries wolf on
+                  legitimate state gets suppressed, and then it is not a guard.
+
+    The question these probes actually need answered is narrower and physical: is
+    there a kernel deployed at this RAG whose provenance I am supposed to be able
+    to prove? A deployment has its kernel package sitting beside RAG_MASTER.json —
+    ``RAG/rag_kernel/`` next to ``RAG/RAG_MASTER.json``. That is what executes.
+    If it is there, its repository MUST be reachable, and a probe that cannot
+    reach it has to refuse. If it is not there, this RAG is not a deployment of
+    this kernel and there is genuinely nothing to prove.
+
+    Note what this does NOT rest on: a declaration. The earlier versions asked the
+    RAG to describe itself and then trusted the description, which is the same
+    shape as trusting a stamp without checking the head. This one looks.
+    """
+    try:
+        deployed = Path(rag_path).resolve().parent / "rag_kernel"
+        return deployed.is_dir() and any(deployed.glob("__main__.py"))
+    except OSError:  # noqa: BLE001 — an unreadable RAG is reported by gate step 1
+        return False
+
+
+def _live_kernel_head(rag_path: Path) -> "str | None":
+    """Short HEAD of the repo that actually holds the kernel suite.
+
+    Deliberately NOT ``_resolve_git_head``. That helper answers a different
+    question — it walks ``current_status.git_worktree_path``, which is the tree
+    the FRESHNESS guard (E-043) is about. The interval probes are about the tree
+    the SUITE was measured in, which ``test_gate.resolve_repo_root`` derives from
+    ``meta.reconciliation_docs_root``. On this deployment the two happen to name
+    the same directory, and nothing anywhere enforced that they must. Two probes
+    grading "the kernel" against two different repositories is the same category
+    of defect as a green number attached to code nobody ran, so all four interval
+    probes are pinned to one tree here, with ``_resolve_git_head`` as the fallback
+    for deployments that declare no suite root.
+    """
+    import subprocess
+
+    repo = _kernel_repo_root(rag_path)
+    if repo is not None:
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _resolve_git_head(rag_path)
+
+
+def _probe_test_gate(rag_path: Path, *, git_head: "str | None" = None) -> "str | None":
+    """Is meta.test_gate measured, green, AND measured at the live HEAD?
+
+    Returns a finding string when it is not, else None. This is the same
+    ``test_gate.verdict`` the close already obeys (CLOSE-TESTGATE-STALE-BLOCKS,
+    E-115); the only defect was that the BOOT never consulted it. S191 told the
+    operator the S192 boot would refuse on a stale gate. It would not have —
+    the check lived solely in grand_audit axis 2, which the boot does not run.
+    That promise is what this function makes true.
+    """
+    rag_path = Path(rag_path).resolve()
+    # Same predicate as the other three, for the same reason: this probe asks
+    # whether the kernel deployed at this RAG was proven at the commit it ships
+    # from. Where no kernel is deployed there is no such kernel, and inventing a
+    # finding about it would be the too-BROAD failure described above. (The
+    # close's own CLOSE-TESTGATE-STALE-BLOCKS, E-115, is a separate and
+    # unconditional gate — this does not weaken it.)
+    if not _declares_git_deployment(rag_path):
+        return None
+    try:
+        from rag_kernel import test_gate as _tg
+        from rag_kernel.drift_store import load_hot as _load_hot
+
+        hot = _load_hot(rag_path)
+        live_head = git_head or _live_kernel_head(rag_path)
+        # FAIL CLOSED on an unresolvable HEAD. `verdict` compares only when it is
+        # GIVEN a live head — `if live_head and head and ...` — so a None head
+        # makes a stale green stamp grade as True. That is the same fail-open
+        # shape as the original defect, one layer down, and it is how a relative
+        # rag_path silently disarmed all four of these probes on first run.
+        if not live_head:
+            return (
+                "test gate: live git HEAD is unresolvable, so the stamp cannot be "
+                "graded against the running code — refusing rather than grading a "
+                "measurement against nothing"
+            )
+        ok, cell, why = _tg.verdict(
+            _tg.read_stamp(hot),
+            live_head=live_head,
+            live_runtime=(hot.get("meta") or {}).get("runtime_version"),
+        )
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot measure must not pass
+        return f"test gate: probe raised {exc} — cannot certify the inherited kernel"
+    if ok is True:
+        return None
+    return (
+        f"test gate: {cell} ({why}) — the inherited kernel was never proven at the "
+        "commit it ships from. Re-measure it: `rag_kernel tests --run --session <SID>`"
+    )
+
+
+def _probe_orphan_enums(rag_path: Path, rag_dir: "Path | None") -> "str | None":
+    """Does ERROR_LOG.md cite E-numbers that no tracked item backs?
+
+    An id written in prose and never banked is a fabricated identifier: the next
+    session reads the citation, finds nothing behind it, and cannot recover what
+    was meant. This is the RAG failing to carry a fact it was told, which is the
+    operator's second failure mode, and it is why S191 handed S192 three ids
+    (E-111, E-114, E-115) with no ledger entry.
+    """
+    import json as _json
+    import re as _re
+
+    rag_path = Path(rag_path).resolve()
+    rag_dir = Path(rag_dir).resolve() if rag_dir is not None else rag_path.parent
+    log = rag_dir / "ERROR_LOG.md"
+    if not log.exists():
+        return None
+    try:
+        txt = log.read_text(encoding="utf-8", errors="replace")
+        with open(rag_path, "r", encoding="utf-8-sig") as fh:
+            rag = _json.load(fh)
+    except (OSError, ValueError) as exc:
+        return f"orphan enums: cannot read ({exc})"
+
+    known: set[str] = set()
+
+    def _walk(node) -> None:
+        if isinstance(node, dict):
+            ident = node.get("id")
+            if isinstance(ident, str) and "status" in node:
+                known.add(ident)
+            for val in node.values():
+                _walk(val)
+        elif isinstance(node, list):
+            for val in node:
+                _walk(val)
+
+    _walk(rag)
+    cited = sorted(set(_re.findall(r"\bE-\d{3}\b", txt)))
+    orphans = [e for e in cited if e not in known]
+    if not orphans:
+        return None
+    return (
+        f"orphan enums: ERROR_LOG.md cites {len(orphans)} of {len(cited)} E-numbers "
+        f"with no tracked item behind them: {', '.join(orphans[:8])}"
+        f"{' ...' if len(orphans) > 8 else ''} — a cited id that was never banked is "
+        "a fabricated identifier. Bank each one: `rag_kernel add <id> \"<title>\" "
+        "--kind ERROR --session <SID> --note \"...\"`"
+    )
+
+
+def _kernel_repo_root(rag_path: Path) -> "Path | None":
+    """Resolve the git worktree that holds the kernel suite, or None."""
+    try:
+        from rag_kernel import test_gate as _tg
+        from rag_kernel.drift_store import load_hot as _load_hot
+
+        root = _tg.resolve_repo_root(rag_path, _load_hot(rag_path))
+        return Path(root) if root else None
+    except Exception:  # noqa: BLE001 — resolution failure is reported by the caller
+        return None
+
+
+def _probe_worktree_clean(rag_path: Path) -> "str | None":
+    """Is the kernel worktree free of uncommitted changes RIGHT NOW?
+
+    E-123 in one sentence: S191 measured the gate, sealed, and only then noticed
+    ``M rag_kernel/__main__.py``. The running kernel existed in no commit, so the
+    green number described code nobody could retrieve. ``git status --porcelain``
+    is the cheapest possible probe and it was never once run before a claim of
+    done.
+    """
+    import subprocess
+
+    rag_path = Path(rag_path).resolve()
+    repo = _kernel_repo_root(rag_path)
+    if repo is None:
+        if _declares_git_deployment(rag_path):
+            return (
+                "worktree: a kernel is deployed beside this RAG but its git repo "
+                "could not be resolved — cannot prove the running kernel is "
+                "committed, so this refuses instead of passing"
+            )
+        return None  # nothing declared — nothing to prove
+    if not (repo / ".git").exists():
+        return None  # resolved, and genuinely not a git deployment
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=str(repo),
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"worktree: cannot run git status in {repo} ({exc})"
+    if out.returncode != 0:
+        return f"worktree: git status failed in {repo} ({out.stderr.strip()[:160]})"
+    dirty = [ln for ln in out.stdout.splitlines() if ln.strip()]
+    if not dirty:
+        return None
+    return (
+        f"worktree: {len(dirty)} uncommitted change(s) in {repo.name} — "
+        f"{'; '.join(x.strip()[:60] for x in dirty[:4])}"
+        f"{' ...' if len(dirty) > 4 else ''} — the running kernel exists in no "
+        "commit (E-109/E-123). Commit and push before this state is inherited."
+    )
+
+
+def _probe_deploy_parity(rag_path: Path) -> "str | None":
+    """Is the DEPLOYED kernel byte-identical to the TESTED one?
+
+    REUSE, NOT REWRITE (Rule 25). This probe originally reimplemented the
+    comparison and should not have: ``drift_audit.check_kernel_copy_lockstep``
+    has done exactly this since S188 (KERNEL-COPY-LOCKSTEP-UNGATED), and does it
+    strictly better — ``rglob`` across subpackages where the rewrite globbed only
+    top-level ``*.py``, and ``__pycache__`` excluded because bytecode differs
+    legitimately per interpreter. `reuse-check` returned CLEAR for "deployed
+    kernel divergence" because it searches the baked-ASSET registry, not the
+    kernel's own functions, so the registry answered a narrower question than the
+    one asked. The lesson is banked; this delegates.
+
+    What is genuinely new here is not the comparison but WHEN it runs. The
+    lockstep check reaches the boot through ``audit_file`` (gate step 2) and the
+    close through its audit step — both of which happen well BEFORE
+    ``transfer_ready`` is written. Running it again as the last act before the
+    seal is the interval, which is the whole subject of E-123.
+    """
+    rag_path = Path(rag_path).resolve()
+    repo = _kernel_repo_root(rag_path)
+    if repo is None and _declares_git_deployment(rag_path):
+        return (
+            "deploy parity: a kernel is deployed beside this RAG but its git "
+            "repo could not be resolved — cannot prove the deployed kernel "
+            "matches the committed one"
+        )
+    try:
+        from rag_kernel import drift_audit as _da
+        from rag_kernel.drift_store import load_hot as _load_hot
+
+        findings = _da.check_kernel_copy_lockstep(
+            _load_hot(rag_path), rag_path.parent.parent, rag_path.parent
+        )
+    except Exception as exc:  # noqa: BLE001 — a probe that cannot compare must not pass
+        return f"deploy parity: lockstep check raised {exc}"
+    if not findings:
+        return None
+    details = [getattr(f, "detail", str(f)) for f in findings]
+    return (
+        f"deploy parity: {len(details)} kernel-copy lockstep violation(s) — "
+        + "; ".join(d[:110] for d in details[:3])
+        + (" ..." if len(details) > 3 else "")
+        + " — the kernel that runs is not the kernel that is tested and committed."
+    )
+
+
+def _interval_probes(
+    rag_path: Path, *, rag_dir: "Path | None" = None, git_head: "str | None" = None,
+) -> list[str]:
+    """Run all four S192 interval probes and return the findings, in report order."""
+    return [
+        f for f in (
+            _probe_test_gate(rag_path, git_head=git_head),
+            _probe_orphan_enums(rag_path, rag_dir),
+            _probe_worktree_clean(rag_path),
+            _probe_deploy_parity(rag_path),
+        ) if f
+    ]
+
+
 def _carry_forward_gate(
     rag_path: Path, *, strict: bool = False, git_head: "str | None" = None,
     rag_dir: "Path | None" = None, new_sid: "str | None" = None,
@@ -3495,6 +3815,21 @@ def _carry_forward_gate(
         except (OSError, ValueError):
             pass
 
+    # 5. BOOT-INTERVAL-GUARDS (S192, E-123/E-124/E-125/E-126). Steps 1-4 all ask
+    #    "is the inherited RECORD coherent?". None of them asks "is the inherited
+    #    KERNEL the one that was measured?" — and that is the question every
+    #    boot-time disaster in this project has turned on. S190 shipped a kernel
+    #    its suite had never seen and cost S191 its entire boot; S191 sealed with
+    #    an uncommitted __main__.py and cost the operator his trust. In both cases
+    #    the fact was sitting in canonical state, visible to grand_audit, and no
+    #    gate on the startup path asked for it.
+    #
+    #    All four are ASSERTED — see _NEVER_REPAIRABLE_MARKERS. Re-measuring a
+    #    suite, banking an id, committing a tree and syncing a deployment are acts
+    #    with content; performing them silently at boot would convert a refusal
+    #    into a cover-up.
+    findings.extend(_interval_probes(rag_path, rag_dir=rag_dir, git_head=git_head))
+
     return (not findings), findings
 
 
@@ -3531,6 +3866,18 @@ def _carry_forward_gate(
 #                               the session that did the work can write. Auto-sealing
 #                               would forge a close. This is the single most
 #                               important entry in this list.
+#   test gate                   (S192) re-running the suite is a 3-minute measurement
+#                               whose whole value is that a human saw the number.
+#                               A boot that quietly re-stamped it would restore the
+#                               exact condition E-115 exists to prevent.
+#   orphan enums                banking an id requires saying what it MEANS. Only
+#                               the session that wrote the prose knows; a generated
+#                               placeholder would launder the gap instead of closing it.
+#   worktree                    committing on the agent's behalf writes an unreviewed
+#                               commit message into permanent history.
+#   deploy parity               the kernel that runs and the kernel that is committed
+#                               have diverged; picking a winner automatically is a
+#                               coin-flip over which code is real.
 _REPAIRABLE_MARKERS = (
     "map_coverage",
     "boot-map",
@@ -3548,6 +3895,11 @@ _NEVER_REPAIRABLE_MARKERS = (
     "unsealed prior session",
     "spec_completeness",
     "record_coverage",
+    # S192 interval guards — see the block comment above _carry_forward_gate.
+    "test gate:",
+    "orphan enums:",
+    "worktree:",
+    "deploy parity:",
 )
 
 
@@ -4931,6 +5283,50 @@ def _drive_close(
     else:
         print("[4/4] Conduct gate: clean — no bursts, no undeclared failures, "
               "gaps within allowance.")
+
+    # ------------------------------------------------------------------
+    # SEAL-INTERVAL-RECHECK (S192, E-123) — the LAST thing before the seal.
+    #
+    # This is the guard E-115 could not be. E-115 evaluates the test gate at the
+    # top of the close and is correct at that instant; it says nothing about the
+    # interval between that instant and this line. S191 spent an entire session
+    # fixing "the running kernel exists in no commit", passed E-115, then edited
+    # __main__.py while the close was still running and sealed COMPLETE over an
+    # uncommitted kernel. The gate did not fail. The gate simply was not looking
+    # at the moment that mattered.
+    #
+    # So the probes run AGAIN here, with nothing between them and the write:
+    # test gate still green at the live HEAD, worktree still clean, deployed
+    # kernel still identical to the committed one, no E-number left unbanked.
+    # A seal now means those four facts were true at the instant it was taken —
+    # which is the only reading of "sealed" that survives being handed to
+    # somebody else.
+    #
+    # There is deliberately no --force here. Everything reachable by --force is
+    # reachable by fixing the tree, and a seal is the one artifact the next
+    # session cannot re-derive.
+    # ------------------------------------------------------------------
+    _interval = _interval_probes(rag_path, rag_dir=rag_dir, git_head=git_head)
+    if _interval:
+        print(
+            "ERROR: SEAL-INTERVAL-RECHECK — the tree moved during this close. "
+            "transfer_ready NOT set (marker SURFACE_PENDING, resumable).\n"
+            + "".join(f"  - {f}\n" for f in _interval)
+            + "  These were re-measured with nothing between them and the seal. "
+            "E-115 proves the kernel at the moment the close BEGINS; this proves "
+            "it at the moment the close ENDS. S191 passed the first and failed "
+            "the second, and sealed anyway (E-123).\n"
+            "  Fix each finding, then re-run `session-resume`.",
+            file=sys.stderr,
+        )
+        _write_close_marker(
+            rag_path,
+            _build_close_marker(sid, "SURFACE_PENDING", steps, started, None,
+                                conduct=_conduct, conduct_measured=_conduct_measured),
+        )
+        return 1
+    print("[4/4] Seal-interval recheck: clean — gate green at live HEAD, worktree "
+          "committed, deployment in parity, no orphaned E-numbers.")
 
     _write_close_marker(
         rag_path,

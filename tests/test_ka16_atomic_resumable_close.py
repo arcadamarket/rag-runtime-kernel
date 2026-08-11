@@ -29,10 +29,22 @@ def _log_path(tmp_path: Path, sid: str) -> Path:
     return tmp_path / f"{LOG_FILE_PREFIX}{sid}{LOG_FILE_EXT}"
 
 
-def _write_rag(tmp_path: Path, written_by: str, seq: int = 1) -> Path:
+def _write_rag(tmp_path: Path, written_by: str, seq: int = 1,
+               banked_ids: "tuple[str, ...]" = ()) -> Path:
     rag_path = tmp_path / "RAG_MASTER.json"
     rag_path.write_text(
         json.dumps({
+            # ORPHAN-ENUM-BLOCKS (S192, E-125): an E-number cited in ERROR_LOG.md
+            # with no tracked item behind it is a fabricated identifier, and the
+            # seal now refuses one. The two tests below fold an ERROR_LOG entry as
+            # part of what they are testing, so they must also bank the id that
+            # entry cites — which is the rule, not a workaround for it. S191 folded
+            # prose citing E-111, E-114 and E-115 without banking any of them and
+            # handed the next session three ids that pointed at nothing.
+            "tracked_items": [
+                {"id": i, "status": "RESOLVED", "kind": "ERROR", "title": "fixture"}
+                for i in banked_ids
+            ],
             "meta": {
                 "written_by_session": written_by,
                 "last_checkpoint_seq": seq,
@@ -170,7 +182,7 @@ def test_close_seals_when_the_session_is_DECLARED_clean(tmp_path, monkeypatch, c
 
 def test_close_seals_when_an_entry_is_actually_banked(tmp_path, monkeypatch, capsys):
     """The other way to satisfy the gate: bank the record it exists to protect."""
-    rag = _write_rag(tmp_path, "S0", seq=1)
+    rag = _write_rag(tmp_path, "S0", seq=1, banked_ids=("E-999",))
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
 
@@ -240,7 +252,7 @@ def test_session_end_no_report_writes_no_artifact(tmp_path, monkeypatch):
 # --- ERROR_LOG fold is part of the governed call, and idempotent ------------
 
 def test_session_end_folds_error_log_entry(tmp_path, monkeypatch):
-    rag = _write_rag(tmp_path, "S0", seq=1)
+    rag = _write_rag(tmp_path, "S0", seq=1, banked_ids=("E-099",))
     _start_logger(tmp_path, "S1")
     monkeypatch.setattr(m, "cmd_audit", lambda args: 0)
     entry = "### E-099: a folded close incident"

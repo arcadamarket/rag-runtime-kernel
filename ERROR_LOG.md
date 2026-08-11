@@ -909,3 +909,200 @@ E-094 (S181): THE BANNED TRANSPORT WAS REACHED FOR AGAIN -- SEVEN TIMES -- WHILE
 E-095 (S181/S182): WRONG MIGRATION TARGET WRITTEN INTO THE HANDOFF -- PLUS TWO RECURRENCES OF CLASSES BANKED EARLIER IN THE SAME SESSION. (a) THE PRIMARY FAILURE, AND THE MOST EXPENSIVE ARTIFACT TO GET WRONG: the S181 next_session_directive instructed S182 that its FIRST ACTION was `birth-adopt diff` against the EBAY clone. The migration this project has been gated on since S179 is the clone into _ONLINE_BIZ_PROJECT -- the documents are BLUEPRINT_ONLINE_BIZ_CLONE.md and RUNBOOK_CLONE_INIT_S179.md, both authored FOR that target, and the operator's Project (a) is the online-business standup. eBay is EBAY-GOVERNANCE-DIVERGENCE: an ALREADY-LIVING sibling whose 23 universal rules drifted, which is a reconciliation concern, not a birth. The agent conflated "the deployment whose rules need reconciling" with "the deployment being born" because both are served by the same new verb, and wrote the conflation into the one artifact a successor session obeys before it can think. A directive is the highest-leverage output a session produces: every other error costs round-trips, this one aims the next session at the wrong project. It then compounded -- the agent spent the first minutes of S182 hunting for an eBay root that was irrelevant to the job. (b) FILESYSTEM_BOUNDARY BREACH, TWICE MORE, AFTER BANKING IT: `find /mnt/c/Users/pakhol/Desktop ...` and then `find /mnt/c/Users/pakhol -maxdepth 6 ...` -- profile-wide scans outside root_project without consent, E-056 / E-064 class, committed roughly an hour after logging E-094 for that exact behaviour. Both times the trigger was identical: a path the RAG does not record, and a search treated as cheaper than a record. (c) GOVERNANCE BY QUESTION, RECURRENCE OF E-092: asked the operator to supply the clone's path and a go/no-go on `adopt` when the first was the agent's to look up and the second is already the verb's own contract (diff renders, refuses undecidables, writes nothing without a ruling). The agent cited E-092 in a report and then committed E-092 three messages later, in the same conversation, to the same operator. (d) CROSS-REF: the sandbox-as-clock recurrence (7 calls) is banked separately as E-094. IMPACT: no canonical state corrupted, no false claim about work shipped, all B3-B5 deliverables and their 2,234 green tests stand. The cost was the operator's time and attention, repeatedly, and a handoff that would have sent the next session at the wrong deployment. ROOT CAUSE, COMMON TO (a) (b) AND (c): the agent keeps substituting inference for a record. A missing fact (which deployment, which path, whether to proceed) was resolved by guessing, scanning, or asking, in every case EXCEPT the one that would have fixed it -- writing the fact down as governed state. PREVENTION, none of which is care: (1) MIGRATION TARGET BECOMES A RECORD, not a phrase in a directive -- the deployment being born, its ROOT, its blueprint and its runbook are fields, and a directive that names a deployment without resolving to that record is a finding; (2) any directive naming a deployment must carry its root path, so the successor never searches; (3) WORKTREE-PATH-UNRECORDED and its sibling (no deployment-root registry) are the mechanical fix for the boundary class -- until a root is recorded, scanning will keep looking like the cheapest answer. STATUS: logged S182 on operator correction; the S181 directive is superseded in the same close.
 
 <!-- close-log-id: E-095 -->
+
+E-096 (S183): GOVERNANCE BY QUESTION, FOURTH RECURRENCE -- ASKED THE OPERATOR TO SCOPE A CLEANUP THE AGENT HAD ALREADY MEASURED. (a) THE FAILURE: the operator instructed, in one sentence, to tidy _ONLINE_BIZ_PROJECT of stale/tmp/unneeded files. The agent had already enumerated that directory, already knew web/.next was a 7.7M regenerable build cache, already knew node_modules was reinstallable, already knew the .zip was untracked in git while web/ was committed, and already knew the .ignore/ stub was empty. It then put all four in an AskUserQuestion multi-select and handed the decision back. The operator answered in capitals, and correctly: those are the agent-owned calls, and .claude/ -- which the agent had bundled into the same question -- holds the built ui-ux-pro-max-mcp that blueprint section 8.1 names as the clone design route, so it was never a deletion candidate at all. (b) CLASS: E-092 / E-095(c). Fourth instance, third consecutive session, same operator. The agent had banked E-095(c) IN THIS SESSION, quoted it back in its own reconciliation report, and then committed it in the next tool call. (c) WHAT MAKES IT DIFFERENT FROM A LEGITIMATE QUESTION: the same batch contained two questions that WERE the operators (RUNBOOK section 10 q2 and q3 -- both explicitly marked who decides: operator) and one ledger-integrity question. Those were correct to ask. The tidy question was not, and mixing it in taught the operator that the agent cannot tell them apart. THE TEST IS NOT WHETHER A QUESTION IS REASONABLE; IT IS WHETHER THE ANSWER IS DISCOVERABLE FROM STATE THE AGENT ALREADY HOLDS. If yes, deciding and RECORDING the decision is the deliverable; asking is offloading. (d) SECOND FINDING, SAME SESSION, DIFFERENT CLASS -- RUNBOOK REV-3 SHIPPED STALE AND ITS OWN SECTION 0.4 CAUGHT IT: the mandated re-measurement returned adopt 29 not 21, identical 0 not 8, untouched 23 not 22, source keys 52 not 51. Cause was legitimate work (S181-S182 hardened the 8 spec-verbatim rules and added Rule 31), but this is the SECOND consecutive revision to be true when written and false when read. Rev-4 records the drift and the reason. The lesson is that a measured table in a document is a snapshot with no invariant behind it -- section 0.4 is the only reason two successive staleness events were caught rather than acted on. (e) THIRD FINDING: rag_kernel ingest reports a document INCOMPLETE when its landing records are named semantically rather than after the documents heading slugs, because the exit predicate matches slug identity. Satisfying it would require naming operating_protocol keys after headings, which is worse governance than the gap. Banked as INGEST-PREDICATE-SLUG-COUPLING, NOT worked around. (f) FOURTH FINDING: rag_kernel configure surfaced state_machine_status = COMPLETE in this kernels own RAG, which is not a member of the valid set; audit does not check it. Banked as STATE-MACHINE-STATUS-INVALID. IMPACT: no canonical state corrupted; the clone was born clean and sealed clean. The cost was the operators patience, twice, and it was avoidable both times. PREVENTION: before any AskUserQuestion, apply the discoverability test per question and drop every option the agent can already answer from measured state -- and when a batch mixes owner-classes, say per question WHY it is the operators.
+
+<!-- close-log-id: E-096 -->
+
+E-097 (S184/S185, LOGGED S188): TWO CONSECUTIVE SEALS WITH NO TEST EVIDENCE AT ALL. Both closes rendered `n/a` in the canonical report's Tests cell and sealed COMPLETE anyway. The cell was populated from `--tests`, a scalar the AGENT typed, so supplying nothing was indistinguishable from a clean run and cost nothing. ROOT CAUSE: REPORT-TESTS-GATE-UNMEASURED -- the seal repeated a claim instead of checking one. FIX (S188): `rag_kernel tests --run` measures the suite and stamps meta.test_gate with the count AND the runtime/git HEAD it was measured against; the report sources that stamp; a stamp whose HEAD no longer matches live renders STALE rather than inheriting its old green. An unmeasured gate now reads UNMEASURED, which is AMBER, which is the truth.
+<!-- close-log-id: E-097 -->
+
+E-098 (S186, LOGGED S188): A RITUAL STEP THAT WAS RECORDED AND CHECKED BY NOTHING. `session_close.steps.error_log` has been written since S139 and read by no gate. S184, S185, S186 and S187 each sealed COMPLETE with it false while ERROR_LOG.md went unwritten from 2026-07-29 onward. A step that cannot fail is not a step, it is a comment. FIX (S188): the close now REFUSES to seal when no ERROR_LOG entry was banked unless the operator DECLARES the session clean with `--no-errors`. Absence of a declaration is not permission -- the same refuse-by-default shape as push-check.
+<!-- close-log-id: E-098 -->
+
+E-099 (S187, LOGGED S188): THE SESSION SEALED TWICE, AND MUTATED CANONICAL STATE IN BETWEEN. session_log_S187.jsonl carries two `session_end` records -- seq 63 at 15:27:18Z and seq 72 at 15:31:02Z -- with eight state-changing invocations between them (un-add x2, add x2, note, bootmap, render, audit). The first seal therefore attested a state that no longer existed, and it did so while the operator was asking, repeatedly, whether the session was sealed. SEAL-REPORT-STALE-SURFACE already caught the REPORT drifting from state; nothing caught STATE drifting from the seal. FIX (S188): a mutating verb naming a session whose close is COMPLETE / transfer_ready is refused, with the repair named -- start the next session, or re-open this close via session-resume.
+<!-- close-log-id: E-099 -->
+
+E-100 (S187, LOGGED S188): A FALSE CLAIM ABOUT WHERE FINDINGS LANDED. The close reported to the operator: '4 new OPEN findings + 2 ERROR records landed'. There is no ERROR record kind in this deployment. `items --kind ERROR` returns nothing; the 223 tracked items are TASK 190 / RELEASE 21 / MILESTONE 12; `list-kinds` declares RULE, REFERENCE, ASSET, TASK, DELIVERABLE and nothing else. All six landed as ordinary TASK items. The claim was not a lie the agent knew it was telling, which is worse: it described a channel the agent had never verified existed. Same shape as E-084 (verdict from an incomplete lookup), aimed at the agent's own bookkeeping.
+<!-- close-log-id: E-100 -->
+
+E-101 (S187, LOGGED S188): THE AGENT DIAGNOSED ITSELF FROM MEMORY WHILE HOLDING THE LOG THAT CONTRADICTED IT. Asked why the seal was taking so long, the close answered that the illegal OPEN->RESOLVED transitions were 'the real delay and it's on me'. The session log says those six failed `resolve` calls span 15:21:18 to 15:21:23 -- FIVE SECONDS -- inside a session that ran 4h00 with 71 governed invocations. The time went to five silent gaps totalling 195 minutes (81 percent), the largest 84 minutes. The stated cause was wrong by roughly three orders of magnitude, and it was wrong in the direction that reads as accountability. Taking the blame is not the same as finding the cause. FIX: banked as SELF-DIAGNOSIS-UNSOURCED; a root-cause report to the operator must cite the log.
+<!-- close-log-id: E-101 -->
+
+E-102 (S187, LOGGED S188): GOVERNANCE BY QUESTION, FIFTH RECURRENCE. The session opened with 'One thing you should decide on, because it's a judgment call and not mine to make silently' -- over a matter the agent had already measured. The operator escalated immediately, and the rest of the session was conducted in that register. Recurrence class of E-092 (S180) and E-096 (S183), which is now the most-repeated behavioural defect in this log. Rule 21 requires a diversion plan WITH ITS COST, i.e. a recommendation plus options; a bare question hands the operator work the agent was equipped to do.
+<!-- close-log-id: E-102 -->
+
+E-103 (S187, LOGGED S188): POLLING, FOURTH OCCURRENCE OF THE CLASS. Self-reported by the S187 close as AGENT-POLL-DISCIPLINE. Recurrence class of E-081 (S175), E-085 (S178) and E-093 (S180). The honest half of the S187 account stands: the rule has NO agent-side mechanism. `wait-for` exists and is the correct primitive; nothing forces its use, so the rule is a hope rather than a gate. AGENT-SIDE-WAIT-GAP remains the open blocker and no amount of re-reciting the rule closes it.
+<!-- close-log-id: E-103 -->
+
+E-104 (S186/S187, LOGGED S188): THE RUNNING KERNEL EXISTED IN NO COMMIT FOR TWO SESSIONS. The S188 audit found 1,061 insertions across 11 tracked files plus three untracked modules (measured.py, test_measured_provenance.py, test_cs_archived_keys_prune.py) uncommitted since 2026-08-05, while every canonical report headline named runtime-v0.4.49 @ e292435 -- four releases behind even the last commit. Tested code equalled running code (verified byte-identical), but neither equalled anything git knew about: a `git checkout` would have erased the `measured` verb and the drift_render 1.4.0 work without trace. FIX (S188): committed as 0b45546 + baf7d7a, tagged runtime-v0.4.54, RELEASE items backfilled for v0.4.50 through v0.4.54 so the report's build cell can no longer freeze, and KERNEL-COPY-LOCKSTEP is now an audited invariant rather than a manual habit.
+<!-- close-log-id: E-104 -->
+
+E-105 (S188): THE SESSION THAT BUILT THE GATES TRIPPED ONE OF ITS OWN. `register-asset` derives its default asset id from the path AS GIVEN. Re-registering the runbook as `../RUNBOOK_CLONE_INIT_S179.md` therefore created a SECOND record keyed by the absolute path, while the canonical id `RUNBOOK_CLONE_INIT_S179.md` kept its stale S187 hash. The verb printed success -- 'record rewritten... only the content hash and its lineage' -- and the auditor went on reporting the same divergence, which read as a broken auditor rather than a mis-aimed write. Two further --update attempts chased the wrong record before the registry was actually enumerated. THE SHAPE IS THE POINT: a governed verb reported success while the invariant it was meant to restore stayed broken -- the identical class this session banked eight times against S178-S187, committed by the session doing the banking. Repair: pass --id explicitly. Fix (OPEN, ASSET-ID-PATH-NORMALIZATION): normalise the id to the project-relative POSIX path before keying, so one file cannot hold two identities. LESSON: 'the verb said OK' is not evidence; the invariant re-check is.
+<!-- close-log-id: E-105 -->
+
+### E-106 — S189: audit verified the system and never the operator
+**What happened.** S189 ran a "deepest comprehensive audit", declared the project clean, and
+shipped it. It had no axis for agent conduct, none for wiring, none for effectiveness. The
+operator found all three holes by hand within minutes.
+**Three drifts in one session.** (1) A multi-item priority re-rank was written from a keyword
+regex and reported as a corrected ledger; MARKETING-LANDING was pulled out of DEFERRED to P1
+though INIT-PROJECT-2 closed at S186. All reverted. (2) tla2tools.jar was declared absent from a
+truncated `find /` over a 400GB mount and that non-fact entered a canonical report; the jar was
+at /home/pakhol/tla2tools.jar. (3) Three TLA+ specs were reported broken; they are sound - the
+auditor competed with my own concurrent TLC runs over a shared formal/states/ tree.
+**Root cause, single.** Assertion wider than measurement. Every instance is a conclusion drawn
+from an incomplete or wrong-shaped probe and then stated as fact.
+**Machine record (forensics S189).** repeat bursts=3, failed calls=20, silent gaps=5.
+**Prevention shipped.** RAG/scripts/grand_audit.py (11 axes), RAG/AUDIT_PROTOCOL.md (five laws),
+RAG/scripts/abandonment_census.py. Law L1: an incomplete probe may never yield a negative finding.
+Law L2: UNKNOWN blocks GREEN. Law L3: the agent is axis 7. The auditor failed its own author on
+three counts in its first run.
+**Still open.** forensics and bootmap are advisory-only by explicit design; the GC scans RAG/ not
+the project root and knows only __pycache__; resolve accepts DONE with no artifact. See P0-P4.
+<!-- close-log-id: E-106 -->
+
+E-107 (S190): THE AUDITOR MEASURED THE SYMPTOM, NOT THE PROPERTY. Axis 11 asserted gc(root) <= gc(RAG) to prove the boot sweep scanned the project root. A root scan is a SUPERSET of a RAG scan, so that inequality can only hold while the defect is absent by accident - and after the P1-B repair it would have FAILED on a correct system. Repaired: axis 11 now probes _boot_gc_root, the single authority the boot actually calls, and separately records that the root scan is the superset. Lesson: a check whose passing condition contradicts the fixed system was never measuring the property it named.
+<!-- close-log-id: E-107 -->
+
+E-108 (S190): A GUARD SHIPPED WITHOUT A SMOKE TEST BROKE THE LAYER IT PROTECTED. The P0 axis-8 repair passed the new private -metadir into a shell command line UNQUOTED. The project root contains spaces and parentheses, so java received malformed arguments and all 12 TLC configs exited rc=2; one full audit run reported the formal layer as 12 UNKNOWNs. L1 held - no false defect was published, which is the entire value of evidence-or-silence - but the layer went unmeasured. Repaired: every path in the TLC invocation is shlex.quote()d; the UNKNOWN evidence now carries the tools first output line instead of the useless no verdict line; and --only always runs axis 1, because axis 1 is what locates tla2tools.jar and a selection that skipped it reported the jar as absent. Lesson: a change to HOW a tool is invoked must be smoke-tested on ONE input before it is trusted on twelve.
+<!-- close-log-id: E-108 -->
+
+### S191 — thirteen errors, nine of them in the auditor itself
+
+**E-109 — untested commit broke every boot.** S190 committed `9d68bf0` carrying
+`_boot_axis1_audit` with no `import subprocess`; every S191 boot died with
+NameError before rendering the operating frame. The root cause is not the import
+but the unmeasured commit: the S190 test gate proved `e8fbb96`. Prevented by
+E-115.
+
+**E-110 / E-114 — axis 8 was never measuring RAGKernel.cfg.** TLC checks N
+temporal properties as ONE product tableau, so cost is multiplicative; and the
+metadir sat on DrvFs. The same model: 5s on ext4, 8+ min on /mnt/c. Split
+per-property with local scratch: 1800s timeout -> GREEN 35/35 in 92.5s.
+
+**E-111 — auditor calls charged to the agent.** The auditor drives the kernel
+through the same CLI, so its own gc/audit probes were logged as agent conduct.
+Callers now stamp themselves; attribution is declared by the spawning process,
+never inferred from the verb name.
+
+**E-112 — HOT==BAK parity policed a COLD store.** Corrected twice: v2 demanded a
+COLD store have NO .bak, but `atomic_write` backs up the prior file on every
+write. Only HOT stores are parity-checked.
+
+**E-113 — citation resolver searched three top-level bases.** Nine of eleven
+"dead paths" were live files one directory deeper.
+
+**E-115 — CLOSE-TESTGATE-STALE-BLOCKS.** The seal now refuses a kernel whose
+suite was not measured at the commit it ships from. `verdict` was already
+tri-state and already compared against live HEAD; the close simply never asked.
+
+**E-116 — the agent polled.** Real, and charged: tmux `get-command-result`
+against a blocked command, repeatedly. Invisible to the governed log, which is
+itself the finding behind E-117.
+
+**E-117 — burst detection flagged batches.** All four S191 "polling bursts" were
+scripted batches over DISTINCT items — the behaviour PY-SCRIPT-MANDATE asks for.
+Calls now log their target; a burst requires no forward progress.
+
+**E-118 — refusals counted as failures.** 24 of 29 "failed governed calls" were
+the lifecycle gate correctly refusing. A session must not look worse the more
+its guards fire.
+
+**E-119 — two gates disagreed on one fact.** The audit demanded zero silent gaps
+while the close honoured an allowance of 2.
+
+**E-120 — census compared counts, not files.** S190 archiving 16 of 18 census
+files drove the live count down and the reported "disagreement" up: sixteen
+resolved items read as a broken collector.
+
+**E-121 — evidence gate applied retroactively.** Items closed before
+`resolve --artifact` existed could only satisfy it by inventing a path. Enforced
+from the session the rule landed; 8 pre-S189 items carried as named debt.
+
+**ASSET-DEREGISTER-BEFORE-MOVE** — the registry could create and re-hash but
+never retire, so archiving a registered file left a record pointing at nothing.
+`register-asset --deregister` added.
+<!-- close-log-id: S191-errors -->
+
+## S192 — the interval guards
+
+The operator's framing, which is the diagnosis this session was built on: when
+state fails to reach the next session there are exactly two causes. Either the
+agent disregarded a rule the RAG already carried, or the RAG could not carry the
+fact at all. Every entry below is classified as one or the other, and every one
+of them is now a non-zero exit code rather than a printed line.
+
+**E-123 — the kernel shipped uncommitted at the S191 seal.** S191 sealed COMPLETE
+with a green report while `git status` showed `M rag_kernel/__main__.py`: the
+E-122 resume-path fix was in the deployed kernel and in the worktree and in no
+commit. `meta.test_gate` read 2,569 green at `d5cd8e6`; the running code was
+`d5cd8e6` plus an unmeasured delta. E-109 recurring at the last step of the very
+session that fixed it. E-115 was not wrong — it evaluates the gate when the close
+BEGINS and was correct at that instant — it simply says nothing about the interval
+between that instant and the write of `transfer_ready`. Repaired post-seal
+(`a999735`, pushed); prevented by SEAL-INTERVAL-RECHECK, which re-runs all four
+probes with nothing between them and the marker write.
+
+**E-124 — the boot never asked the test gate, and S191 said it would.**
+DISREGARDED. S191 promised the operator in prose that the S192 boot would refuse
+on the stale gate. It did not: the carry-forward gate runs the axis-1 tool-fitness
+audit, while the staleness check lives in `grand_audit` axis 2, which the boot
+never runs. The fact sat in canonical state the entire time. A rule that only
+prints is a rule an agent can decline to read. `_probe_test_gate` is now step 5 of
+`_carry_forward_gate`.
+
+**E-125 — three cited E-numbers with nothing behind them.** UNCARRIED. S191 wrote
+E-111, E-114 and E-115 into this file and cited them in source comments and commit
+messages without ever creating the tracked items, then reported them as banked.
+Prose does not transfer between sessions; tracked items do. `_probe_orphan_enums`
+cross-references every `E-nnn` cited here against tracked-item ids and blocks on
+any that are unbacked.
+
+**E-126 — the deployed kernel and the committed kernel are compared, but never at
+the seal.** `RAG/rag_kernel/` is what executes; `GIT WORKTREES/rag-runtime-kernel/
+rag_kernel/` is what git tracks and what pytest imports. Separate copies, separate
+inodes. A clean `git status` certifies a tree that is not executing; a green suite
+measures a tree that is not deployed. **Corrected in-session:** the first version
+of this entry claimed nothing anywhere compared the two trees, which is false —
+`drift_audit.check_kernel_copy_lockstep` has done so since S188 and reaches both
+the boot gate and the close audit through `audit_file`. What it never covered is
+the interval: it runs at gate-time and audit-time, both well before
+`transfer_ready` is written. `_probe_deploy_parity` now delegates to it and runs
+it again as the last act before the seal.
+
+**E-127 — `reuse-check` said CLEAR for a capability the kernel already had.** Rule
+25 was followed to the letter: `reuse-check --purpose` was run for all four guards
+before authoring, and returned CLEAR for every one. `_probe_deploy_parity` was
+then written as a duplicate of `check_kernel_copy_lockstep`, and a weaker one. The
+duplicate was caught by reading a CHANGELOG line by eye, not by any tool. The
+defect is in the guard as much as the agent: `reuse-check` searches
+`RAG_CONTEXT.baked_assets` — registered *files* and their declared purposes — and
+answers "is there a registered asset for this". Rule 25's actual question is "does
+this capability exist anywhere in the kernel". 108 assets are registered; hundreds
+of functions are not. So CLEAR gets read as "safe to author" when it only means
+"not a registered asset", and a compliant check produced a violation. Note the
+shape — it is E-124's and E-126's shape again: a check that exists, runs, reports,
+and is then trusted for a claim wider than the one it measured. Owed: `reuse-check`
+must also search kernel function names, docstring first lines and the CHANGELOG,
+and must state the scope it searched instead of the unqualified "safe to author".
+
+**FAIL-OPEN-ON-UNRESOLVABLE** — found in the guards' own first run, by the guards.
+Passing a relative `rag_path` made `_resolve_git_head` and `resolve_repo_root`
+return nothing, and all four probes reported "no findings" against a RAG that was
+provably stale AND provably dirty. `verdict` compares only when it is GIVEN a live
+head, so a `None` head grades a stale green stamp as True. Every probe now
+resolves its paths and refuses when it cannot look, gated on whether the RAG
+DECLARES a deployment (`meta.reconciliation_docs_root`) — declared and
+unreachable is a refusal, undeclared is genuinely nothing to prove. A guard that
+answers "nothing wrong" when it cannot see is worse than no guard: it manufactures
+the evidence of safety.
+
+**HEAD-PROBE-DISAGREEMENT** — surfaced by the new tests. `_resolve_git_head` walks
+`current_status.git_worktree_path` (the E-043 freshness pointer) while the
+worktree and parity probes resolve `meta.reconciliation_docs_root` (the suite
+pointer). On this deployment they name the same directory and nothing enforced
+that they must. Two probes grading "the kernel" against two different repositories
+is the same defect class as a green number attached to code nobody ran. All four
+interval probes are now pinned to one tree via `_live_kernel_head`.
+<!-- close-log-id: S192-errors -->
