@@ -1801,6 +1801,155 @@ def check_asset_registry(
     return findings
 
 
+def _git_toplevel(directory: Path, _cache: dict[str, Optional[str]]) -> Optional[str]:
+    """Repository root containing ``directory``, or None when it is not under git.
+
+    Cached per directory because the registry holds many assets per tree and a
+    subprocess per asset is the kind of cost that gets a check disabled later.
+    """
+    key = str(directory)
+    if key in _cache:
+        return _cache[key]
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "-C", key, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=15,
+        )
+        top = out.stdout.strip() if out.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        top = None  # git absent, or the path is unreadable — a skip, not a finding
+    _cache[key] = top
+    return top
+
+
+def check_asset_gitignored(
+    rag_dir: Optional[Path | str],
+    project_root: Optional[Path | str] = None,
+) -> list[AuditFinding]:
+    """ERROR when a registered baked asset is git-IGNORED and UNTRACKED.
+
+    GITIGNORE-SWALLOWS-PROJECT-SCRIPTS (S198, opened by S199's audit clause): a
+    blanket ``*.sh`` rule swallowed ``formal/run_tlc.sh``. It was authored, run,
+    and committed with ``git add -A`` — and git reported "working tree clean"
+    over a file that was never added, so the TLC runner existed in exactly one
+    working copy. That is RENDERER-UNTRACKED-S197 recurring: a verification tool
+    that lives on one machine is a local habit, not a gate, and the only symptom
+    is silence. S198 exempted that ONE path by name; the CLASS stayed ungated,
+    which is what this clause closes.
+
+    The predicate is deliberately ``ignored AND untracked``, not ``ignored``.
+    ``git check-ignore`` matches patterns without consulting the index, so a
+    TRACKED file that also matches an ignore rule would otherwise be reported —
+    and such a file is not lost: tracking wins, ``git add -A`` keeps updating it,
+    a clone gets it. Only the ignored-and-untracked file disappears silently.
+
+    Self-skips clean, by construction, when: ``rag_dir`` is None, the registry is
+    absent or empty, git is not installed, or the asset is not inside any git
+    repository. This project registers assets under a project root that is NOT a
+    repo (the worktree is a sibling directory), so a check that assumed one repo
+    per deployment would either crash or lie; assets outside a repo have no
+    ignore semantics to violate and are skipped, not flagged.
+    """
+    findings: list[AuditFinding] = []
+    if rag_dir is None:
+        return findings
+    try:
+        from rag_kernel.asset_registry import (
+            AssetRegistryError, list_assets, resolve_path,
+        )
+    except Exception:  # pragma: no cover - sibling module always present
+        return findings
+    try:
+        assets = list_assets(rag_dir)
+    except AssetRegistryError:
+        return findings  # unreadable registry is check_asset_registry's ERROR, not ours
+    if not assets:
+        return findings
+
+    import subprocess
+
+    root = project_root if project_root is not None else Path(rag_dir).parent
+    top_cache: dict[str, Optional[str]] = {}
+    by_repo: dict[str, list[tuple[str, Path]]] = {}
+    for rec in assets:
+        fp = resolve_path(rec.path, root)
+        if not fp.is_file():
+            continue  # missing-on-disk is check_asset_registry's ERROR, not a duplicate
+        top = _git_toplevel(fp.parent, top_cache)
+        if top is None:
+            continue
+        by_repo.setdefault(top, []).append((rec.asset_id, fp))
+
+    for top, entries in sorted(by_repo.items()):
+        paths = [str(fp) for _, fp in entries]
+        stdin_blob = "\0".join(paths) + "\0"
+        try:
+            ci = subprocess.run(
+                ["git", "-C", top, "check-ignore", "--stdin", "-z", "-v"],
+                input=stdin_blob, capture_output=True, text=True, timeout=60,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue  # transport failure is not evidence of a defect
+        if ci.returncode not in (0, 1):
+            continue  # 128 = not a repo / bad invocation: skip, do not manufacture an ERROR
+        fields = [f for f in ci.stdout.split("\0") if f != ""]
+        # -z -v emits 4 fields per hit: source, linenum, pattern, pathname.
+        ignored: dict[str, str] = {}
+        for i in range(0, len(fields) - 3, 4):
+            src, line, pattern, pathname = fields[i:i + 4]
+            # MEASURED, git 2.43.0: `check-ignore -v` reports the last MATCHING
+            # pattern and exits 0 even when that pattern is a NEGATION, so a
+            # correctly exempted file looks exactly like a swallowed one. Reading
+            # rc alone flags every file S198's own remedy rescued. A leading '!'
+            # means re-included — not ignored.
+            if pattern.startswith("!"):
+                continue
+            ignored[pathname] = f"{src}:{line}:{pattern}"
+        if not ignored:
+            continue
+        # Belt-and-braces on the tracked case. MEASURED (git 2.43.0): check-ignore
+        # already returns 1 for a TRACKED file that matches an ignore rule, so this
+        # set is normally empty. It stays because the predicate this clause means
+        # is "git would not carry it", and that must not silently become "a pattern
+        # matched" if a future git, or --no-index, changes the first answer.
+        try:
+            ls = subprocess.run(
+                ["git", "-C", top, "ls-files", "-z", "--", *ignored.keys()],
+                capture_output=True, text=True, timeout=60,
+            )
+            tracked = {
+                str((Path(top) / rel).resolve())
+                for rel in ls.stdout.split("\0") if rel
+            } if ls.returncode == 0 else set()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            tracked = set()
+        for asset_id, fp in entries:
+            key = str(fp)
+            rule = ignored.get(key)
+            if rule is None:
+                continue
+            try:
+                resolved = str(Path(key).resolve())
+            except OSError:  # pragma: no cover - unresolvable path
+                resolved = key
+            if resolved in tracked or key in tracked:
+                continue
+            try:
+                shown = str(Path(key).relative_to(top))
+            except ValueError:  # pragma: no cover - path outside its own toplevel
+                shown = key
+            findings.append(AuditFinding(
+                check="asset_gitignored", severity=ERROR,
+                detail=(
+                    f"registered asset {asset_id!r} at {shown!r} is git-ignored and "
+                    f"untracked (rule {rule}) — `git add -A` skips it and `git status` "
+                    f"reports clean, so it exists in this working copy only. Exempt it "
+                    f"by name in .gitignore and commit it, or deregister the asset."
+                )))
+    return findings
+
+
 _SPEC_GLOB = "INIT_UNIVERSAL_RUNTIME_KERNEL_v*.md"
 _SPEC_SEARCH_DEPTH = 3
 
@@ -2819,6 +2968,11 @@ def audit_file(
     # REUSE-REGISTRY-GUARD: baked-asset registry integrity. RAG_CONTEXT.json lives in
     # the RAG dir (= p.parent); project root = use_root (default: the grandparent).
     extra += check_asset_registry(
+        p.parent, use_root if use_root is not None else p.parent.parent)
+    # GITIGNORE-SWALLOWS-PROJECT-SCRIPTS: the registry says an asset exists; this
+    # asks whether git would actually carry it. Ignored+untracked = one working
+    # copy only, with a clean `git status` as the sole symptom (S198, run_tlc.sh).
+    extra += check_asset_gitignored(
         p.parent, use_root if use_root is not None else p.parent.parent)
     # AUDIT-SPEC-COVERAGE: canonical-vs-SPEC coverage. Every other invariant here
     # compares a render to the canonical store; this one is the only thing that

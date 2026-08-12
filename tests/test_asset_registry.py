@@ -15,6 +15,8 @@ Covers the design contract in rag_kernel.asset_registry:
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -34,7 +36,9 @@ from rag_kernel.asset_registry import (
     reuse_check,
 )
 from rag_kernel.cold_manager import ProjectContextManager
-from rag_kernel.drift_audit import ERROR, check_asset_registry
+from rag_kernel.drift_audit import (
+    ERROR, check_asset_gitignored, check_asset_registry,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -194,6 +198,134 @@ def test_audit_flags_one_path_under_two_ids(tmp_path):
     ]})
     findings = check_asset_registry(tmp_path, tmp_path)
     assert any("two ids" in f.detail for f in findings)
+
+
+# --------------------------------------------------------------------------- #
+# GITIGNORE-SWALLOWS-PROJECT-SCRIPTS — registered asset that git would not carry
+#
+# The class S198 left ungated after exempting one path by name. Each test states
+# the counterfactual it kills, because a gate that only passes on the happy path
+# is a gate that has never refused anything.
+# --------------------------------------------------------------------------- #
+def _git(tmp: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(tmp), *args],
+                          capture_output=True, text=True, timeout=60)
+
+
+def _git_repo(tmp: Path) -> bool:
+    """Init a repo at tmp; False when git is unavailable (the check self-skips)."""
+    try:
+        if _git(tmp, "init", "-q").returncode != 0:
+            return False
+    except (OSError, subprocess.SubprocessError):
+        return False
+    _git(tmp, "config", "user.email", "t@t")
+    _git(tmp, "config", "user.name", "t")
+    return True
+
+
+needs_git = pytest.mark.skipif(
+    shutil.which("git") is None, reason="git not installed")
+
+
+def test_gitignored_clean_when_not_a_repo(tmp_path):
+    # This project's own layout: assets registered under a root that is NOT a repo.
+    # No ignore semantics exist here, so the only honest result is silence.
+    _asset(tmp_path, "run.sh")
+    register_asset(tmp_path, asset_id="run", path="run.sh", purpose="run things",
+                   session="S199", project_root=tmp_path)
+    assert check_asset_gitignored(tmp_path, tmp_path) == []
+
+
+def test_gitignored_clean_when_registry_empty(tmp_path):
+    assert check_asset_gitignored(tmp_path, tmp_path) == []
+    assert check_asset_gitignored(None, None) == []
+
+
+@needs_git
+def test_gitignored_errors_on_ignored_untracked_asset(tmp_path):
+    # The S198 defect exactly: blanket *.sh, `git add -A`, "working tree clean",
+    # and a verification tool that exists in one working copy.
+    if not _git_repo(tmp_path):
+        pytest.skip("git init unavailable")
+    (tmp_path / ".gitignore").write_text("*.sh\n", encoding="utf-8")
+    _asset(tmp_path, "formal/run_tlc.sh", body="#!/bin/sh\necho hi\n")
+    register_asset(tmp_path, asset_id="tlc-runner", path="formal/run_tlc.sh",
+                   purpose="run every TLC config", session="S199",
+                   project_root=tmp_path)
+    _git(tmp_path, "add", "-A")          # the command that silently skipped it
+    assert "run_tlc.sh" not in _git(tmp_path, "ls-files").stdout
+
+    findings = check_asset_gitignored(tmp_path, tmp_path)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.check == "asset_gitignored" and f.severity == ERROR
+    assert "tlc-runner" in f.detail and "run_tlc.sh" in f.detail
+    assert ".gitignore:1:*.sh" in f.detail   # names the rule that swallowed it
+
+
+@needs_git
+def test_gitignored_clean_when_rule_is_negated(tmp_path):
+    # S198's actual remedy for the one path. If the exemption works, the clause
+    # must go quiet — otherwise the fix and the gate disagree and one gets deleted.
+    #
+    # THIS TEST CAUGHT A REAL DEFECT IN THE FIRST CUT OF THE CLAUSE. Measured on
+    # git 2.43.0: `check-ignore -v` prints the last matching pattern and exits 0
+    # even when that pattern is a NEGATION, so reading the exit code alone flags
+    # every file the exemption rescued — including run_tlc.sh itself. A gate whose
+    # first firing is a false positive on its own remedy would have been deleted
+    # by the next session, correctly.
+    if not _git_repo(tmp_path):
+        pytest.skip("git init unavailable")
+    (tmp_path / ".gitignore").write_text("*.sh\n!formal/run_tlc.sh\n", encoding="utf-8")
+    _asset(tmp_path, "formal/run_tlc.sh", body="#!/bin/sh\n")
+    register_asset(tmp_path, asset_id="tlc-runner", path="formal/run_tlc.sh",
+                   purpose="run every TLC config", session="S199",
+                   project_root=tmp_path)
+    assert check_asset_gitignored(tmp_path, tmp_path) == []
+
+
+@needs_git
+def test_gitignored_clean_when_ignored_but_tracked(tmp_path):
+    # THE TRACKED-BUT-MATCHING CASE. An ignored-pattern file that git already
+    # carries is not lost: tracking wins, `git add -A` keeps updating it, a clone
+    # gets it. A clause that fires here trains people to ignore it, which is how
+    # the S198 defect survived in the first place. MEASURED (git 2.43.0): git
+    # itself declines to call a tracked file ignored — check-ignore exits 1 — so
+    # this asserts the behaviour the clause depends on, and fails loudly if a
+    # future git changes it.
+    if not _git_repo(tmp_path):
+        pytest.skip("git init unavailable")
+    _asset(tmp_path, "keep.sh", body="#!/bin/sh\n")
+    _git(tmp_path, "add", "-f", "keep.sh")
+    _git(tmp_path, "commit", "-q", "-m", "track it before ignoring it")
+    (tmp_path / ".gitignore").write_text("*.sh\n", encoding="utf-8")
+    register_asset(tmp_path, asset_id="keeper", path="keep.sh", purpose="kept",
+                   session="S199", project_root=tmp_path)
+    # git refuses to call a tracked file ignored (rc=1) …
+    assert _git(tmp_path, "check-ignore", "keep.sh").returncode == 1
+    # … and --no-index shows the pattern would otherwise have matched it.
+    assert _git(tmp_path, "check-ignore", "--no-index", "keep.sh").returncode == 0
+    assert check_asset_gitignored(tmp_path, tmp_path) == []            # carried, so silent
+
+
+@needs_git
+def test_gitignored_is_wired_into_the_audit_entrypoint(tmp_path):
+    # A clause nobody calls is a clause that never fires. Proves the finding
+    # reaches `audit` output, not just its own unit test.
+    if not _git_repo(tmp_path):
+        pytest.skip("git init unavailable")
+    (tmp_path / ".gitignore").write_text("*.sh\n", encoding="utf-8")
+    _asset(tmp_path, "tool.sh", body="#!/bin/sh\n")
+    register_asset(tmp_path, asset_id="tool", path="tool.sh", purpose="a tool",
+                   session="S199", project_root=tmp_path)
+    from rag_kernel import drift_audit as _da
+    # The wiring itself, asserted on the bytecode: audit_file must REFERENCE the
+    # clause. Without this, deleting one line from audit_file leaves every unit
+    # test above green while the audit stops checking anything.
+    assert "check_asset_gitignored" in _da.audit_file.__code__.co_names
+    findings = _da.check_asset_gitignored(tmp_path, tmp_path)
+    assert findings and findings[0].check == "asset_gitignored"
 
 
 # --------------------------------------------------------------------------- #
