@@ -15,7 +15,26 @@ interleavings that are difficult to cover with unit tests.
 |---|---|
 | `RAGKernel.tla` | TLA+ specification (state machine, WAL, crash/recovery, invariants) |
 | `RAGKernel.cfg` | TLC model configuration (constants, invariants, properties) |
+| `SessionIdShape.tla` | AUTO-SID-DERIVE shape refusal (PHANTOM-SESSION-ID, S198) |
+| `TransportProjectionGate.tla` | Transport-allowlist projection drift gate (PROJECTION-DRIFT-UNGATED, S198) |
+| `*_naive.cfg` | Counterfactual configs: each is EXPECTED TO FAIL, proving the guard is load-bearing rather than decorative |
+| `TLC_RESULTS.md` | Recorded run results, per session |
 | `README.md` | This file |
+
+### Running TLC on this project — one non-obvious flag
+
+Run TLC with its metadir on LOCAL disk, not on the `/mnt/c` mount:
+
+```bash
+java -jar tla2tools.jar -workers 4 -config RAGKernel.cfg RAGKernel.tla   # from /tmp, not /mnt/c
+```
+
+`RAGKernel` explores ~390k states, and TLC spills its fingerprint set and state
+queue to disk as it goes. On the 9p-mounted Windows filesystem those writes
+dominate: measured S198, the same model took >20 minutes under `/mnt/c` and
+about two minutes with the working directory on local disk. Nothing was wrong
+with the spec — it just looked hung. Copy the `.tla`/`.cfg` to a local scratch
+dir and run there.
 
 ---
 

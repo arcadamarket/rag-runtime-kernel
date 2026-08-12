@@ -1,4 +1,57 @@
-# TLC Model Checker Results — RAGKernel.tla
+# TLC Model Checker Results
+
+## S198 full re-run — 2026-08-12
+
+Every spec in this directory re-checked against the kernel at runtime 0.4.58,
+HEAD `62b8408`, alongside the 2,758-test Python gate. **21 configs: 11 proofs
+PASSED, 10 counterfactuals VIOLATED as designed.**
+
+A counterfactual that PASSES is a regression, not good news — it means the guard
+it refutes has been weakened back to the naive form. Read the right-hand column
+as "this is what the naive rule lets through".
+
+| Spec | Proof | Counterfactual | Distinct states |
+|---|---|---|---|
+| `BootGuardFirstAction` | PASSED | `NaiveSound` violated | 63 |
+| `BootmapRootPin` | PASSED | `NaivePinned` violated | 6 |
+| `CloseSealEnforce` | PASSED | `NaivePhaseSound` violated | 6 |
+| `ErrlogIdGuard` | PASSED | `NaiveFalsePos` violated | 1,555 |
+| `GovernancePinProvenance` | PASSED | `NaiveClaimSound` violated | 256 |
+| `IntentFidelityGate` | PASSED | `NaiveTextSound` violated | 4 |
+| `SchemaMigrate` | PASSED | `NaiveReach` violated | 4 |
+| `SecretsIngestGuard` | PASSED | `NaiveSound` violated | 121 |
+| `RAGKernel` | PASSED | *(no counterfactual)* | 168,520 (389,522 generated) |
+| `SessionIdShape` **(new, S198)** | PASSED | `NaiveNoEpoch` violated | 28 |
+| `TransportProjectionGate` **(new, S198)** | PASSED | `NaiveCatchesDrift` violated | 16 |
+
+### What the two new specs discharge
+
+**`SessionIdShape`** — the AUTO-SID-DERIVE refusal. Proves the guard refuses
+both epoch widths (10-digit seconds, 13-digit milliseconds) while admitting
+every real counter and every clone prefix, and squeezes `MaxDigits` from both
+sides (`MaxRealCounter =< MaxDigits < EpochSecDigits`) so the bound cannot be
+widened later without breaking a proof. The counterfactual is the pre-S198 rule
+— "ends in digits, so increment it" — refuted at `digits = 13`, which is exactly
+`S1786488555313`.
+
+**`TransportProjectionGate`** — the audit clause. Proves the gate errors on
+exactly the divergent deployments and self-skips where no allowlist rule is
+declared, stated as a biconditional so a new divergence mode cannot be added
+without breaking the proof. Includes `P_MissingIsDrift`: a declared rule with no
+rendered projection is drift, not a skip. The counterfactual is existence-only
+checking, refuted by a projection that is present, parseable, and rendered from
+a rule text that has since changed.
+
+### Note on `RAGKernel` run time
+
+`RAGKernel` looked hung for over twenty minutes before this run was diagnosed:
+TLC spills its fingerprint set and state queue to disk, and the working
+directory was on the `/mnt/c` 9p mount. Re-run from local disk it finished in
+about two minutes. The spec was never the problem. See README.
+
+---
+
+# Historical — RAGKernel.tla
 **Date:** 2026-05-16
 **TLC Version:** 2026.05.12.170007
 **MaxWALSeq:** 8
