@@ -4,6 +4,33 @@
 
 ---
 
+## v0.4.59 — Released (2026-08-12)
+
+Four declared-but-uncalled gates, wired. `PROJECTION-DRIFT-UNGATED`: the
+transport-allowlist projection is compared against its authorising rule on every
+`audit`, with a declared-rule-and-no-projection counting as drift.
+`RENDERER-UNTRACKED-S197`: that comparison moved out of one deployment's
+untracked `tools/` and into the package, so it travels to clones and sits inside
+the test gate. `PHANTOM-SESSION-ID`: AUTO-SID-DERIVE refuses epoch-shaped session
+ids instead of incrementing them into governed-looking phantoms.
+`WAITFOR-LEADING-DASH-ARGV`: the wait verb accepts dash-leading tokens, so the
+anti-polling primitive can express `--attest`.
+
+Two new TLA+ specs (`SessionIdShape`, `TransportProjectionGate`) with
+counterfactual configs, and `formal/run_tlc.sh` — 21 configs in ~52 seconds, TLC
+scratch on local disk, one directory per config, and a refusal rather than a
+vacuous pass when nothing was checked.
+
+Suite 2,714 → **2,758**.
+
+## v0.4.58 — Released (2026-08-11)
+
+`rag_wait` (agent-side blocking read over MCP) and the transport-allowlist
+inversion (E-133). Hook scope ruled down to boundary-only gates: everything a
+verb can enforce belongs in the verb. An orphan-session regression — the MCP
+server booting eagerly with no session id — was caused, diagnosed and fixed
+inside the same session, and boot is now lazy and refused without an explicit id.
+
 ## v0.4.57 — Released (2026-08-11)
 
 **Scope-of-check, and the first enforcement that does not run on memory.** Three defects
