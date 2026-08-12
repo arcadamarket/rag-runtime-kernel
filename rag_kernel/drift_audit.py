@@ -35,6 +35,13 @@ What it checks (each deterministic, zero-LLM)
   auditor extracts their values and fails loud if one leaked into RAG_MASTER.json
   (Lane-A from the eBay S129 field audit). Redaction-safe: a finding carries only a
   ``sha256:<12>`` fingerprint + source location, never the secret itself.
+* **transport projection drift** (PROJECTION-DRIFT-UNGATED, ERROR): the
+  ``.claude/transport_allowlist.json`` the PreToolUse hook reads is a projection
+  of ``operating_protocol.transport_allowlist`` and carries the sha256 of the
+  rule text it was rendered from. If the two disagree — or the rule is declared
+  with no projection rendered at all — the hook layer is enforcing something
+  other than what the RAG authorises, and that is a second source of truth
+  (DEC-0009 / S178). Detectable since S197; gated here since S198.
 
 Fail-loud contract
 ------------------
@@ -642,6 +649,40 @@ def check_side_rule_stores(root: Path | str) -> list[AuditFinding]:
             ),
         ))
     return findings
+
+
+def check_transport_projection(hot: dict, root: Path | str) -> list[AuditFinding]:
+    """ERROR when ``.claude/transport_allowlist.json`` drifts from the rule that
+    authorises it (PROJECTION-DRIFT-UNGATED, S198).
+
+    ``operating_protocol.transport_allowlist`` is the authority; the JSON file
+    the PreToolUse hook reads is a *projection* of it, carrying the sha256 of
+    the source rule text so that agreement is decidable. S197 shipped the
+    projection and a ``--check`` that proves agreement — and then called it from
+    nowhere, leaving drift DETECTABLE and NOT GATED. This clause is the wiring:
+    the same comparison, run every audit, from the HOT dict already in memory
+    (no second RAG read, no lock, no subprocess).
+
+    Self-skips clean when the deployment declares no ``transport_allowlist``
+    rule — most clones do not. A declared rule with NO projection is drift, not
+    a skip: it means the RAG says a policy is in force while the hook layer has
+    nothing to enforce.
+    """
+    from rag_kernel import transport_projection  # lazy: keep the import graph acyclic
+
+    rule_text = transport_projection.rule_text_from_hot(hot)
+    return [
+        AuditFinding(
+            check="transport_projection_drift",
+            severity=ERROR,
+            detail=(
+                f"{reason} — the projection is a cache of a governed rule and a "
+                f"cache that may disagree with its authority is a second source "
+                f"of truth (DEC-0009 / S178)"
+            ),
+        )
+        for reason in transport_projection.drift_reasons(rule_text, root)
+    ]
 
 
 def check_context_side_stores(rag_dir: Path | str) -> list[AuditFinding]:
@@ -2653,6 +2694,11 @@ def audit_hot(
         # KERNEL-COPY-LOCKSTEP-UNGATED (S187): deployed kernel == tested kernel.
         # Filesystem-backed, so gated by ``root``; self-skips on a single-tree deploy.
         findings += check_kernel_copy_lockstep(hot, root, rag_dir)
+        # PROJECTION-DRIFT-UNGATED (S198): the transport allowlist the hook layer
+        # reads must still match the rule that authorises it. Filesystem-backed
+        # (it compares against .claude/ under the project root), so gated by
+        # ``root``; self-skips clean when no transport_allowlist rule is declared.
+        findings += check_transport_projection(hot, root)
     return AuditReport(tuple(findings))
 
 

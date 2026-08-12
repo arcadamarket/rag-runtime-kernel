@@ -1329,7 +1329,9 @@ def build_parser() -> argparse.ArgumentParser:
                              help="require this token inside the file, not merely its existence. "
                                   "PREFER THIS: shell redirection creates the file before the job "
                                   "writes anything, so bare existence races the writer. Have the "
-                                  "job echo a DONE marker last and wait on that.")
+                                  "job echo a DONE marker last and wait on that. A token "
+                                  "that starts with a dash (e.g. --attest) is "
+                                  "accepted in either spelling since S198.")
     wait_parser.add_argument("--emit", dest="emit_lines", type=int, default=0,
                              help="on success, print the last N lines of the sentinel file so one "
                                   "round-trip returns both completion AND result (Rule 17).")
@@ -4473,8 +4475,13 @@ def cmd_session_start(args: argparse.Namespace) -> int:
         if sid is None:
             print(
                 "ERROR: could not AUTO-SID-DERIVE the next session id — the RAG is "
-                "unreadable or meta.written_by_session is unset. Pass an explicit "
-                "session id (e.g. `session-start S1`).",
+                "unreadable, or meta.written_by_session is unset, or it is not a "
+                "canonical session id (alphabetic prefix + counter, max 9 "
+                "digits — a 10/13-digit epoch is refused). AUTO-SID-DERIVE REFUSES to "
+                "increment a malformed id (PHANTOM-SESSION-ID, S198): a derived "
+                "successor inherits the malformation and then looks governed. "
+                "Inspect it with `rag_kernel meta --get written_by_session`. "
+                "Otherwise pass an explicit session id (e.g. `session-start S1`).",
                 file=sys.stderr,
             )
             return 1
@@ -4760,14 +4767,43 @@ def _next_session_id(sid: str) -> str:
     return sid[: m.start(1)] + nxt
 
 
+#: The canonical session-id shape: an alphabetic prefix followed by a bounded
+#: counter. PHANTOM-SESSION-ID-S1786488555313 (S198): a millisecond timestamp
+#: used as a fallback session id satisfies ``\d+$`` and so incremented cleanly
+#: into ``S1786488555314`` — the derivation TOLERATED a malformed id instead of
+#: refusing one, and the phantom propagated into a session log and three WAL
+#: entries before the close audit complained.
+#:
+#: THE DIGIT BOUND IS THE PART THAT BITES, not the prefix. The ledger item asked
+#: for the literal ``S<n>`` shape; that is deliberately widened here, because
+#: this kernel ships to clones and at least one of them numbers its sessions
+#: with a different prefix (``SESS0099``). Refusing those would fix a phantom in
+#: this deployment by breaking derivation in every other one. What the phantom
+#: actually needed was a LENGTH ceiling: nine digits admits any counter a real
+#: project will reach (a billion sessions) while excluding both epoch forms that
+#: fallback code reaches for — seconds are 10 digits, milliseconds 13. The
+#: prefix must be alphabetic, so a bare timestamp with no prefix is refused too.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z]{1,8}\d{1,9}$")
+
+
 def _derive_next_sid(rag_path: Path) -> "str | None":
     """AUTO-SID-DERIVE: the next session id = increment of meta.written_by_session.
 
     Reads ONLY through the kernel (the governed path — this is not the banned
     Cowork-sandbox read) and reuses ``_next_session_id`` so the increment rule is
-    single-sourced. Returns ``None`` when the RAG is unreadable or
-    ``written_by_session`` is unset/empty, in which case the caller must require an
-    explicit id rather than guess. Deterministic, stdlib-only.
+    single-sourced. Returns ``None`` when the RAG is unreadable, when
+    ``written_by_session`` is unset/empty, or when it does not match
+    ``_SESSION_ID_RE`` (an alphabetic prefix plus a bounded counter) — in every
+    one of those cases the caller must require an explicit id rather than guess.
+    Deterministic, stdlib-only.
+
+    SHAPE REFUSAL (PHANTOM-SESSION-ID-S1786488555313, S198): deriving from a
+    malformed id is worse than refusing, because the derived id inherits the
+    malformation and looks governed. ``S1786488555313`` — a millisecond
+    timestamp — sat in ``meta.written_by_session`` at the S197 boot and this
+    function happily produced a successor from it. Refusing is the only safe
+    behaviour: an operator can always pass an explicit id, but nobody can undo a
+    phantom id that has already been stamped into a session log and the WAL.
     """
     try:
         with open(rag_path, "r", encoding="utf-8-sig") as f:
@@ -4776,6 +4812,8 @@ def _derive_next_sid(rag_path: Path) -> "str | None":
         return None
     written_by = ((rag.get("meta") or {}).get("written_by_session") or "").strip()
     if not written_by:
+        return None
+    if not _SESSION_ID_RE.match(written_by):
         return None
     return _next_session_id(written_by)
 
@@ -8672,9 +8710,50 @@ def cmd_bootmap(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Options whose VALUE may legitimately begin with a dash. argparse cannot tell
+#: ``--contains --attest`` (a token to search for) from ``--contains`` followed
+#: by an unknown flag, and errors with "expected one argument".
+#:
+#: WAITFOR-LEADING-DASH-ARGV (S198): that is not a cosmetic parsing wart. The
+#: single most useful thing to wait for at boot is the attestation line, whose
+#: token IS ``--attest``; the wait verb is the sanctioned replacement for
+#: polling, so a token it cannot express pushes the agent straight back to the
+#: banned behaviour. Hit live at the S198 boot, which then polled.
+_DASH_VALUE_OPTIONS = ("--contains",)
+
+
+def _fold_dash_values(argv: "list[str] | None") -> "list[str] | None":
+    """Rewrite ``--contains -x`` as ``--contains=-x`` before argparse sees it.
+
+    The ``=`` form always worked; nobody knew, because the failure mode is an
+    argparse usage error that reads like the user's fault. Folding it here means
+    the obvious spelling works and the documented one still does. Pure, total,
+    and a no-op for every argv that does not contain the pattern.
+    """
+    if not argv:
+        return argv
+    out: list[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if (
+            tok in _DASH_VALUE_OPTIONS
+            and i + 1 < len(argv)
+            and argv[i + 1].startswith("-")
+        ):
+            out.append(f"{tok}={argv[i + 1]}")
+            i += 2
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    if argv is None:
+        argv = sys.argv[1:]
+    args = parser.parse_args(_fold_dash_values(argv))
     if args.command is None:
         parser.print_help()
         return 1
