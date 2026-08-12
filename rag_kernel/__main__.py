@@ -1916,15 +1916,29 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     if not project.exists():
         print(f"Error: Project directory does not exist: {project}", file=sys.stderr)
         return 1
+    # ORPHAN-SESSION REGRESSION (S197). This used to be:
+    #     app = KernelApp(project, session_id=args.session_id)
+    #     app.boot()                      # <- eager, and args.session_id is None
+    #     ... finally: app.close()        # <- clean close for a phantom session
+    # Registered as an auto-start MCP server, that made EVERY client launch mint
+    # a timestamp-shaped session id, open a session log, take the lock and write
+    # WAL entries from a fresh seq-1 allocator. Six orphan sessions and a
+    # non-monotonic WAL before the next boot's audit caught it.
+    #
+    # Constructing KernelApp is safe (SessionLogger opens no file until boot);
+    # booting is not. So boot is now lazy — only the rag_boot tool does it, and
+    # only when the caller named the session — and close is symmetric with it.
+    # rag_wait, the reason this server exists for an agent, is stateless and
+    # needs no boot at all.
     app = KernelApp(project, session_id=args.session_id)
-    app.boot()
-    server = MCPServer(app)
+    server = MCPServer(app, session_id_explicit=args.session_id is not None)
     try:
         server.run()
     except KeyboardInterrupt:
         pass
     finally:
-        app.close()
+        if server.booted:
+            app.close()
     return 0
 
 

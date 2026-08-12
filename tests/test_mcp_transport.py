@@ -230,11 +230,19 @@ class TestToolsCall:
         content = json.loads(result["content"][0]["text"])
         assert "Unknown tool" in content["error"]
 
-    def test_call_boot(self, server):
-        # Already booted, but calling again should work
+    def test_call_boot_is_refused_on_an_unnamed_session(self, server):
+        # S197: this fixture builds a server WITHOUT session_id_explicit, and
+        # booting one of those is exactly the production regression — every
+        # client launch minted a timestamp session id, opened a log, took the
+        # lock and wrote WAL entries from a fresh seq-1 allocator. Six orphans
+        # and a non-monotonic WAL. The refusal is the fix, so the assertion
+        # inverts. Boot-allowed behaviour is covered in
+        # tests/test_mcp_orphan_session_guard.py with an explicit session id.
         resp = call(server, "tools/call", {"name": "rag_boot", "arguments": {}})
-        content = json.loads(resp["result"]["content"][0]["text"])
-        assert "status" in content
+        result = resp["result"]
+        assert result["isError"] is True
+        content = json.loads(result["content"][0]["text"])
+        assert "timestamp-shaped session id" in content["error"]
 
 
 # ===== Error handling =====

@@ -324,11 +324,22 @@ class MCPServer:
         app: KernelApp,
         input_stream: Optional[TextIO] = None,
         output_stream: Optional[TextIO] = None,
+        session_id_explicit: bool = False,
     ) -> None:
         self.app = app
         self._in = input_stream or sys.stdin
         self._out = output_stream or sys.stdout
         self._initialized = False
+        # ORPHAN-SESSION GUARD (S197, regression caught in production).
+        # cmd_mcp used to call app.boot() eagerly with no --session-id, so every
+        # launch of the server minted a timestamp session id, opened a session
+        # log, took the lock, wrote WAL entries from a fresh seq-1 allocator and
+        # closed cleanly — six orphan sessions and a non-monotonic WAL before
+        # anyone noticed. Boot is now LAZY (only the rag_boot tool boots) and
+        # REFUSED unless the caller named the session, so a server start can no
+        # longer manufacture a session nobody asked for.
+        self._session_id_explicit = session_id_explicit
+        self.booted = False
 
     def run(self) -> None:
         """Main loop: read messages, dispatch, respond."""
@@ -452,8 +463,23 @@ class MCPServer:
         if tool_name == "rag_wait":
             return self._handle_rag_wait(arguments)
 
+        if tool_name == "rag_boot" and not self._session_id_explicit:
+            return {
+                "content": [{"type": "text", "text": json.dumps({"error": (
+                    "REFUSED: this server was started without --session-id, so a "
+                    "boot here would mint a timestamp-shaped session id, open a "
+                    "session log and take the lock for a session nobody asked "
+                    "for. That is exactly the S197 orphan-session regression: six "
+                    "such sessions and a non-monotonic WAL came from an eager "
+                    "boot at server start. Boot the session through "
+                    "`rag_kernel session-start` over the sanctioned shell, or "
+                    "restart this server with an explicit --session-id."
+                )})}],
+                "isError": True,
+            }
+
         tool_handlers = {
-            "rag_boot": lambda args: self.app.boot(),
+            "rag_boot": lambda args: self._boot(),
             "rag_status": lambda args: self.app.status(),
             "rag_hot": lambda args: self.app.get_hot(),
             "rag_cold": lambda args: self.app.get_cold(args.get("partition")),
@@ -495,6 +521,19 @@ class MCPServer:
                 ],
                 "isError": True,
             }
+
+    def _boot(self) -> dict:
+        """Boot the kernel and record that we did, so close() is symmetric.
+
+        The flag matters at shutdown: `cmd_mcp` must only call `app.close()` if
+        a boot actually happened, or an unbooted server closing on exit writes a
+        clean session_end for a session that never opened — which is how the
+        orphan logs got their tidy closes and fooled the auditor into reporting
+        "ran to a clean close" five times.
+        """
+        result = self.app.boot()
+        self.booted = True
+        return result
 
     @staticmethod
     def _wait_envelope(payload: dict, *, is_error: bool) -> dict:
