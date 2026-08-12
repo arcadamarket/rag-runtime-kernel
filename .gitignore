@@ -21,6 +21,15 @@ build/
 
 # Temp shell scripts (used by CI/build, not part of the project)
 *.sh
+# ...but a shell script that IS part of the project must be exempted explicitly.
+# S198: formal/run_tlc.sh was written, tested, and committed with `git add -A` —
+# and silently swallowed by the blanket *.sh rule, leaving the TLC runner
+# untracked on one machine. That is RENDERER-UNTRACKED-S197 exactly: a
+# verification tool that exists in a single working copy is a local habit, not a
+# gate. `git status` reporting "working tree clean" over an ignored new file is
+# the same silence. Any future project-owned script needs a line here too.
+!formal/run_tlc.sh
+
 # TLC model checker artifacts
 formal/states/
 formal/*_TTrace_*
