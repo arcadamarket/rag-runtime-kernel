@@ -1209,6 +1209,33 @@ def build_parser() -> argparse.ArgumentParser:
                                     help="also search the persisted fleet view "
                                          "(sibling deployments) — see `inventory fleet`")
 
+    # -- session-delta (SESSION-DELTA-RITUAL: the debit/credit a session owes) --
+    # Every session has hand-written this and every hand-written number has been
+    # a number from memory. The close emits it automatically; the verb exists so
+    # it can be inspected mid-session and so a clone can run it standalone.
+    sd_parser = subparsers.add_parser(
+        "session-delta",
+        help="Deterministic end-of-session debit/credit report: item movements derived "
+             "from tracked_items history plus counters diffed against the last "
+             "persisted snapshot. SESSION-DELTA-RITUAL.",
+    )
+    sd_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                           help="Path to RAG_MASTER.json")
+    sd_parser.add_argument("--session", type=str, default=None,
+                           help="session to report on (default: meta.written_by_session)")
+    sd_parser.add_argument("--repo", type=Path, default=None,
+                           help="git worktree to measure HEAD/dirty/formal from")
+    sd_parser.add_argument("--audit-errors", type=int, default=None,
+                           help="audit error count to record (omitted = 'not measured')")
+    sd_parser.add_argument("--audit-warnings", type=int, default=None,
+                           help="audit warning count to record (omitted = 'not measured')")
+    sd_parser.add_argument("--save-baseline", action="store_true",
+                           help="persist this run's counters as the next session's before")
+    sd_parser.add_argument("--out", type=Path, default=None,
+                           help="also write the report to this path")
+    sd_parser.add_argument("--json", dest="json_output", action="store_true",
+                           help="emit the delta as JSON instead of markdown")
+
     # -- inventory (FLEET-INVENTORY: know what exists, here and next door) ------
     # MANDATORY, not optional. This kernel's registry sat empty for 178 sessions
     # while the runbook told every clone to register what it ships; the eBay clone
@@ -4954,6 +4981,43 @@ def _close_report_ns(sid: str, args: argparse.Namespace) -> argparse.Namespace:
 # hole, where a bare-count paraphrase was pasted with a hand-appended token). The
 # written text already carries its report-attest token, so a presented copy is
 # re-checkable with `rag_kernel report --verify <file>`.
+#: SESSION-DELTA-RITUAL (S199): per-session measured debit/credit, written beside
+#: the canonical report at every close and by every clone, because the ritual
+#: travels with the kernel rather than with whoever remembers to do it.
+SESSION_DELTA_PREFIX = "SESSION_DELTA_"
+
+
+def _emit_session_delta(rag_path: "Path", sid: str):
+    """Write SESSION_DELTA_<sid>.md and seed the next session's baseline.
+
+    Returns the path, or None when the delta could not be produced. Deliberately
+    total: every failure mode here (unreadable store, missing git, no registry)
+    degrades to None and the close continues. The delta is a REPORT — refusing a
+    seal over it would make the seal hostage to a reporting convenience.
+    """
+    try:
+        from rag_kernel import session_delta as _sd
+        rag_dir = Path(rag_path).parent
+        hot = json.loads(Path(rag_path).read_text(encoding="utf-8-sig"))
+        counters = _sd.collect_counters(
+            hot, rag_dir=rag_dir, project_root=rag_dir.parent,
+            repo_root=_guess_repo_root(rag_dir),
+        )
+        delta = _sd.compute(hot, sid, baseline=_sd.load_baseline(rag_dir),
+                            counters_after=counters)
+        out = rag_dir / f"{SESSION_DELTA_PREFIX}{sid}.md"
+        out.write_text(_sd.render(delta) + "\n", encoding="utf-8")
+        _sd.save_baseline(
+            rag_dir, sid, counters,
+            item_ids=[str(i.get("id", "")) for i in (hot.get("tracked_items") or [])
+                      if isinstance(i, dict)],
+        )
+        return out
+    except Exception as ex:  # noqa: BLE001 — reporting must never fail a seal
+        print(f"  (session-delta skipped: {ex})", file=sys.stderr)
+        return None
+
+
 CLOSE_REPORT_PREFIX = "AUDIT_CANONICAL_REPORT_"
 CLOSE_REPORT_EXT = ".md"
 
@@ -5232,6 +5296,24 @@ def _drive_close(
         )
         steps["report_presented"] = True
         close_report = None  # pointer emitted; never echo the body below
+
+    # SESSION-DELTA-RITUAL (S199) — the second artifact every close owes.
+    # The canonical report says what the deployment IS; the delta says what THIS
+    # session CHANGED, measured. It was hand-written for 198 sessions and the
+    # hand-written numbers drifted (S198 wrote "107 session logs" over a measured
+    # 108). Emitted as a pointer, like the report, and never echoed: the file is
+    # the surface (Rule 17). Never fatal — a close that refuses because git is
+    # missing teaches people to skip the ritual, and a skipped ritual is how the
+    # hand-written version survived this long.
+    delta_path = _emit_session_delta(rag_path, sid)
+    if delta_path is not None:
+        print("")
+        print("=== SESSION-DELTA-RITUAL — measured debit/credit for this session ===")
+        print(f"  file   : {delta_path}")
+        print(f"  re-run : rag_kernel session-delta --session {sid}")
+        print("  PRESENT THIS FILE alongside the canonical report. The baseline "
+              "for the NEXT session's delta was recorded by this same call.")
+        steps["session_delta_emitted"] = True
 
     if close_report_path is not None and not steps.get("report_presented"):
         print(
@@ -8113,6 +8195,73 @@ def cmd_reuse_check(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_session_delta(args: argparse.Namespace) -> int:
+    """SESSION-DELTA-RITUAL: emit the measured debit/credit report for a session.
+
+    Read-only unless ``--save-baseline`` is given. Exit 0 always: an absent
+    baseline or an unmeasurable counter is reported IN the document, not as a
+    failure — a close that refuses because git was missing would teach people to
+    skip the ritual, which is how the hand-written version survived this long.
+    """
+    import json as _json
+    from typing import Optional as _Optional  # noqa: F401 — used by the helper below
+    from rag_kernel import session_delta as sd
+
+    rag_path = Path(args.rag).resolve()
+    try:
+        hot = _json.loads(rag_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as ex:
+        print(f"session-delta: cannot read {rag_path}: {ex}", file=sys.stderr)
+        return 1
+    rag_dir = rag_path.parent
+    session = args.session or (hot.get("meta") or {}).get("written_by_session") or ""
+    if not session:
+        print("session-delta: no --session and meta.written_by_session is empty",
+              file=sys.stderr)
+        return 1
+
+    repo = Path(args.repo).resolve() if args.repo else _guess_repo_root(rag_dir)
+    counters = sd.collect_counters(
+        hot, rag_dir=rag_dir, project_root=rag_dir.parent, repo_root=repo,
+        audit_errors=args.audit_errors, audit_warnings=args.audit_warnings,
+    )
+    delta = sd.compute(hot, session, baseline=sd.load_baseline(rag_dir),
+                       counters_after=counters)
+
+    text = _json.dumps(delta.to_dict(), indent=2, ensure_ascii=False) \
+        if args.json_output else sd.render(delta)
+    print(text)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+        print(f"\nsession-delta: written to {args.out}")
+    if args.save_baseline:
+        sd.save_baseline(
+            rag_dir, session, counters,
+            item_ids=[str(i.get("id", "")) for i in (hot.get("tracked_items") or [])
+                      if isinstance(i, dict)],
+        )
+        print(f"session-delta: baseline recorded for {session} "
+              f"(the next session diffs against it)")
+    return 0
+
+
+def _guess_repo_root(rag_dir: Path):
+    """Best-effort git worktree for this deployment.
+
+    This project keeps its source in a SIBLING worktree, not under the RAG, so a
+    check that only looked at the RAG dir would report `not measured` forever on
+    the deployment it was written for.
+    """
+    candidates = [rag_dir, rag_dir.parent]
+    wt = rag_dir.parent / "GIT WORKTREES"
+    if wt.is_dir():
+        candidates.extend(sorted(p for p in wt.iterdir() if p.is_dir()))
+    for c in candidates:
+        if (c / ".git").exists():
+            return c
+    return None
+
+
 def cmd_inventory(args: argparse.Namespace) -> int:
     """FLEET-INVENTORY: scan / backfill / fleet.
 
@@ -8797,6 +8946,7 @@ def main(argv: list[str] | None = None) -> int:
         "decisions": cmd_decisions,
         "register-asset": cmd_register_asset,
         "reuse-check": cmd_reuse_check,
+        "session-delta": cmd_session_delta,
         "hook-guard": cmd_hook_guard,
         "inventory": cmd_inventory,
         "run": _cmd_run_detach_await,
