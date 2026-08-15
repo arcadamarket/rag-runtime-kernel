@@ -21,6 +21,7 @@ import pytest
 from rag_kernel.__main__ import main
 from rag_kernel.session_delta import (
     PARTITION_NAME,
+    check_handoff_claims,
     ItemMove,
     SessionDelta,
     collect_counters,
@@ -242,6 +243,54 @@ def test_cli_second_run_has_a_measured_before(tmp_path, capsys):
     printed = capsys.readouterr().out
     assert "- Opened: 1" in printed
     assert "undetermined" not in printed.split("## Counters")[0]
+
+
+# --------------------------------------------------------------------------- #
+# E-132 — HANDOFF-CLAIMS-GATE
+#
+# The charge on the item: session-end --handoff asserts backlog facts and
+# nothing checks them against tracked_items. That text becomes
+# next_session_directive, which is the ONLY thing the successor loads at boot,
+# so a wrong number there is not a typo — it is the successor's context.
+# --------------------------------------------------------------------------- #
+class TestHandoffClaimsGate:
+    def test_contradicted_number_is_caught(self):
+        counters = {"tests": 2788, "open_tasks": 68}
+        bad = "Gate 2,500 green at HEAD; 64 open tasks remain."
+        problems = check_handoff_claims(bad, counters)
+        assert len(problems) == 2
+        assert any("tests=2,500" in p and "2,788" in p for p in problems)
+        assert any("open_tasks=64" in p and "68" in p for p in problems)
+
+    def test_matching_numbers_are_silent(self):
+        counters = {"tests": 2788, "open_tasks": 68, "baked_assets": 128}
+        good = "Gate 2,788 green; 68 open tasks; 128 baked assets."
+        assert check_handoff_claims(good, counters) == []
+
+    def test_a_progression_asserts_its_last_value(self):
+        # Handoffs legitimately narrate movement: "2,758 -> 2,764 -> 2,788".
+        # Reading the FIRST number as the claim would fail every honest handoff
+        # that shows its work, and a gate that punishes honesty gets removed.
+        counters = {"tests": 2788}
+        assert check_handoff_claims("gate 2,758 -> 2,764 -> 2,788 green", counters) == []
+        assert check_handoff_claims("gate 2,758 -> 2,764 green", counters) != []
+
+    def test_unmeasured_counter_cannot_contradict(self):
+        # No audit was run, so "0 errors" is unverifiable — not wrong. Refusing
+        # here would make every close hostage to a fresh audit.
+        counters = {"audit_errors": None, "tests": 2788}
+        assert check_handoff_claims("audit 0 errors / 1 warnings", counters) == []
+
+    def test_prose_digits_do_not_trip_the_gate(self):
+        # "S197", "0.4.59", "seq 3" and similar must not be read as claims.
+        counters = {"tests": 2788, "open_tasks": 68, "git_dirty": 0}
+        text = ("S197 shipped 2 gates; runtime 0.4.59; WAL seqs [1,1,3]; "
+                "dirty 0; gate 2,788 green; 68 open tasks.")
+        assert check_handoff_claims(text, counters) == []
+
+    def test_empty_handoff_is_clean(self):
+        assert check_handoff_claims("", {"tests": 1}) == []
+        assert check_handoff_claims(None, {"tests": 1}) == []
 
 
 def test_cli_defaults_session_to_written_by_session(tmp_path, capsys):

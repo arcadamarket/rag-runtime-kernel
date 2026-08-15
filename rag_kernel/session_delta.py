@@ -381,6 +381,76 @@ def compute(hot: dict, session: str, baseline: Optional[dict] = None,
 # --------------------------------------------------------------------------- #
 # Render
 # --------------------------------------------------------------------------- #
+import re
+
+#: Claim patterns -> the counter each one asserts (E-132, S199).
+#: Each regex captures ONE number group. They are deliberately narrow: a gate
+#: that guesses at prose will fire on a sentence that happens to contain a
+#: digit, get overridden once, and then get deleted.
+_CLAIM_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\bgate\s+([\d,]+)\s+green\b", "tests"),
+    (r"\b([\d,]+)\s+green\b", "tests"),
+    (r"\b([\d,]+)\s+open\s+tasks?\b", "open_tasks"),
+    (r"\bopen\s+tasks?\s+([\d,]+)\b", "open_tasks"),
+    (r"\baudit\s+([\d,]+)\s+errors?\b", "audit_errors"),
+    (r"\b([\d,]+)\s+errors?\s*/\s*[\d,]+\s+warnings?\b", "audit_errors"),
+    (r"\b[\d,]+\s+errors?\s*/\s*([\d,]+)\s+warnings?\b", "audit_warnings"),
+    (r"\b([\d,]+)\s+baked\s+assets?\b", "baked_assets"),
+    (r"\b([\d,]+)\s+deferred\b", "deferred_items"),
+    (r"\bdirty\s+([\d,]+)\b", "git_dirty"),
+    (r"\bTLC\s+([\d,]+)\s*/\s*[\d,]+\b", "tlc_configs"),
+    (r"\b([\d,]+)\s+TLC\s+configs?\b", "tlc_configs"),
+    (r"\b([\d,]+)\s+specs?\b", "tla_specs"),
+)
+
+#: A claim written as a progression — "2,758 -> 2,764 -> 2,788" — asserts the
+#: LAST value. Collapsing the arrow first is what stops the gate reading a
+#: session's own starting point as its closing claim.
+_ARROW = re.compile(r"([\d,]+)\s*(?:->|→|to)\s*(?=[\d,]+)")
+
+
+def _num(text: str) -> Optional[int]:
+    try:
+        return int(text.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def check_handoff_claims(handoff: str, counters: dict) -> list[str]:
+    """Contradictions between a handoff's stated numbers and the measured ones.
+
+    E-132: ``session-end --handoff`` asserts backlog facts that nothing checks
+    against tracked_items, and the project has two recorded instances of that
+    going wrong — S197 stating a remedy measurement had already ruled out, and
+    S197's chat summary and stored directive carrying different P1 orderings
+    with only the stored one loaded at boot.
+
+    Returns a list of human-readable contradictions (empty = clean). A counter
+    that was NOT measured cannot contradict anything, so an unmeasured audit
+    silences the audit clauses instead of failing them — the alternative is a
+    gate that refuses every close run without a fresh audit.
+    """
+    if not handoff:
+        return []
+    text = _ARROW.sub("", " ".join(handoff.split()))
+    problems: list[str] = []
+    seen: set[tuple[str, int]] = set()
+    for pattern, key in _CLAIM_PATTERNS:
+        measured = counters.get(key)
+        if measured is None or not isinstance(measured, int):
+            continue
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+            claimed = _num(m.group(1))
+            if claimed is None or (key, claimed) in seen:
+                continue
+            seen.add((key, claimed))
+            if claimed != measured:
+                problems.append(
+                    f"handoff claims {key}={claimed:,} but the measured value is "
+                    f"{measured:,} — {m.group(0).strip()!r}")
+    return problems
+
+
 _COUNTER_LABELS = (
     ("priority_actions", "P1"),
     ("open_tasks", "Open tasks"),

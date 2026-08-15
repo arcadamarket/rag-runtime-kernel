@@ -410,6 +410,14 @@ def build_parser() -> argparse.ArgumentParser:
              "that is recorded in the close marker. Without this the close "
              "REFUSES on any finding (FORENSICS-AS-GATE).",
     )
+    # HANDOFF-CLAIMS-GATE (E-132) — the escape hatch, deliberately narrow.
+    send_parser.add_argument(
+        "--handoff-claims-unchecked", action="store_true",
+        help="Skip the E-132 gate that compares numbers stated in --handoff "
+             "against the measured state. Use only when a number deliberately "
+             "refers to something else (another deployment, a historical run) "
+             "and the handoff says so.",
+    )
     # KA-13 — wire the Rule 11 published-doc reconciliation into the close audit.
     send_parser.add_argument(
         "--docs-root", type=str, default=None,
@@ -5064,6 +5072,37 @@ def _drive_close(
     # checkpoint step persists it verbatim into next_session_directive; the gate
     # below re-verifies before the seal is allowed to proceed.
     handoff = getattr(report_args, "handoff", None) if report_args is not None else None
+
+    # HANDOFF-CLAIMS-GATE (E-132, S199) — BEFORE the checkpoint persists this
+    # text into next_session_directive, where it becomes the only thing the
+    # successor loads at boot. The item's charge is exact: the handoff asserts
+    # backlog facts and NOTHING checks them against tracked_items. Two recorded
+    # instances: S197 stated a remedy that measurement had already ruled out,
+    # and S197's chat summary and stored directive carried different P1
+    # orderings with only the stored one rendered at boot. A wrong number in
+    # here is not a typo — it is the successor's starting context.
+    if handoff and not getattr(report_args, "handoff_claims_unchecked", False):
+        try:
+            from rag_kernel import session_delta as _sd
+            _hot_now = json.loads(Path(rag_path).read_text(encoding="utf-8-sig"))
+            _counters = _sd.collect_counters(
+                _hot_now, rag_dir=rag_dir, project_root=Path(rag_dir).parent,
+                repo_root=_guess_repo_root(Path(rag_dir)),
+                audit_errors=None, audit_warnings=None,
+            )
+            _problems = _sd.check_handoff_claims(handoff, _counters)
+        except Exception as ex:  # noqa: BLE001 — an unmeasurable gate must not brick a close
+            print(f"  (handoff-claims gate skipped: {ex})", file=sys.stderr)
+            _problems = []
+        if _problems:
+            print("ERROR: HANDOFF-CLAIMS-GATE (E-132) — the handoff states numbers "
+                  "that disagree with the measured state:", file=sys.stderr)
+            for p in _problems:
+                print(f"  - {p}", file=sys.stderr)
+            print("Correct the handoff, or pass --handoff-claims-unchecked if the "
+                  "number is deliberately about something else (say which, in the "
+                  "handoff). Nothing has been banked.", file=sys.stderr)
+            return 1
 
     # Step 1/4 — checkpoint (+ idempotent ERROR_LOG fold).
     if not steps.get("checkpoint"):
