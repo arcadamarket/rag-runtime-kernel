@@ -805,7 +805,9 @@ class KernelApp:
                 "CHECKPOINT",
                 checkpoint_type="full",
                 session_id=self.session_id,
-                seq=self.wal.seq,
+                # NOT ``seq=`` (S199): the WAL owns that key, and passing it here
+                # overwrote the allocator's number with the pre-increment value.
+                checkpoint_seq=self.wal.seq,
             )
 
             # Reset delta manager with new base and mark full done
@@ -841,7 +843,7 @@ class KernelApp:
                 "CHECKPOINT",
                 checkpoint_type="delta",
                 session_id=self.session_id,
-                seq=self.wal.seq,
+                checkpoint_seq=self.wal.seq,   # NOT ``seq=`` — see the full path
                 delta=delta.to_dict(),
             )
 

@@ -22,6 +22,7 @@ from rag_kernel.persistence import (
     WAL,
     WALEntry,
     WALError,
+    WALSequenceConflictError,
     WriteVerificationError,
     atomic_write,
     atomic_write_json,
@@ -377,3 +378,111 @@ class TestWAL:
         wal.open()
         wal.close()
         wal.close()  # should not error
+
+
+# ===== S199: the [1,1,3] defect, and the guard around it =====
+#
+# S197 recorded WAL seqs [1,1,3] — a duplicate plus a gap — and attributed it to
+# governed writes issued across two tmux panes, which made it an argument for a
+# resident single-writer process. S199 reproduced the identical signature inside
+# ONE process, deterministically, from a single checkpoint call. The cause was
+# serialization, not concurrency: WALEntry.to_dict splatted the payload LAST, and
+# api.checkpoint passed `seq=self.wal.seq` (evaluated BEFORE append incremented),
+# so the payload's stale `seq` overwrote the allocator's on the way to disk.
+
+class TestReservedKeys:
+    def test_payload_cannot_shadow_the_allocator_seq(self, tmp_dir):
+        wal = WAL(tmp_dir / "WAL.jsonl")
+        wal.open()
+        wal.append("BOOT")
+        with pytest.raises(WALError) as ex:
+            wal.append("CHECKPOINT", seq=wal.seq)   # the exact S197 call shape
+        assert "reserved key" in str(ex.value)
+        wal.close()
+
+    def test_ts_is_refused_and_event_is_structurally_impossible(self, tmp_dir):
+        wal = WAL(tmp_dir / "WAL.jsonl")
+        wal.open()
+        with pytest.raises(WALError):
+            wal.append("X", ts="hijacked")
+        # 'event' cannot even reach the guard: it is append's own positional
+        # parameter, so Python refuses first. Asserted so the reason is on
+        # record rather than looking like an untested branch.
+        with pytest.raises(TypeError):
+            wal.append("X", **{"event": "hijacked"})
+        wal.close()
+
+    def test_canonical_fields_win_over_payload_in_to_dict(self):
+        # Defence in depth: even if a payload carrying 'seq' reaches WALEntry
+        # (a hand-built entry, a future caller, a replayed dict), the allocator's
+        # number is what serializes. This is the ordering that was wrong.
+        e = WALEntry(seq=7, timestamp="T", event="CHECKPOINT", data={"seq": 3, "x": 1})
+        d = e.to_dict()
+        assert d["seq"] == 7 and d["event"] == "CHECKPOINT" and d["x"] == 1
+
+    def test_appended_line_carries_the_allocator_seq(self, tmp_dir):
+        wal = WAL(tmp_dir / "WAL.jsonl")
+        wal.open()
+        wal.append("A")
+        wal.append("B", checkpoint_seq=wal.seq)     # the corrected call shape
+        wal.close()
+        seqs = [json.loads(l)["seq"]
+                for l in (tmp_dir / "WAL.jsonl").read_text().splitlines() if l.strip()]
+        assert seqs == [1, 2]                       # not [1, 1]
+
+
+class TestSingleAllocatorGuard:
+    def test_second_writer_is_refused(self, tmp_dir):
+        # Two WAL objects on one path = two allocators, the multi-process case
+        # in miniature. The second one's write advances the tail; the first must
+        # refuse rather than reuse a seq that is already on disk.
+        path = tmp_dir / "WAL.jsonl"
+        a, b = WAL(path), WAL(path)
+        a.open()
+        a.append("FIRST")
+        b.open()                                    # scans, sees seq=1
+        b.append("SECOND")                          # writes seq=2
+        with pytest.raises(WALSequenceConflictError) as ex:
+            a.append("WOULD_DUPLICATE")             # a still thinks it holds 1
+        assert ex.value.expected == 1 and ex.value.on_disk == 2
+        a.close()
+        b.close()
+
+    def test_truncate_then_append_is_not_a_conflict(self, tmp_dir):
+        # truncate() empties the file while PRESERVING the sequence, so the tail
+        # is behind the counter by design. Failing on 'behind' would turn every
+        # post-checkpoint eviction into an exception — it did, on the first cut.
+        wal = WAL(tmp_dir / "WAL.jsonl")
+        wal.open()
+        wal.append("A")
+        wal.append("B")
+        wal.truncate()
+        entry = wal.append("AFTER_TRUNCATE")
+        assert entry.seq == 3
+        wal.close()
+
+    def test_normal_single_writer_is_unaffected(self, tmp_dir):
+        wal = WAL(tmp_dir / "WAL.jsonl")
+        wal.open()
+        seqs = [wal.append(f"E{i}").seq for i in range(5)]
+        assert seqs == [1, 2, 3, 4, 5]
+        assert wal.verify_integrity() == []
+        wal.close()
+
+    def test_checkpoint_path_no_longer_writes_1_1_3(self, tmp_dir):
+        # THE REGRESSION, END TO END. Before the fix this produced exactly
+        # [1, 1, 3] — S197's signature — from one process and one call.
+        from rag_kernel.api import KernelApp
+        from rag_kernel.context_policy import TruncationPolicy
+
+        app = KernelApp(tmp_dir, session_id="S-WAL")
+        app.boot()
+        app.enforce_context_policy(
+            conversation_tokens=300,
+            policy=TruncationPolicy(checkpoint_at=100, evict_at=200, halt_at=5000),
+        )
+        seqs = [json.loads(l)["seq"]
+                for l in app.wal.path.read_text().splitlines() if l.strip()]
+        assert seqs == sorted(set(seqs)), f"duplicate or unordered seqs: {seqs}"
+        assert seqs == list(range(1, len(seqs) + 1)), f"gapped seqs: {seqs}"
+        assert app.wal.verify_integrity() == []

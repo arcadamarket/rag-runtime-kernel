@@ -78,6 +78,37 @@ class ConcurrentWriterError(PersistenceError):
     """Raised when another live process holds the single-writer lock on a RAG."""
 
 
+class WALSequenceConflictError(WALError):
+    """Raised when the WAL on disk advanced past this process's allocator.
+
+    SINGLE-ALLOCATOR-GUARD (S199). ``WAL.open()`` scans the file for its highest
+    seq ONCE and ``append()`` increments an IN-MEMORY counter from there, so two
+    processes that open at seq=N both write N+1: a duplicate and, once one of
+    them writes twice, a gap. That is not hypothetical — S197 produced seqs
+    [1,1,3] inside one session from governed writes issued across two tmux panes.
+
+    ProjectLock does not close this: it is acquired in ``KernelApp.boot`` and
+    released in ``close``, so it serializes whole SESSIONS, while the CLI spawns
+    a fresh process per verb. Until a resident singleton owns the allocator
+    (RESIDENT-SUPERVISOR), this exception is what holds the invariant, and it
+    refuses the write rather than completing a corrupt one.
+    """
+
+    def __init__(self, expected: int, on_disk: int, path) -> None:
+        self.expected = expected
+        self.on_disk = on_disk
+        self.path = path
+        direction = "advanced past" if on_disk > expected else "moved behind"
+        super().__init__(
+            f"WAL {path} {direction} this process's allocator: this writer holds "
+            f"seq={expected} and would write {expected + 1}, but the file's last "
+            f"entry is seq={on_disk}. Another process is writing the same WAL. "
+            f"Refusing the append — a duplicate or gapped seq is unrecoverable "
+            f"state, a refused write is not. Serialize the verbs (one writer at a "
+            f"time) and retry."
+        )
+
+
 # ---------------------------------------------------------------------------
 # SINGLE-WRITER LOCK (S184)
 # ---------------------------------------------------------------------------
@@ -579,12 +610,24 @@ class WALEntry:
     event: str
     data: dict
 
+    #: Keys the WAL owns. A payload may not define them (WAL-RESERVED-KEYS, S199).
+    RESERVED_KEYS = ("seq", "ts", "event")
+
     def to_dict(self) -> dict:
+        # ORDER IS LOAD-BEARING (S199). This used to splat ``**self.data`` LAST,
+        # so a payload key named "seq" silently overwrote the allocator's number
+        # in the serialized line. api.checkpoint passed ``seq=self.wal.seq`` —
+        # evaluated BEFORE append incremented — and every full/delta checkpoint
+        # therefore wrote a DUPLICATE of the previous seq while the in-memory
+        # counter moved on, producing the [1,1,3] duplicate-plus-gap that S197
+        # recorded and attributed to two tmux panes racing. It was neither a race
+        # nor a discipline failure: it is deterministic, single-process, and
+        # reproducible in one call. Canonical fields now win over the payload.
         return {
+            **self.data,
             "seq": self.seq,
             "ts": self.timestamp,
             "event": self.event,
-            **self.data,
         }
 
     def to_json_line(self) -> str:
@@ -616,6 +659,9 @@ class WAL:
         self._fd: Optional[int] = None
         self._file = None
         self._seq: int = 0
+        #: Byte length this writer believes the file has (SINGLE-ALLOCATOR-GUARD,
+        #: S199). None = unknown, which disables the guard rather than guessing.
+        self._end_offset: Optional[int] = None
 
     @property
     def seq(self) -> int:
@@ -638,6 +684,10 @@ class WAL:
         # Open for appending with line buffering
         self._file = open(self.path, "a", encoding="utf-8")
         self._fd = self._file.fileno()
+        try:
+            self._end_offset = self.path.stat().st_size
+        except OSError:  # pragma: no cover - stat failure disables the guard
+            self._end_offset = None
 
     def close(self) -> None:
         """Flush, fsync, and close the WAL file."""
@@ -648,10 +698,85 @@ class WAL:
             self._file = None
             self._fd = None
 
+    def _tail_seq(self) -> Optional[int]:
+        """Seq of the LAST entry on disk, or None when the file is empty/unreadable.
+
+        Reads a bounded window from the end rather than the whole file: this runs
+        before every append, and a check whose cost grows with the WAL is a check
+        that gets removed the first time someone profiles a long session.
+        """
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return None
+        if size == 0:
+            return None
+        window = min(size, 8192)
+        try:
+            with open(self.path, "rb") as fh:
+                fh.seek(size - window)
+                blob = fh.read(window)
+        except OSError:
+            return None
+        for raw in reversed(blob.split(b"\n")):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                seq = json.loads(line.decode("utf-8")).get("seq")
+            except (ValueError, UnicodeDecodeError):
+                return None  # truncated first line of the window, or corruption
+            return seq if isinstance(seq, int) else None
+        return None
+
     def append(self, event: str, **kwargs: Any) -> WALEntry:
-        """Append an event to the WAL. Flushed+fsynced before return."""
+        """Append an event to the WAL. Flushed+fsynced before return.
+
+        SINGLE-ALLOCATOR-GUARD (S199): the allocator is an in-memory counter, so
+        before every write this asserts that NOBODY HAS ALREADY TAKEN THE SEQ
+        THIS PROCESS IS ABOUT TO WRITE — the tail on disk must not have advanced
+        past ``self._seq``. A second writer appends at the end, so its seq lands
+        in the tail; that is the duplicate S197 produced ([1,1,3]).
+
+        The predicate is strictly ``tail > seq``, not ``tail != seq``, and the
+        difference is measured, not stylistic. A tail BEHIND the counter is
+        legitimate and common: ``truncate()`` empties the file while preserving
+        the sequence, and the enforce_context_policy EVICT path does exactly that
+        between two appends. Failing on "behind" turns a correct checkpoint into
+        an exception — it did, on first run, in test_context_truncation_logs_wal_
+        event. An empty file is likewise not a conflict: nothing to disagree with.
+        """
         if self._file is None:
             raise WALError("WAL is not open. Call open() first.")
+
+        # Defence in depth over the ordering fix in WALEntry.to_dict: refuse the
+        # shadowing outright, so a caller learns at the call site instead of
+        # discovering it years later in a corrupted sequence.
+        clashing = [k for k in kwargs if k in WALEntry.RESERVED_KEYS]
+        if clashing:
+            raise WALError(
+                f"WAL payload may not define reserved key(s) {sorted(clashing)}: "
+                f"the WAL owns 'seq', 'ts' and 'event'. Rename the field (e.g. "
+                f"'checkpoint_seq'). Event: {event!r}."
+            )
+
+        # COST DISCIPLINE. The first cut read an 8KB tail window on EVERY append.
+        # MEASURED, and the number matters more than the intuition: that version
+        # ran the full suite in 172.9s against a 164.0s baseline — about 5%, not
+        # the disaster it was briefly assumed to be. The stat fast path is kept
+        # anyway because it is strictly cheaper and the WAL is on a 9p mount: if
+        # the file is exactly as long as this writer left it, nobody else has
+        # written and there is nothing to parse. The tail is read only when the
+        # length disagrees — i.e. only when there may actually be a conflict.
+        if self._end_offset is not None:
+            try:
+                size = self.path.stat().st_size
+            except OSError:
+                size = None
+            if size is not None and size != self._end_offset:
+                on_disk = self._tail_seq()
+                if on_disk is not None and on_disk > self._seq:
+                    raise WALSequenceConflictError(self._seq, on_disk, self.path)
 
         self._seq += 1
         entry = WALEntry(
@@ -665,6 +790,10 @@ class WAL:
         self._file.write(line)
         self._file.flush()
         os.fsync(self._fd)
+        try:
+            self._end_offset = self._file.tell()
+        except OSError:  # pragma: no cover - handle went away under us
+            self._end_offset = None
 
         return entry
 
@@ -708,6 +837,7 @@ class WAL:
 
         # Restore seq -- open() would have scanned empty file and got 0
         self._seq = saved_seq
+        self._end_offset = 0   # the file this writer left behind is now empty
 
     def _scan_max_seq(self) -> int:
         """Scan existing WAL to find the highest sequence number."""
