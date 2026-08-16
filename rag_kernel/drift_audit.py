@@ -1801,6 +1801,83 @@ def check_asset_registry(
     return findings
 
 
+def check_hook_layer_live(
+    project_root: Optional[Path | str],
+    state_dir: Optional[Path | str] = None,
+    max_age_days: float = 3.0,
+) -> list[AuditFinding]:
+    """ERROR when the project DECLARES a hook layer that has never fired.
+
+    HOOKS-INERT-IN-CLIENT (S199). Measured in one session: `hook-guard
+    --selftest` passed every gate, including `poll -> DENY` on
+    `mcp__tmux-mcp__get-command-result`, while roughly forty consecutive polls
+    of single command ids went through unrefused. Both are true because the
+    wiring lives in `.claude/settings.json`, which the vendor client actually in
+    use does not read. The gate was built, tested, deployed and reached nothing,
+    for at least three sessions, with no signal of any kind.
+
+    A declared-and-silent guard is worse than no guard: it is counted as
+    coverage. This clause reads the heartbeat that `hook_guard.run_gate` stamps
+    on every execution and refuses the two states that look identical from
+    inside the kernel — never fired, and not fired lately.
+
+    Self-skips clean when the project declares no hooks. A deployment that has
+    chosen not to wire a hook layer is not failing to run one.
+    """
+    findings: list[AuditFinding] = []
+    if project_root is None:
+        return findings
+    settings = Path(project_root) / ".claude" / "settings.json"
+    if not settings.is_file():
+        return findings
+    try:
+        declared = json.loads(settings.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return findings  # unreadable wiring is not evidence about liveness
+    hooks = declared.get("hooks") if isinstance(declared, dict) else None
+    if not isinstance(hooks, dict) or not hooks:
+        return findings
+
+    gate_count = sum(len(v) if isinstance(v, list) else 0 for v in hooks.values())
+    try:
+        from rag_kernel.hook_guard import heartbeat_path
+        hb = heartbeat_path(Path(state_dir) if state_dir else None)
+    except Exception:  # pragma: no cover - sibling module always present
+        return findings
+
+    if not hb.is_file():
+        return [AuditFinding(
+            check="hook_layer_live", severity=ERROR,
+            detail=(
+                f".claude/settings.json declares a hook layer ({gate_count} hook "
+                f"entries) but no gate has EVER recorded running: {hb} is absent. "
+                f"The layer is wired and inert — every gate it declares is "
+                f"uncovered. Either the client does not read this file (measured "
+                f"S199 for the Cowork desktop client) or the host interpreter "
+                f"cannot run hook_entry.py. Prove it with `hook-guard --selftest` "
+                f"AND one real tool call, or stop counting these gates as coverage."
+            ))]
+
+    try:
+        import time
+        payload = json.loads(hb.read_text(encoding="utf-8"))
+        last = float(payload.get("last_utc") or 0.0)
+        age_days = (time.time() - last) / 86400.0
+    except (OSError, ValueError, TypeError):
+        return [AuditFinding(
+            check="hook_layer_live", severity=ERROR,
+            detail=f"hook heartbeat at {hb} is unreadable — treat the layer as inert")]
+
+    if age_days > max_age_days:
+        findings.append(AuditFinding(
+            check="hook_layer_live", severity=WARNING,
+            detail=(
+                f"hook layer last fired {age_days:.1f} days ago (allowance "
+                f"{max_age_days}); it may have stopped being reachable. A gate "
+                f"nobody can prove ran is not a gate.")))
+    return findings
+
+
 def _git_toplevel(directory: Path, _cache: dict[str, Optional[str]]) -> Optional[str]:
     """Repository root containing ``directory``, or None when it is not under git.
 
@@ -2974,6 +3051,11 @@ def audit_file(
     # copy only, with a clean `git status` as the sole symptom (S198, run_tlc.sh).
     extra += check_asset_gitignored(
         p.parent, use_root if use_root is not None else p.parent.parent)
+    # HOOKS-INERT-IN-CLIENT: the layer is declared in .claude/settings.json and
+    # its gates pass selftest; this asks the only question selftest cannot —
+    # has any of them ever actually run against a real tool call?
+    extra += check_hook_layer_live(
+        use_root if use_root is not None else p.parent.parent)
     # AUDIT-SPEC-COVERAGE: canonical-vs-SPEC coverage. Every other invariant here
     # compares a render to the canonical store; this one is the only thing that
     # asks whether the canonical store implements the spec it claims to. Its

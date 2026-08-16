@@ -242,11 +242,55 @@ def _names_canonical(text: str) -> Optional[str]:
     return None
 
 
-def _state_path(state_dir: Optional[Path]) -> Path:
-    base = Path(state_dir) if state_dir else Path(
+def _state_base(state_dir: Optional[Path]) -> Path:
+    return Path(state_dir) if state_dir else Path(
         os.environ.get("RAG_HOOK_STATE_DIR", Path.home() / ".rag_kernel_hooks")
     )
-    return base / "poll_state.json"
+
+
+def _state_path(state_dir: Optional[Path]) -> Path:
+    return _state_base(state_dir) / "poll_state.json"
+
+
+#: HOOKS-LIVENESS-PROOF (S199). The file a running hook stamps, and the only
+#: evidence anything outside this process can have that the layer FIRED.
+HEARTBEAT_NAME = "hook_heartbeat.json"
+
+
+def heartbeat_path(state_dir: Optional[Path] = None) -> Path:
+    return _state_base(state_dir) / HEARTBEAT_NAME
+
+
+def record_heartbeat(gate: str, *, state_dir: Optional[Path] = None,
+                     now: Optional[float] = None) -> None:
+    """Stamp that a hook actually executed. Never raises.
+
+    WHY THIS EXISTS, measured S199. `hook-guard --selftest` passes every gate,
+    including `poll: mcp__tmux-mcp__get-command-result -> DENY`. In the SAME
+    session, roughly forty consecutive polls of single command ids were made and
+    not one was refused. Both facts are true because the layer is wired through
+    `.claude/settings.json`, which the vendor client running this session does
+    not read. The gate was real, tested, deployed — and reached nothing.
+
+    That is the shape of failure this project calls hope: a guard whose absence
+    is indistinguishable from its silence. A heartbeat makes the two different.
+    Nothing can force a vendor to run a hook; the kernel CAN refuse to pretend
+    one ran. See drift_audit.check_hook_layer_live for the clause that reads it.
+    """
+    try:
+        import time
+        path = heartbeat_path(state_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "last_utc": (now if now is not None else time.time()),
+            "gate": gate,
+            "pid": os.getpid(),
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:  # noqa: BLE001 — a heartbeat must never break a tool call
+        pass
 
 
 def _load_state(path: Path) -> dict:
@@ -629,6 +673,11 @@ def run_gate(gate: str, raw: str, *, state_dir: Optional[Path] = None,
     """
     out = out or sys.stdout
     err = err or sys.stderr
+    # HOOKS-LIVENESS-PROOF: stamped FIRST, before any parse can fail. The
+    # question this answers is not "did the gate allow" but "did the layer run
+    # at all", and a heartbeat written only on the success path cannot tell a
+    # dead layer from a malformed payload.
+    record_heartbeat(gate, state_dir=state_dir, now=now)
     try:
         event = json.loads(raw) if raw.strip() else {}
         if not isinstance(event, dict):
