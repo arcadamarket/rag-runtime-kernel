@@ -1839,8 +1839,29 @@ def check_hook_layer_live(
         return findings
 
     gate_count = sum(len(v) if isinstance(v, list) else 0 for v in hooks.values())
+
+    # DECLARED-INERT (S200, operator ruling). A layer that cannot be reached in
+    # the client actually in use is not a defect to be reported every session
+    # forever; it is a claim to be WITHDRAWN. The withdrawal has to be explicit,
+    # dated and reasoned, because "we know about it" living only in an agent's
+    # memory is how the gap survived S197 through S199.
+    #
+    # This is the ONLY way out of the error above that is not a real invocation,
+    # and it costs the project its coverage claim: the gates stop counting. It
+    # stays a WARNING rather than silence so the withdrawal is visible in every
+    # audit, and reverts to a hard ERROR the moment the key is removed.
+    status = declared.get("$hook_layer_status")
+    if isinstance(status, dict) and status.get("reachable") is False:
+        return [AuditFinding(
+            check="hook_layer_live", severity=WARNING,
+            detail=(
+                f"hook layer DECLARED INERT by "
+                f"{status.get('declared_session') or 'an undated session'}: "
+                f"{gate_count} gate entries are wired and claim NO coverage. "
+                f"Reason: {str(status.get('reason') or 'none given')[:160]}"
+            ))]
     try:
-        from rag_kernel.hook_guard import heartbeat_path
+        from rag_kernel.hook_guard import LIVE_HEARTBEAT_SOURCE, heartbeat_path
         hb = heartbeat_path(Path(state_dir) if state_dir else None)
     except Exception:  # pragma: no cover - sibling module always present
         return findings
@@ -1867,6 +1888,37 @@ def check_hook_layer_live(
         return [AuditFinding(
             check="hook_layer_live", severity=ERROR,
             detail=f"hook heartbeat at {hb} is unreadable — treat the layer as inert")]
+
+    # HEARTBEAT-PROVENANCE (S200). The clause above asks whether a gate ran.
+    # This asks WHO ran it, and it exists because the first version could not
+    # tell. MEASURED S200 against this very deployment: the heartbeat read
+    # {"gate": "canonical-read"} and was fresh, so the layer reported live —
+    # written not by the client but by `tests/test_hook_enforcement_layer.py`,
+    # which called `hook_entry.main(["--gate", "canonical-read"])` with no
+    # state-dir override on every pytest run. The suite was manufacturing the
+    # evidence this audit consumed. A test that green-lights the detector meant
+    # to catch it is worse than no detector: it retires the question.
+    #
+    # An unlabelled heartbeat predates this clause and cannot be trusted either,
+    # because that is exactly the shape the forged one had.
+    source = payload.get("source")
+    if source != LIVE_HEARTBEAT_SOURCE:
+        return [AuditFinding(
+            check="hook_layer_live", severity=ERROR,
+            detail=(
+                f"hook heartbeat at {hb} was not stamped by a real client "
+                f"invocation: source={source!r}, expected "
+                f"{LIVE_HEARTBEAT_SOURCE!r}. "
+                + ("An unlabelled heartbeat is a pre-S200 artifact — the exact "
+                   "shape of the forged proof measured that session. "
+                   if source is None else
+                   "A heartbeat written by the test suite or a selftest measures "
+                   "the gate; it does not execute it. ")
+                + f".claude/settings.json declares {gate_count} hook entries and "
+                f"NONE of them is proven to have run against a real tool call. "
+                f"Prove it with one real invocation through the client, or stop "
+                f"counting these gates as coverage."
+            ))]
 
     if age_days > max_age_days:
         findings.append(AuditFinding(

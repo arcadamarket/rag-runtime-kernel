@@ -59,7 +59,12 @@ def main(argv: "list[str] | None" = None) -> int:
         raw = sys.stdin.read()
     except Exception:  # pragma: no cover - no payload, nothing to judge
         raw = ""
-    return run_gate(gate, raw, project_root=project_root)
+    # HEARTBEAT-PROVENANCE (S200): this file is the ONLY caller entitled to
+    # stamp a liveness heartbeat, because it is the only one the client invokes.
+    # `_heartbeat_source` downgrades it to "test" under pytest regardless, so a
+    # test that reaches this line still cannot forge the proof — which is
+    # precisely what tests/test_hook_enforcement_layer.py did until S200.
+    return run_gate(gate, raw, project_root=project_root, source="hook_entry")
 
 
 if __name__ == "__main__":  # pragma: no cover

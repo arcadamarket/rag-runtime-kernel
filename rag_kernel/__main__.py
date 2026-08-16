@@ -1197,6 +1197,21 @@ def build_parser() -> argparse.ArgumentParser:
     hook_guard_parser.add_argument("--state-dir", type=Path, default=None,
                                    help="directory for the poll window state file (default: $RAG_HOOK_STATE_DIR or ~/.rag_kernel_hooks)")
 
+    # -- status (OPERATOR-ONE-NUMBER: the operator's verb, not the agent's) --
+    status_parser = subparsers.add_parser(
+        "status",
+        help="ONE line: GREEN or NOT GREEN plus the single reason. Exit 0 or 1. "
+             "Composed only of already-measured terms; UNKNOWN blocks GREEN "
+             "(AUDIT_PROTOCOL L2). Run by the OPERATOR — this is the verb that "
+             "makes trusting an agent report unnecessary. OPERATOR-ONE-NUMBER.",
+    )
+    status_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                               help="Path to RAG_MASTER.json")
+    status_parser.add_argument("--verbose", "-v", action="store_true",
+                               help="also print every term, not just the verdict")
+    status_parser.add_argument("--json", dest="json_output", action="store_true",
+                               help="emit machine-readable JSON")
+
     reuse_check_parser = subparsers.add_parser(
         "reuse-check",
         help="Pre-write reuse guard: report any baked asset already covering a --path "
@@ -8163,6 +8178,30 @@ def cmd_hook_guard(args: argparse.Namespace) -> int:
                     project_root=args.project_root)
 
 
+def cmd_status(args: argparse.Namespace) -> int:
+    """OPERATOR-ONE-NUMBER — one line, one exit code, run by the operator.
+
+    Prints the verdict and nothing else unless asked. The whole point is that it
+    is shorter than any report an agent could write about it.
+    """
+    from rag_kernel import operator_status
+
+    verdict = operator_status.compose(args.rag)
+    if getattr(args, "json_output", False):
+        print(json.dumps({
+            "green": verdict.green,
+            "headline": verdict.headline(),
+            "terms": [{"name": t.name, "ok": t.ok, "detail": t.detail}
+                      for t in verdict.terms],
+        }, indent=2))
+        return verdict.exit_code()
+    print(verdict.headline())
+    if getattr(args, "verbose", False):
+        for term in verdict.terms:
+            print(term.render())
+    return verdict.exit_code()
+
+
 def cmd_reuse_check(args: argparse.Namespace) -> int:
     """Pre-write reuse guard (REUSE-REGISTRY-GUARD): report baked assets already
     covering a path/purpose. Fail-loud (exit 1) on a hit so the caller reuses instead
@@ -8984,6 +9023,7 @@ def main(argv: list[str] | None = None) -> int:
         "decide": cmd_decide,
         "decisions": cmd_decisions,
         "register-asset": cmd_register_asset,
+        "status": cmd_status,
         "reuse-check": cmd_reuse_check,
         "session-delta": cmd_session_delta,
         "hook-guard": cmd_hook_guard,

@@ -261,8 +261,38 @@ def heartbeat_path(state_dir: Optional[Path] = None) -> Path:
     return _state_base(state_dir) / HEARTBEAT_NAME
 
 
+#: HEARTBEAT-PROVENANCE (S200). The only value of `source` that proves the layer
+#: fired for real. Anything else — a test, a selftest, a hand-run probe — is a
+#: measurement OF the gate, not an execution BY the client, and must never be
+#: readable as liveness. See the S200 finding below.
+LIVE_HEARTBEAT_SOURCE = "hook_entry"
+
+
+def _heartbeat_source(explicit: Optional[str]) -> str:
+    """Classify who is stamping. Explicit wins; pytest is detected, not trusted.
+
+    S200 measured the failure this exists to stop: `tests/
+    test_hook_enforcement_layer.py` called ``hook_entry.main(["--gate",
+    "canonical-read"])`` with no state-dir override, so EVERY pytest run wrote
+    the production heartbeat. `check_hook_layer_live` then read it and reported
+    the layer live — in a client that has never executed a single hook. The
+    suite was manufacturing the evidence the audit consumed, which is why eight
+    sessions of "2,802 green" proved nothing and refused nothing.
+
+    Detection is defence in depth behind the conftest fixture that pins
+    RAG_HOOK_STATE_DIR: a heartbeat that labels itself is safe even when it
+    lands somewhere it should not.
+    """
+    if explicit:
+        return explicit
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return "test"
+    return LIVE_HEARTBEAT_SOURCE
+
+
 def record_heartbeat(gate: str, *, state_dir: Optional[Path] = None,
-                     now: Optional[float] = None) -> None:
+                     now: Optional[float] = None,
+                     source: Optional[str] = None) -> None:
     """Stamp that a hook actually executed. Never raises.
 
     WHY THIS EXISTS, measured S199. `hook-guard --selftest` passes every gate,
@@ -285,6 +315,7 @@ def record_heartbeat(gate: str, *, state_dir: Optional[Path] = None,
             "last_utc": (now if now is not None else time.time()),
             "gate": gate,
             "pid": os.getpid(),
+            "source": _heartbeat_source(source),
         }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -662,7 +693,8 @@ def decide(gate: str, event: dict, *, state_dir: Optional[Path] = None,
 
 def run_gate(gate: str, raw: str, *, state_dir: Optional[Path] = None,
              project_root: Optional[Path] = None,
-             out=None, err=None, now: Optional[float] = None) -> int:
+             out=None, err=None, now: Optional[float] = None,
+             source: Optional[str] = None) -> int:
     """Read one hook payload, emit the hook-contract response, return exit code.
 
     FAIL-OPEN, declared. If the payload cannot be parsed or a gate raises, this
@@ -677,7 +709,7 @@ def run_gate(gate: str, raw: str, *, state_dir: Optional[Path] = None,
     # question this answers is not "did the gate allow" but "did the layer run
     # at all", and a heartbeat written only on the success path cannot tell a
     # dead layer from a malformed payload.
-    record_heartbeat(gate, state_dir=state_dir, now=now)
+    record_heartbeat(gate, state_dir=state_dir, now=now, source=source)
     try:
         event = json.loads(raw) if raw.strip() else {}
         if not isinstance(event, dict):
