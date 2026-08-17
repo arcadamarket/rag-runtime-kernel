@@ -142,10 +142,53 @@ def _lock_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + _LOCK_SUFFIX)
 
 
+def _pid_alive_windows(pid: int) -> bool:
+    """Liveness on Windows, where ``os.kill(pid, 0)`` has no POSIX meaning.
+
+    S201, measured: on Windows ``os.kill(pid, 0)`` raises a BARE ``OSError`` for
+    a pid that does not exist — not ``ProcessLookupError``. The POSIX branch
+    below catches bare OSError as "unknown -> ALIVE (fail closed)", so on the
+    platform this kernel is DEPLOYED to, every stale lock read as live and was
+    honoured forever. A killed agent bricked the deployment until someone hand-
+    deleted the sidecar: precisely the failure the docstring above calls
+    "strictly worse than the race it prevents".
+
+    It was never caught because the suite only ever ran under WSL, where the
+    POSIX branch is correct. Same shape as the /bin/bash default in
+    detach_run.py — a platform assumption that the measurement never visited.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_ACCESS_DENIED = 5
+    STILL_ACTIVE = 259
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # Access denied means the process EXISTS and belongs to someone else,
+        # which is the same answer PermissionError gives on POSIX. Anything else
+        # (invalid parameter, not found) means there is no such process.
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True      # cannot tell -> fail closed, as the POSIX branch does
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _pid_alive(pid: int) -> bool:
     """True if pid is a live process. Unknown/unsupported reads as ALIVE (fail closed)."""
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            return _pid_alive_windows(pid)
+        except Exception:
+            return True      # probe itself failed -> fail closed
     try:
         os.kill(pid, 0)
         return True

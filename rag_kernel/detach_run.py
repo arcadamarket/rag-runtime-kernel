@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -119,6 +120,53 @@ def _parse_sentinel(text: str) -> "int | None":
     return None
 
 
+def _default_shell() -> str:
+    """The POSIX shell to run the wrapper in, resolved for THIS platform.
+
+    S201, and this is the finding that explains eight sessions of drift: this
+    was hardcoded to ``/bin/bash``. That path does not exist on Windows, which
+    is the platform the kernel is DEPLOYED to, so every detached launch died
+    with ``FileNotFoundError [WinError 2]``.
+
+    RUN-DETACH-AWAIT is the mechanism behind the most-repeated rule in this
+    project — "launch long jobs detached, block ONCE, never poll a running
+    command". The rule was therefore mechanically impossible on the operator's
+    machine while the suite, which only ever ran under WSL where /bin/bash
+    exists, stayed green about it. Five of the eleven sessions S190-S200 carry
+    E-081 polling bursts. The agent was not ignoring the rule; the rule's only
+    implementation could not start a process, and no measurement pointed at the
+    platform where that was true.
+
+    The wrapper body is POSIX shell syntax (subshell, ``$?``, ``>>``), so a
+    POSIX shell is genuinely required — cmd.exe cannot run it. On Windows the
+    Git-for-Windows bash is the sanctioned one: this project already depends on
+    git, so it is not a new dependency.
+    """
+    if os.name != "nt":
+        return "/bin/bash"
+    candidates = [
+        shutil.which("bash"),
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                     "Git", "bin", "bash.exe"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                     "Git", "bin", "bash.exe"),
+    ]
+    for cand in candidates:
+        if cand and Path(cand).exists():
+            return cand
+    raise RunDetachError(
+        "RUN-DETACH-AWAIT requires a POSIX shell and none was found on this "
+        "Windows host (looked for bash on PATH and in the Git for Windows "
+        "install). Install Git for Windows, or pass shell=<path>. Refusing to "
+        "launch rather than falling back to polling: a detached run that cannot "
+        "start is exactly the failure that produced E-081/E-116/E-128."
+    )
+
+
+class RunDetachError(RuntimeError):
+    """The detached launch could not even start. Never silently degrade to a poll."""
+
+
 def run_detached_await(
     command: str,
     log: "str | Path",
@@ -126,7 +174,7 @@ def run_detached_await(
     cwd: "str | Path | None" = None,
     timeout: float = 900.0,
     poll_ms: int = 1000,
-    shell: str = "/bin/bash",
+    shell: "str | None" = None,
 ) -> RunResult:
     """Launch ``command`` detached, then block until it reaches a terminal state.
 
@@ -152,13 +200,22 @@ def run_detached_await(
         f"__rc=$?\n"
         f"echo '{SENTINEL}='\"$__rc\" >> {shlex.quote(str(log_path))}\n"
     )
+    # Detachment is spelled differently per platform and the difference is
+    # silent: passing start_new_session on Windows is accepted and does nothing,
+    # so the job would stay tied to our process group with no error to notice.
+    if os.name == "nt":
+        detach_kw = {"creationflags": subprocess.DETACHED_PROCESS
+                     | subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        detach_kw = {"start_new_session": True}
+
     with open(log_path, "w", encoding="utf-8") as fh:
         proc = subprocess.Popen(
-            [shell, "-c", wrapped],
+            [shell or _default_shell(), "-c", wrapped],
             cwd=str(cwd) if cwd else None,
             stdout=fh, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,        # detached: survives our own exit
+            **detach_kw,                   # detached: survives our own exit
         )
 
     started = time.time()

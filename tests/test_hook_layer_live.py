@@ -179,8 +179,22 @@ def test_suite_cannot_reach_the_production_heartbeat():
 
     assert os.environ.get("RAG_HOOK_STATE_DIR"), \
         "conftest must pin RAG_HOOK_STATE_DIR for the whole session"
-    resolved = heartbeat_path()
-    assert Path.home() not in resolved.parents, \
+    resolved = heartbeat_path().resolve()
+
+    # S201: this used to assert `Path.home() not in resolved.parents`, which is
+    # a POSIX-shaped claim — it only means "not the production dir" where the
+    # temp dir sits outside home. On Windows the temp dir is
+    # %USERPROFILE%\AppData\Local\Temp, i.e. UNDER home, so this project's single
+    # most important protection — the S200 rule that a test may never write a
+    # fact the audit reads — reported RED on the platform the kernel actually
+    # ships to, for a correctly isolated run. A guard that cannot pass where it
+    # matters gets deleted or ignored, and then the thing it guards comes back.
+    #
+    # The invariant is not "far from home". It is "not the production heartbeat".
+    production = (Path.home() / ".rag_kernel_hooks").resolve()
+    assert not resolved.is_relative_to(production), \
+        f"suite would write the operator's real hook state at {resolved}"
+    assert resolved != (production / resolved.name), \
         f"suite would write the operator's real hook state at {resolved}"
 
 

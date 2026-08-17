@@ -87,16 +87,25 @@ def test_no_reconcile_forces_none_even_when_declared(tmp_path):
         rag, _ns(rag, docs_root="/other", no_reconcile=True)) is None
 
 
+# S201: these two used POSIX-absolute literals ("/declared/root"). On Windows a
+# drive-less absolute path is not the same object as the drive-anchored one the
+# resolver returns, so both failed on the platform the kernel ships to while
+# staying green under WSL. Anchoring on tmp_path tests the SAME behaviour —
+# flag beats declared, declared is used absent a flag — without smuggling in a
+# claim about what an absolute path looks like.
 def test_docs_root_flag_overrides_declared(tmp_path):
-    rag = _write_rag(tmp_path, reconcile_docs_root="/declared/root")
-    got = _resolve_close_docs_root(rag, _ns(rag, docs_root="/override/root"))
-    assert Path(got) == Path("/override/root")
+    declared = tmp_path / "declared" / "root"
+    override = tmp_path / "override" / "root"
+    rag = _write_rag(tmp_path, reconcile_docs_root=str(declared))
+    got = _resolve_close_docs_root(rag, _ns(rag, docs_root=str(override)))
+    assert Path(got) == override
 
 
 def test_declared_meta_used_when_no_flag(tmp_path):
-    rag = _write_rag(tmp_path, reconcile_docs_root="/declared/root")
+    declared = tmp_path / "declared" / "root"
+    rag = _write_rag(tmp_path, reconcile_docs_root=str(declared))
     got = _resolve_close_docs_root(rag, _ns(rag))
-    assert Path(got) == Path("/declared/root")
+    assert Path(got) == declared
 
 
 def test_relative_declared_resolves_against_project_root(tmp_path):

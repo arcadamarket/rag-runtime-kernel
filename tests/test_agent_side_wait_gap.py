@@ -133,7 +133,11 @@ def test_found_costs_zero_agent_round_trips(tmp_path):
     payload = _payload(_call({"path": str(log), "timeout_s": 5, "contains": "DONE"}))
 
     assert payload["polls"] == 1
-    assert payload["waited_s"] == 0.0
+    # S201: was `== 0.0`, which asserts the host clock has coarser granularity
+    # than one stat() call. True under WSL, false on Windows (measured 0.016s).
+    # The claim under test is "no waiting happened", not "the timer read zero";
+    # one internal poll is already asserted on the line above.
+    assert payload["waited_s"] < 0.5
 
 
 def test_pre_boot_dispatch_never_touches_kernelapp(tmp_path):
