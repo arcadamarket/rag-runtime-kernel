@@ -75,7 +75,9 @@ also *verifies* that every render still equals the state it persisted.
               "ERROR", "WARNING", "DRIFT_AUDIT_VERSION",
               "check_render_parity", "check_supersede_refs",
               "check_note_status_contradiction", "check_side_rule_stores",
-              "check_context_side_stores", "check_secrets_boundary",
+              "check_context_side_stores", "check_host_scratch_storage",
+              "host_scratch_slug", "host_scratch_roots", "find_host_scratch_files",
+              "check_secrets_boundary",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
               "check_current_status_coherence", "check_current_status_archived_keys",
@@ -97,7 +99,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -245,7 +249,14 @@ from rag_kernel import persistence
 #         you trust this document" instruction that four consecutive runbook
 #         revisions shipped stale past. Opt-in per document via the stamp, so an
 #         unstamped tree audits exactly as before.
-DRIFT_AUDIT_VERSION = "1.17.0"
+# 1.18.0 — SCRATCH-OUTSIDE-ROOT-S205: check_host_scratch_storage ERRORs for each
+#         project working file found in the HOST scratchpad. Turns the operator
+#         directive "nothing this project depends on may live outside the project
+#         root" from a preference into a gate. The one clause that reads outside
+#         root_project (read-only, slug-keyed to THIS root); its coverage limit —
+#         the host scratchpad is decidable, a stray /tmp file is not — is stated
+#         in the clause block comment rather than left to be assumed.
+DRIFT_AUDIT_VERSION = "1.18.0"
 
 # Severities.
 ERROR = "error"      # a hard invariant violation — assert_clean always raises
@@ -710,6 +721,148 @@ def check_context_side_stores(rag_dir: Path | str) -> list[AuditFinding]:
                 f"redundant context input persisted beside the RAG: {p.name} "
                 "— its content is merged into RAG_MASTER.json by `configure`; "
                 "remove the stray copy (Rule 13 / FIX-5 P2)"
+            ),
+        ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# SCRATCH-OUTSIDE-ROOT-S205 — host-scratchpad storage gate
+# ---------------------------------------------------------------------------
+#
+# THIS IS THE ONE CLAUSE IN THIS MODULE THAT DELIBERATELY LOOKS OUTSIDE
+# root_project, and it does so READ-ONLY. That is not an exception to
+# filesystem_boundary (E-026) — it is the only way to detect a defect whose
+# entire definition is "project working state was written outside the project
+# root". A scan confined to the root cannot see the thing it must refuse.
+#
+# WHY THE RULE ALONE WAS NEVER GOING TO WORK (measured S205): the Claude Code
+# system prompt instructs every agent, in writing, to put temporary files in a
+# host scratchpad. No RAG rule said otherwise. Both agents that did it were
+# following the only instruction they had. A conflict that is not encoded is
+# decided by whoever speaks last — so this clause exists to make the RAG speak
+# last, mechanically, instead of louder.
+#
+# DECIDABLE PREDICATE: the harness names each project's scratch tree by slugging
+# the project's absolute path — every non-alphanumeric character becomes '-'
+# (verified S206 against the live path this project actually boots from). Only
+# the slug belonging to THIS root is inspected, so a sibling project's scratch is
+# never read and never reported.
+#
+# COVERAGE, STATED PLAINLY so it is not read as total (the ASSET-REGISTRY-
+# OUTSIDE-GIT-S199 lesson): this gate covers the HOST SCRATCHPAD, which is
+# decidable. It does NOT cover an arbitrary file dropped in /tmp or %TEMP% —
+# "is this stray temp file project state?" has no decidable predicate, so that
+# half stays a rule (operating_protocol.scratch_storage) with no gate behind it.
+# Saying which half is gated is the point; a gate whose coverage is unstated
+# reads as total coverage.
+_HOST_SCRATCH_HARNESS_DIR = "claude"
+_HOST_SCRATCH_LEAF = "scratchpad"
+_HOST_SCRATCH_MAX_HITS = 25
+
+
+def host_scratch_slug(root: Path | str) -> str:
+    """The harness's directory slug for ``root`` — abs path, non-alphanumerics -> '-'."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(Path(root).resolve()))
+
+
+def host_scratch_roots(hot: Optional[dict] = None) -> list[Path]:
+    """Candidate host scratch roots: ``meta.host_scratch_roots`` UNIONed with defaults.
+
+    Additive like :func:`_secret_globs`, for the same reason: a deployment on a
+    host whose temp dir this function cannot guess must be able to declare it
+    without editing the kernel, and declaring one must never silently disable
+    the universal defaults.
+    """
+    cands: list[str] = []
+    meta = (hot or {}).get("meta") or {}
+    declared = meta.get("host_scratch_roots") if isinstance(meta, dict) else None
+    if isinstance(declared, (list, tuple)):
+        cands += [str(x) for x in declared if str(x).strip()]
+    cands.append(tempfile.gettempdir())
+    for env in ("TMPDIR", "TEMP", "TMP", "LOCALAPPDATA"):
+        val = os.environ.get(env)
+        if val:
+            cands.append(os.path.join(val, "Temp") if env == "LOCALAPPDATA" else val)
+    cands.append("/tmp")
+
+    seen: set[str] = set()
+    out: list[Path] = []
+    for c in cands:
+        try:
+            p = Path(c).expanduser()
+        except (OSError, ValueError):
+            continue
+        key = str(p).rstrip("\\/").lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def find_host_scratch_files(
+    root: Path | str, hot: Optional[dict] = None
+) -> list[Path]:
+    """Regular files this project's agents left in a HOST scratchpad, read-only.
+
+    Looks only under ``<scratch_root>/claude/<slug-of-root>/*/scratchpad/``. The
+    harness creates that directory empty for every session, so its EXISTENCE is
+    not a finding — only a file inside it is, and only the agent puts files there.
+    Bounded by :data:`_HOST_SCRATCH_MAX_HITS`; unreadable candidates are skipped
+    rather than raised, because an auditor that crashes on a permission error is
+    an auditor that gets switched off.
+    """
+    slug = host_scratch_slug(root)
+    hits: list[Path] = []
+    for base in host_scratch_roots(hot):
+        proj = base / _HOST_SCRATCH_HARNESS_DIR / slug
+        try:
+            if not proj.is_dir():
+                continue
+            sessions = sorted(proj.iterdir())
+        except OSError:
+            continue
+        for sess in sessions:
+            pad = sess / _HOST_SCRATCH_LEAF
+            try:
+                if not pad.is_dir():
+                    continue
+                for p in sorted(pad.rglob("*")):
+                    if p.is_file():
+                        hits.append(p)
+                        if len(hits) >= _HOST_SCRATCH_MAX_HITS:
+                            return hits
+            except OSError:
+                continue
+    return hits
+
+
+def check_host_scratch_storage(
+    root: Path | str, hot: Optional[dict] = None
+) -> list[AuditFinding]:
+    """ERROR when project working files are found in the HOST scratchpad (S205).
+
+    One finding per file, capped. Each finding carries the operator remediation
+    verbatim (Rule 43 retro_clarity) because the AGENT CANNOT CLEAR THIS ITSELF:
+    the files sit outside root_project and filesystem_boundary (E-026) forbids
+    the agent from deleting there. Naming the exact command is therefore part of
+    the finding, not a courtesy — a refusal the reader cannot act on is a wall.
+    """
+    findings: list[AuditFinding] = []
+    for p in find_host_scratch_files(root, hot):
+        findings.append(AuditFinding(
+            check="host_scratch_storage",
+            severity=ERROR,
+            detail=(
+                f"project working file stored OUTSIDE root_project, in the host "
+                f"scratchpad: {p} — nothing this project depends on may live "
+                f"outside the project root (operating_protocol.scratch_storage / "
+                f"SCRATCH-OUTSIDE-ROOT-S205). Project scratch belongs in "
+                f"RAG/.boot/. OPERATOR REMEDIATION (the agent is barred from "
+                f"deleting outside root_project by filesystem_boundary/E-026): "
+                f"in PowerShell run  Remove-Item -Recurse -Force \"{p.parent}\"  "
+                f"— success looks like `rag_kernel audit` reporting 0 findings "
+                f"for check host_scratch_storage"
             ),
         ))
     return findings
@@ -2977,6 +3130,12 @@ def audit_hot(
         # (it compares against .claude/ under the project root), so gated by
         # ``root``; self-skips clean when no transport_allowlist rule is declared.
         findings += check_transport_projection(hot, root)
+        # SCRATCH-OUTSIDE-ROOT-S205: project working state written into the host
+        # scratchpad instead of RAG/.boot/. Filesystem-backed and keyed off the
+        # project root, so gated by ``root``; self-skips clean when no scratch
+        # tree for this root exists. The only clause here that reads outside
+        # root_project, deliberately and read-only — see its block comment.
+        findings += check_host_scratch_storage(root, hot)
     return AuditReport(tuple(findings))
 
 
@@ -3156,6 +3315,10 @@ __all__ = [
     "check_note_status_contradiction",
     "check_side_rule_stores",
     "check_context_side_stores",
+    "check_host_scratch_storage",
+    "host_scratch_slug",
+    "host_scratch_roots",
+    "find_host_scratch_files",
     "collect_declared_secret_values",
     "check_secrets_boundary",
     "check_ledger_consistency",

@@ -4135,6 +4135,115 @@ def _render_rule_digest(lines: "list[tuple[str, str]]") -> str:
 
 
 # ---------------------------------------------------------------------------
+# COLD-BOOT-HAS-NO-RULES-S205 — a REFUSED boot still governs the agent
+# ---------------------------------------------------------------------------
+#
+# The operating_protocol keys an agent cannot safely improvise without. This
+# tuple is THE definition of "boot-critical" for the whole project: the CLAUDE.md
+# renderer (scripts/render_claude_md.py) imports it from here rather than keeping
+# its own copy, because a second list of which rules matter most is a second
+# policy, and POLICY-LIVES-IN-CODE-NOT-IN-THE-RAG-S204 is already P1 without help
+# from this file.
+#
+# MEASURED S205, which is why this exists: a successor whose session-start was
+# refused ran 58 tool calls with NO operating_protocol loaded, and broke three
+# rules it had never been given — it used the host scratchpad as its working
+# directory, it polled (13 rag_wait against 4 get-command-result), and it hunted
+# for the git worktree by guesswork. Every one of those rules was sitting in the
+# RAG the whole time. The frame (pov_roles + process discipline) already rendered
+# before the gate after S176; the RULES did not, because they render at step 3b,
+# behind the refusal. Discipline that arrives only through a SUCCESSFUL boot is
+# absent exactly at a cold start, which is when the agent is least equipped to
+# improvise and most likely to be handed broken state.
+BOOT_CRITICAL_RULES = (
+    "session_start_protocol", "session_start_shell_rule",
+    "tool_hierarchy", "tool_contract", "circuit_breaker",
+    "token_economy", "reuse_registry_guard", "strict_obey",
+    "retro_clarity", "context_window_management",
+    "increment_status_honesty", "root_hygiene",
+    "interval_guards", "session_end_protocol",
+    "no_polling",
+    # SCRATCH-OUTSIDE-ROOT-S205. Encoded S206. Boot-critical for the same reason
+    # no_polling is: the host system prompt actively instructs the opposite, so an
+    # agent that does not receive this rule at boot will do the wrong thing while
+    # following the only instruction it has.
+    "scratch_storage",
+)
+
+_COLD_BOOT_RULE_CHARS = 1200
+
+
+def _render_cold_boot_rules(rag: dict, sid: str, *, reason: str) -> str:
+    """Render the boot-critical rule subset for a boot that is being REFUSED.
+
+    Deliberately NOT the one-line digest: a summary tells the agent a rule exists,
+    which is what the refused S205 successor effectively had (nothing) plus a name.
+    This emits enough of each rule to be OBEYED. Nothing here is attested and no
+    token is issued — the point is governance without a session, not a back door
+    into one.
+    """
+    op = rag.get("operating_protocol", {})
+    op = op if isinstance(op, dict) else {}
+    out = [
+        "[COLD-BOOT-RULES] NO SESSION IS OPEN — and you are still governed.",
+        f"  Refusal: {reason}",
+        f"  Session {sid} was NOT started. The logger is NOT running, the rule digest",
+        "  is NOT attested, and no token was issued. Until `Session <id> READY` prints:",
+        "    - make NO governed canonical write (add / note / resolve / checkpoint / …);",
+        "    - do NOT read RAG_MASTER.json directly to work around this refusal — that",
+        "      is the E-071-class violation the refusal is not an excuse for;",
+        "    - fix the finding above, or take the operator's decision on it, then re-run",
+        "      the boot. An unsealed predecessor is cleared with `rag_kernel",
+        "      session-resume`, never by starting on top of it.",
+        "  THE RULES BELOW BIND YOU ANYWAY. They are rendered here precisely because a",
+        "  refused boot is when an agent is most likely to improvise (S205: 58 tool",
+        "  calls, three rules broken, none of them ever delivered).",
+    ]
+    missing: list[str] = []
+    for key in BOOT_CRITICAL_RULES:
+        val = op.get(key)
+        if isinstance(val, dict):
+            text = "; ".join(f"{k}: {v}" for k, v in val.items())
+        else:
+            text = str(val or "")
+        text = " ".join(text.split())
+        if not text:
+            missing.append(key)
+            continue
+        if len(text) > _COLD_BOOT_RULE_CHARS:
+            text = text[:_COLD_BOOT_RULE_CHARS].rsplit(" ", 1)[0] + \
+                " …[truncated — full text renders on a SUCCESSFUL boot]"
+        out.append(f"  - {key}: {text}")
+    if missing:
+        out.append(
+            "  RENDER GAP — these boot-critical keys are absent from operating_protocol, "
+            "so nothing was emitted for them: " + ", ".join(missing) + ". Do NOT read "
+            "their absence here as their absence in policy."
+        )
+    return "\n".join(out)
+
+
+def _print_cold_boot_rules(rag_path: Path, sid: str, *, reason: str) -> None:
+    """Best-effort cold-boot rule render on the refusal path.
+
+    Reads the RAG itself because the callers reach this before step 3b's load, and
+    swallows every failure: a renderer that raises on the way out of a refusal
+    replaces a diagnosable refusal with a traceback. Printed to STDOUT so the
+    BOOT-LOG-TEE banks it in RAG/.boot/session_start_<sid>.log — a transport that
+    truncates the live emission still leaves the rules on disk.
+    """
+    try:
+        with open(rag_path, "r", encoding="utf-8-sig") as fh:
+            rag = json.load(fh)
+    except Exception:
+        rag = {}
+    try:
+        print(_render_cold_boot_rules(rag, sid, reason=reason))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # KA-20 — BOOT-GUARD-FIRST-ACTION (S172)
 # ---------------------------------------------------------------------------
 #
@@ -4630,6 +4739,11 @@ def _session_start_phase1(
                 f"  Full boot transcript: {rag_dir / '.boot' / ('session_start_' + sid + '.log')}",
                 file=sys.stderr,
             )
+            # COLD-BOOT-HAS-NO-RULES-S205: govern the agent on the way OUT.
+            _print_cold_boot_rules(
+                rag_path, sid,
+                reason="carry-forward gate FAILED — " + "; ".join(findings[:3]),
+            )
             return 1
         print(
             "WARNING: starting despite a failed carry-forward gate (--force).",
@@ -4676,6 +4790,14 @@ def _session_start_phase1(
                   "--no-boot-audit and say so in the close.",
                 file=sys.stderr,
             )
+            # COLD-BOOT-HAS-NO-RULES-S205: the second refusal exit in phase 1.
+            # A refused boot is a refused boot regardless of WHICH gate refused —
+            # fixing only the carry-forward path would leave the same hole here.
+            _print_cold_boot_rules(
+                rag_path, sid,
+                reason="GRAND-AUDIT-AT-BOOT axis 1 (TOOL FITNESS) FAILED — "
+                       + "; ".join(ln.strip() for ln in _lines[:3]),
+            )
             return 1
         if _state == "UNKNOWN":
             print(f"[2/4] Boot audit (axis 1): UNKNOWN — {_lines[0] if _lines else ''} "
@@ -4704,6 +4826,13 @@ def _session_start_phase1(
             rag = json.load(f)
     except (OSError, ValueError) as exc:
         print(f"ERROR: RAG unreadable for the rule digest ({exc}).", file=sys.stderr)
+        # COLD-BOOT-HAS-NO-RULES-S205, third and last phase-1 refusal exit. Here
+        # the render can only emit its RENDER GAP list — which is the honest
+        # output: it tells the agent, in one place, that it is ungoverned and
+        # why, instead of returning 1 in silence.
+        _print_cold_boot_rules(
+            rag_path, sid, reason=f"RAG unreadable for the rule digest ({exc})",
+        )
         return 1
     lines, token = _compute_rule_digest(rag)
     print(

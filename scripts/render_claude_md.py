@@ -185,16 +185,19 @@ def render() -> str:
     # renderer whose empty output is indistinguishable from a clean one is the
     # same disease as everything else in this project, so a missing key is now
     # a loud placeholder in the document itself, not a silent omission.
-    BOOT_CRITICAL = ("session_start_protocol", "session_start_shell_rule",
-                     "tool_hierarchy", "tool_contract", "circuit_breaker",
-                     "token_economy", "reuse_registry_guard", "strict_obey",
-                     "retro_clarity", "context_window_management",
-                     "increment_status_honesty", "root_hygiene",
-                     "interval_guards", "session_end_protocol",
-                     # Encoded S204. Until then the most-violated clause in the
-                     # project had no key, so this renderer could not emit it and
-                     # pi_coverage_check reported PI-7 as a permanent gap.
-                     "no_polling")
+    # SINGLE DEFINITION (S206). This tuple used to live here, and the refused-boot
+    # render added for COLD-BOOT-HAS-NO-RULES-S205 needs the same list — two copies
+    # of "which rules an agent cannot boot without" is two policies, drifting from
+    # the day the second one is written. The kernel owns it; this document renders
+    # it. Includes no_polling (encoded S204) and scratch_storage (encoded S206).
+    # The path insert makes the import independent of CWD: this file is always
+    # <tree>/scripts/render_claude_md.py and the package is always <tree>/rag_kernel.
+    # No except-ImportError fallback on purpose — a fallback would be a second copy
+    # of the list, which is the exact failure this import removes.
+    _tree = str(Path(__file__).resolve().parent.parent)
+    if _tree not in sys.path:
+        sys.path.insert(0, _tree)
+    from rag_kernel.__main__ import BOOT_CRITICAL_RULES as BOOT_CRITICAL
     missing_rules = [k for k in BOOT_CRITICAL if not str(op.get(k) or "").strip()]
     # SUBSTANCE, NOT CITATION. S203, caught by the operator against LAST_PI.txt:
     # this emitted v.split('. ')[0], and the first sentence of most rules is a

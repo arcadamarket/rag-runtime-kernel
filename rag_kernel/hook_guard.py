@@ -101,6 +101,7 @@ HOOK_GUARD_VERSION = "1.1.0"
 #: That migration is tracked, not forgotten — see HOOK-TO-VERB-MIGRATION.
 GATES: tuple[str, ...] = (
     "poll", "sandbox-state", "canonical-read",  # boundary-only, S195
+    "unbounded-wait",                           # boundary-only, S206
     "transport",                                # boundary-only, default-deny, S197
     "deploy-parity", "post-transport-audit",    # PostToolUse
 )
@@ -149,6 +150,7 @@ TRANSPORT_ALLOWLIST_PROJECTION = os.path.join(".claude", "transport_allowlist.js
 _EVENT_FOR_GATE: dict[str, str] = {
     "poll": "PreToolUse",
     "sandbox-state": "PreToolUse",
+    "unbounded-wait": "PreToolUse",
     "canonical-read": "PreToolUse",
     "transport": "PreToolUse",
     "deploy-parity": "PostToolUse",
@@ -459,6 +461,76 @@ def _gate_sandbox_state(event: dict, **_: Any) -> Decision:
     )
 
 
+#: An unbounded wait loop written by hand instead of using the wait verb.
+#: `while`/`until` around a `sleep` with no iteration cap runs forever by
+#: construction; `wait-for` cannot, because --timeout is mandatory.
+_HANDROLLED_WAIT = re.compile(
+    r"\b(while|until)\b[^\n]*?;\s*do\b[^\n]*?\bsleep\b", re.I | re.S)
+#: `pgrep -f <pattern>` matches against FULL command lines including the shell
+#: process that is running the pgrep, so a loop waiting on its own pattern waits
+#: on itself. This is not hypothetical: S206 hung on exactly this, forever.
+_PGREP_SELFMATCH = re.compile(r"\bpgrep\b[^\n]*\-\w*f", re.I)
+
+
+def _gate_unbounded_wait(event: dict, **_: Any) -> Decision:
+    """Refuse a hand-rolled wait loop. The wait is a verb, not a control flow.
+
+    S206, the third cold-start casualty in three sessions. An agent whose boot
+    had not completed — so it held none of the rules — needed to wait for a
+    detached job and wrote::
+
+        while pgrep -f "rag_kernel session-start" >/dev/null; do sleep 3; done
+
+    Two independent defects in one line. The loop has no timeout, so nothing can
+    end it but a human. And ``pgrep -f`` matches full command lines, so the
+    pattern matched the very bash process evaluating it: the loop waited on
+    itself and could never exit. The operator had to kill it by hand, which is
+    precisely the manual-rescue pattern Rule 45 exists to abolish.
+
+    Rule 44 (no_polling) already forbids this in words. Words did not reach the
+    agent, because rules are delivered at attestation and this agent never got
+    there — COLD-BOOT-HAS-NO-RULES-S205. So the rule is made a refusal, which
+    needs no delivery: the gate fires whether or not the agent has been told.
+
+    DECIDABLE PREDICATE, no judgement: a shell command containing a while/until
+    loop whose body sleeps, or any ``pgrep -f``. Bounded loops (``for i in
+    $(seq 1 20)``) are untouched, and so is every use of ``wait-for``/``rag_wait``.
+    """
+    if not _SHELL_TOOLS.search(_tool_name(event)):
+        return Decision("unbounded-wait", True)
+    command = str(_tool_input(event).get("command") or "")
+    if not command:
+        return Decision("unbounded-wait", True)
+
+    handrolled = bool(_HANDROLLED_WAIT.search(command))
+    selfmatch = bool(_PGREP_SELFMATCH.search(command))
+    if not (handrolled or selfmatch):
+        return Decision("unbounded-wait", True)
+
+    why = []
+    if handrolled:
+        why.append("a while/until loop whose body sleeps has NO timeout — only a "
+                   "human can end it")
+    if selfmatch:
+        why.append("`pgrep -f` matches full command lines INCLUDING the shell "
+                   "running it, so a loop waiting on its own pattern waits on "
+                   "itself forever (measured: S206 hung on exactly this)")
+    return Decision(
+        "unbounded-wait", False,
+        reason=(
+            "NO-POLLING (Rule 44): " + "; and ".join(why) + ". Refused. THE WAIT "
+            "IS A VERB, NOT CONTROL FLOW — launch the job detached to a file that "
+            "ends with a DISTINCTIVE completion token, then block ONCE:\n"
+            "  nohup bash -c '<job> > /path/log 2>&1; echo SUITE-DONE >> /path/log' &\n"
+            "  python -m rag_kernel wait-for /path/log --timeout 900 "
+            "--contains SUITE-DONE --emit 20\n"
+            "`--timeout` is mandatory there, so that wait cannot hang. Pick a "
+            "token that cannot appear in ordinary output: S203 used 'D' and the "
+            "wait matched the first capital D and returned instantly."
+        ),
+    )
+
+
 def _gate_canonical_read(event: dict, **_: Any) -> Decision:
     """Refuse a direct read or hand-edit of the canonical RAG via a file tool.
 
@@ -694,6 +766,7 @@ def _safe_search(pattern: str, text: str) -> bool:
 _GATE_FUNCS = {
     "poll": _gate_poll,
     "sandbox-state": _gate_sandbox_state,
+    "unbounded-wait": _gate_unbounded_wait,
     "canonical-read": _gate_canonical_read,
     "deploy-parity": _gate_deploy_parity,
     "transport": _gate_transport,
@@ -774,12 +847,16 @@ def selftest(*, state_dir: Optional[Path] = None) -> tuple[int, list[str]]:
     checks = [
         ("poll", {"tool_name": "mcp__tmux-mcp__get-command-result",
                   "tool_input": {"commandId": "selftest-id"}}, False),
+        ("unbounded-wait", {"tool_name": "Bash", "tool_input": {"command":
+          'while pgrep -f "rag_kernel session-start"; do sleep 3; done'}}, False),
         ("sandbox-state", {"tool_name": "Bash",
                            "tool_input": {"command": "cat RAG_MASTER.json"}}, False),
         ("canonical-read", {"tool_name": "Read",
                             "tool_input": {"file_path": "/x/RAG/RAG_MASTER.json"}}, False),
         ("canonical-read", {"tool_name": "Edit",
                             "tool_input": {"file_path": "/x/RAG/RAG_MASTER.json"}}, False),
+        ("unbounded-wait", {"tool_name": "Bash", "tool_input": {"command":
+          'while pgrep -f "rag_kernel session-start"; do sleep 3; done'}}, False),
         ("sandbox-state", {"tool_name": "Bash",
                            "tool_input": {"command": "ls /tmp"}}, True),
         ("canonical-read", {"tool_name": "Read",
