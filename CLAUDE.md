@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=7e96c20e6ba0321e...
+> state_hash: stored=bd27b925865d0de2... computed=6ee85a3542792083...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -53,19 +53,20 @@ All 59 operating_protocol rules are rendered in full by `session-start`; the lis
 
 | Fact | Value |
 |---|---|
-| git HEAD | 93dac18 |
+| git HEAD | f157e38 |
 | runtime | see current_status |
-| test gate | 2818  (session S204 @ 93dac18) |
+| test gate | 2818  (session S205 @ f157e38) |
 | written_by_session | S204 |
-| active items | 104 |
-| P1 | 23 |
-| baked assets | 133 |
+| active items | 111 |
+| P1 | 27 |
+| baked assets | 134 |
 | posix shell | C:\Program Files\Git\usr\bin\bash.EXE |
 | tmux transport | wsl:tmux |
 | TLC jar | C:\Users\pakhol\Desktop\GitHub Project (RAG Runtime Kernel)\toolchain\tla2tools.jar |
 
 ## 3. P1 — what is owed, in ledger order
 
+- `COLD-BOOT-HAS-NO-RULES-S205`
 - `CONTEXT-COMPACTION-FORBIDDEN-BUT-UNGATED-S203`
 - `E-116`
 - `E-117`
@@ -77,6 +78,7 @@ All 59 operating_protocol rules are rendered in full by `session-start`; the lis
 - `GC-IS-INVERTED-S202`
 - `GC-WOULD-DELETE-LIVE-TESTS-S202`
 - `INFERENCE-LEDGER-NO-LIFECYCLE`
+- `LEAN-RAG-INVERTED-LOADED-STORE-S204`
 - `MEASUREMENT-PROVENANCE-S201`
 - `OPERATOR-ONE-NUMBER`
 - `PLAN-FEASIBILITY-GATE`
@@ -84,13 +86,15 @@ All 59 operating_protocol rules are rendered in full by `session-start`; the lis
 - `PROBE-DEFINES-ITS-OWN-PROTOCOL-S201`
 - `RESOLVE-EVIDENCE-GATE-NOT-ENFORCED-S202`
 - `RULE-ORPHANS-31-OF-57-S203`
+- `SCRATCH-OUTSIDE-ROOT-S205`
 - `SEAL-NOT-INVALIDATED-BY-LATER-WRITES-S201`
+- `SEAL-ORDER-IN-AGENT-HANDS-S205`
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `SESSION-END-RESUME-HANDOFF`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 23, 'P2': 38, 'P3': 30, 'P4': 9, 'P5': 4}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 27, 'P2': 40, 'P3': 31, 'P4': 9, 'P5': 4}.
 
 ## 5. TRAPS (from operating_protocol)
 
