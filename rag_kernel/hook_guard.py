@@ -176,7 +176,10 @@ POLL_COOLDOWN_SECONDS = float(os.environ.get("RAG_HOOK_POLL_COOLDOWN", "25"))
 _POLL_TOOLS = re.compile(r"get-?command-?result", re.I)
 _SHELL_TOOLS = re.compile(r"(^Bash$)|(bash$)", re.I)
 _FILE_TOOLS = re.compile(r"^(Read|Edit|Write|NotebookEdit|MultiEdit)$")
-_KERNEL_SOURCE = re.compile(r"rag_kernel[/\\][^/\\]+\.py$")
+#: Two-copy sources: edited in the worktree, RUN from the deployment. S201 added
+#: scripts/ — grand_audit.py became a two-copy asset the moment it was banked
+#: into git, and an ungated pair is exactly the drift this gate exists to catch.
+_KERNEL_SOURCE = re.compile(r"(?:rag_kernel|scripts)[/\\][^/\\]+\.py$")
 
 #: A shell segment that invokes the kernel's OWN CLI (S201). Naming canonical
 #: state on such a segment IS the governed path — it takes the lock, appends the

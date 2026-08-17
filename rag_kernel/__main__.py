@@ -8976,7 +8976,35 @@ def _fold_dash_values(argv: "list[str] | None") -> "list[str] | None":
     return out
 
 
+def _force_utf8_console() -> None:
+    """Make stdout/stderr UTF-8 before any verb can print (S201).
+
+    MEASURED S201: `rag_kernel items` — a MANDATED read path for state, and one
+    of the two verbs boot rule 1 names — died mid-render with
+
+        UnicodeEncodeError: 'charmap' codec can't encode character '\\u26a0'
+
+    because the Windows console defaults to cp1252 and a tracked_item title
+    contains a warning sign. The canonical way to read state was unusable on the
+    only platform this project is deployed to, and every session so far worked
+    around it by hand or never hit that item.
+
+    The rule this belongs to: the kernel decides its own output encoding. Leaving
+    it to the host console makes rendering a property of the operator's terminal
+    settings, which nothing in this repo can audit.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass                      # a redirected/closed stream is not fatal
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_console()
     parser = build_parser()
     if argv is None:
         argv = sys.argv[1:]
