@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=75c6bf89a582c541...
+> state_hash: stored=bd27b925865d0de2... computed=a670a64830a52be3...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -39,8 +39,8 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 | runtime | see current_status |
 | test gate | 2818  (session S202 @ c6a3379) |
 | written_by_session | S202 |
-| active items | 97 |
-| P1 | 19 |
+| active items | 99 |
+| P1 | 22 |
 | baked assets | 129 |
 | posix shell | C:\Program Files\Git\usr\bin\bash.EXE |
 | tmux transport | wsl:tmux |
@@ -56,19 +56,22 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 - `E-134`
 - `GATE-FALSE-POSITIVE-ON-PROSE-S201`
 - `GATE-OR-HOPE-PRINCIPLE`
+- `GC-IS-INVERTED-S202`
 - `GC-WOULD-DELETE-LIVE-TESTS-S202`
 - `INFERENCE-LEDGER-NO-LIFECYCLE`
 - `MCP-REGISTRATION-SURFACE-S199`
 - `MEASUREMENT-PROVENANCE-S201`
 - `OPERATOR-ONE-NUMBER`
 - `PLAN-FEASIBILITY-GATE`
+- `PROBE-DEFINES-ITS-OWN-PROTOCOL-S201`
+- `RESOLVE-EVIDENCE-GATE-NOT-ENFORCED-S202`
 - `SEAL-NOT-INVALIDATED-BY-LATER-WRITES-S201`
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `SESSION-END-RESUME-HANDOFF`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 19, 'P2': 33, 'P3': 30, 'P4': 9, 'P5': 4, 'unprioritized': 2}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 22, 'P2': 34, 'P3': 30, 'P4': 9, 'P5': 4}.
 
 ## 5. TRAPS (from operating_protocol)
 
