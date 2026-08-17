@@ -41,11 +41,26 @@ AXES=("1-TOOLS","2-GATES","3-CLAIMS","4-CONTINUITY","5-FILES","6-CODE","7-PROTOC
 #:
 #: Rewriting the token at the ONE choke point (Grand.sh) fixes every call site
 #: at once and cannot be forgotten at a new one.
+#: The same disease bit axis 8: every TLC invocation is a bare `java`, which is
+#: not on PATH on this host even with a JDK installed (winget puts it under
+#: Program Files and does not touch PATH until a new shell). All 22 formal
+#: checks came back UNKNOWN with "'java' is not recognized", so the 11 TLA+
+#: specs had never been model-checked on this machine.
 _PY_TOKEN=re.compile(r"(?<![\w.-])python3(?![\w.-])")
+_JAVA_TOKEN=re.compile(r"(?<![\w.\\/-])java(?![\w.-])")
+
+_MEASURED_JAVA=[None]      # filled by Grand._toolchain(); None = leave `java` alone
 
 def _py(cmd):
-    """Point a probe at the interpreter that is actually running this audit."""
-    return _PY_TOKEN.sub(lambda _:'"%s"'%sys.executable, cmd)
+    """Point a probe at the binaries this machine actually has.
+
+    ONE choke point, deliberately: a rewrite done per call site is the very
+    pattern that produced every platform defect this audit is now finding.
+    """
+    cmd=_PY_TOKEN.sub(lambda _:'"%s"'%sys.executable, cmd)
+    if _MEASURED_JAVA[0]:
+        cmd=_JAVA_TOKEN.sub(lambda _:'"%s"'%_MEASURED_JAVA[0], cmd)
+    return cmd
 
 class Grand:
     def __init__(self,root,session=None,fast=False):
@@ -53,6 +68,11 @@ class Grand:
         self.ragd=os.path.join(root,"RAG")
         self.wt=os.path.join(root,"GIT WORKTREES","rag-runtime-kernel")
         self.rows=[]; self.t0=time.time(); self.jar=None; self.items={}
+        self._tc=None
+        # Measure the toolchain up front, not inside axis 1: `--only 8` must get
+        # the same measured `java` that a full run does, or a partial audit
+        # silently probes different binaries than a whole one.
+        self._toolchain()
 
     def add(self,axis,name,status,evidence):
         self.rows.append((axis,name,status,str(evidence)[:160])); return status
@@ -90,6 +110,7 @@ class Grand:
                 sys.path.insert(0,self.ragd)
             from rag_kernel import toolchain as _tc      # noqa: PLC0415
             self._tc=_tc.measure(self.root)
+            _MEASURED_JAVA[0]=(self._tc["tools"].get("java") or {}).get("path")
         except Exception:                                # noqa: BLE001
             self._tc=None
         return self._tc
@@ -587,10 +608,24 @@ class Grand:
                         # parentheses, and an unquoted -metadir silently turns into
                         # three bad arguments (S190 first cut: rc=2 on all 12 configs,
                         # reported UNKNOWN by L1 rather than as twelve false defects).
-                        r=subprocess.run("java -jar %s -workers %d -metadir %s -config %s %s"
-                                         %(shlex.quote(self.jar),w,shlex.quote(md),
-                                           shlex.quote(cfgarg),shlex.quote(t)),
-                                         shell=True,capture_output=True,text=True,timeout=1800,cwd=fd)
+                        # S201 — ARGUMENT LIST, NO SHELL. Two defects lived in the
+                        # string form this replaces:
+                        #   1. a bare `java`, which is not on PATH on this host
+                        #      even with a JDK installed, so all 22 formal checks
+                        #      came back "'java' is not recognized" and the 11
+                        #      specs had never been model-checked here at all;
+                        #   2. shlex.quote(), which emits POSIX single quotes.
+                        #      cmd.exe does not treat ' as a quote character, so
+                        #      the quotes became part of the path and TLC replied
+                        #      "Unable to access jarfile 'C:\\Users\\...".
+                        # The comment above this call warned that "EVERY path is
+                        # quoted" because the project root has spaces and
+                        # parentheses — correct problem, POSIX-only answer. A
+                        # list with shell=False has no quoting layer to get wrong.
+                        r=subprocess.run([_MEASURED_JAVA[0] or "java",
+                                          "-jar",self.jar,"-workers",str(w),
+                                          "-metadir",md,"-config",cfgarg,t],
+                                         capture_output=True,text=True,timeout=1800,cwd=fd)
                     except subprocess.TimeoutExpired:
                         unresolved+=1
                         self.add(A,name,UNK,"L1: TLC timed out after 1800s"); continue
