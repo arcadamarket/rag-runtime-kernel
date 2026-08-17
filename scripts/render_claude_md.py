@@ -189,12 +189,31 @@ def render() -> str:
                      "tool_hierarchy", "tool_contract", "circuit_breaker",
                      "token_economy", "reuse_registry_guard", "strict_obey",
                      "retro_clarity", "context_window_management",
-                     "increment_status_honesty", "root_hygiene")
+                     "increment_status_honesty", "root_hygiene",
+                     "interval_guards", "session_end_protocol")
     missing_rules = [k for k in BOOT_CRITICAL if not str(op.get(k) or "").strip()]
+    # SUBSTANCE, NOT CITATION. S203, caught by the operator against LAST_PI.txt:
+    # this emitted v.split('. ')[0], and the first sentence of most rules is a
+    # provenance citation - "Rule 5.", "Rule 17 (TOKEN-ECONOMY - KA-15, S108)".
+    # The document therefore NAMED twelve rules while STATING none of them, and
+    # four of the six numbered non-negotiables the Cowork Project Instructions
+    # carried since S176 were absent in substance: no direct read of canonical
+    # state, no reply before READY, run the recovery a refusal names, and the
+    # kernel-unreachable .bak->COLD->WAL path. A boot document that cites its
+    # rules instead of stating them is a table of contents, and the previous
+    # agent-written CLAUDE.md it replaced was stronger. Emit enough of each rule
+    # to be actionable, and say so when the text is cut.
+    # 700 chars still cut session_start_protocol before its recovery clause and
+    # interval_guards before the no-polling clause, so PI-5 and PI-7 stayed
+    # uncovered. Measured against scripts/pi_coverage_check.py, not guessed.
+    RULE_CHARS = 1400
     for key in BOOT_CRITICAL:
-        v = str(op.get(key) or "").strip()
-        if v:
-            L.append(f"- **{key}** — {v.split('. ')[0]}.")
+        v = " ".join(str(op.get(key) or "").split())
+        if not v:
+            continue
+        body = v if len(v) <= RULE_CHARS else v[:RULE_CHARS].rsplit(" ", 1)[0] + \
+            " …[truncated — full text renders at session-start]"
+        L.append(f"- **{key}** — {body}")
     if missing_rules:
         L.append("")
         L.append(f"> **RENDER GAP:** these boot-critical rule keys are named by "
@@ -203,6 +222,23 @@ def render() -> str:
                  f"the rule moved and the renderer must be corrected, or the rule "
                  f"is genuinely missing from the RAG. Do not read their absence "
                  f"here as their absence in policy.")
+    # PI-3: the identity half. pov_roles/pov_mandate are HOT fields, not
+    # operating_protocol rules, so the rule loop above can never reach them —
+    # which is exactly why the Cowork PI's item 3 went missing when this file
+    # became a projection.
+    pov_roles = hot.get("pov_roles") or meta.get("pov_roles")
+    pov_mandate = hot.get("pov_mandate") or meta.get("pov_mandate")
+    if pov_roles or pov_mandate:
+        L.append("")
+        L.append("**pov_mandate / pov_roles — adopt these as your reasoning stance "
+                 "for EVERY deliverable, not one of them (rendered again in the "
+                 "[BOOT-FRAME] block at session-start):**")
+        if pov_mandate:
+            L.append(f"- mandate: {' '.join(str(pov_mandate).split())[:300]}")
+        roles = pov_roles if isinstance(pov_roles, list) else [pov_roles]
+        for r in roles:
+            if r:
+                L.append(f"- role: {' '.join(str(r).split())[:220]}")
     L.append("")
     L.append(f"All {len(op)} operating_protocol rules are rendered in full by "
              f"`session-start`; the list above is only the boot-critical subset.")
