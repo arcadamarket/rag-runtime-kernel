@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=a670a64830a52be3...
+> state_hash: stored=bd27b925865d0de2... computed=5cf37df00e746511...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -35,7 +35,7 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 
 | Fact | Value |
 |---|---|
-| git HEAD | c6a3379 |
+| git HEAD | 7bd90d5 |
 | runtime | see current_status |
 | test gate | 2818  (session S202 @ c6a3379) |
 | written_by_session | S202 |
