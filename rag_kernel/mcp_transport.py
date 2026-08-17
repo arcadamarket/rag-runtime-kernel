@@ -392,11 +392,27 @@ class MCPServer:
             return None
 
     def _write_message(self, message: dict) -> None:
-        """Write a JSON-RPC message to stdout with Content-Length framing."""
+        """Write a JSON-RPC message to stdout as ONE line of JSON (S201).
+
+        MCP stdio framing is newline-delimited JSON. ``Content-Length`` is the
+        LSP convention and no MCP client parses it, so every real client hung at
+        ``initialize`` and the server registered zero tools — the whole of
+        ACTIVATION-GAP-S197.
+
+        WHY IT SURVIVED THREE SESSIONS: the reader below accepts BOTH framings,
+        and the S198 verification drove it with a probe that spoke the server's
+        own dialect. initialize answered, tools/list returned 13 tools, rag_wait
+        returned FOUND — against a wire format no client speaks. The probe
+        defined the protocol it was verifying, which is the S200 heartbeat
+        finding wearing different clothes:
+
+            A PROBE MAY NOT DEFINE THE PROTOCOL IT VERIFIES.
+
+        ``json.dumps`` with these separators cannot emit a raw newline, so one
+        message is always exactly one line, as the transport requires.
+        """
         body = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
-        header = f"Content-Length: {len(body.encode('utf-8'))}\r\n\r\n"
-        self._out.write(header)
-        self._out.write(body)
+        self._out.write(body + "\n")
         self._out.flush()
 
     # -- Dispatch -----------------------------------------------------------

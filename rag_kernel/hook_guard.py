@@ -178,6 +178,27 @@ _SHELL_TOOLS = re.compile(r"(^Bash$)|(bash$)", re.I)
 _FILE_TOOLS = re.compile(r"^(Read|Edit|Write|NotebookEdit|MultiEdit)$")
 _KERNEL_SOURCE = re.compile(r"rag_kernel[/\\][^/\\]+\.py$")
 
+#: A shell segment that invokes the kernel's OWN CLI (S201). Naming canonical
+#: state on such a segment IS the governed path — it takes the lock, appends the
+#: WAL, rotates the .bak — so refusing it refuses boot rule 1 itself.
+#:
+#: MEASURED S201, the layer's first live firing in its existence: this gate
+#: refused `python -m rag_kernel session-start --rag RAG_MASTER.json`, which
+#: CLAUDE.md §1 mandates as the ONLY sanctioned boot path. The predicate was
+#: "the command string contains the filename" and never asked what named it, so
+#: the first thing the enforcement layer ever did was block the protocol it
+#: exists to enforce. A gate that fires is not yet a gate that is right.
+_GOVERNED_VERB = re.compile(
+    r"(?:^|[\s;&|(])(?:python[0-9._]*(?:\.exe)?|py)\s+(?:-\S+\s+)*-m\s+rag_kernel(?:\s|$)"
+    r"|(?:^|[\s;&|(])rag[-_]kernel(?:\s|$)",
+    re.I,
+)
+
+#: Shell separators that begin a NEW command. Each segment is judged alone, so
+#: `cat RAG_MASTER.json && python -m rag_kernel status` is still refused for its
+#: first half — the governed verb in the second half does not launder the first.
+_SHELL_SEGMENT = re.compile(r"\|\||&&|[;&|\n]")
+
 _ALLOW_ENV = "RAG_HOOK_GUARD_DISABLED"
 
 
@@ -398,29 +419,39 @@ def _gate_poll(event: dict, *, state_dir: Optional[Path] = None,
 
 
 def _gate_sandbox_state(event: dict, **_: Any) -> Decision:
-    """Refuse a sandbox shell that names a canonical state file (E-071).
+    """Refuse a shell that reaches canonical state OUTSIDE a governed verb (E-071).
 
-    The governed transports (tmux-mcp, the kernel's own verbs) are not matched by
-    this gate, which is the whole point: the rule was never "do not read state",
-    it was "read it through the path that takes the lock, appends the WAL and
-    rotates the backup".
+    The rule was never "do not name RAG_MASTER.json". It was "reach state only
+    through the path that takes the lock, appends the WAL and rotates the .bak".
+    So the predicate is per shell segment: does THIS segment name canonical state
+    without being the kernel's own CLI. `cat RAG_MASTER.json` is refused;
+    `python -m rag_kernel session-start --rag RAG_MASTER.json` is the governed
+    path and is allowed — see _GOVERNED_VERB for why that distinction had to be
+    made at S201.
     """
     if not _SHELL_TOOLS.search(_tool_name(event)):
         return Decision("sandbox-state", True)
     command = str(_tool_input(event).get("command") or "")
-    hit = _names_canonical(command)
+    hit: Optional[str] = None
+    for segment in _SHELL_SEGMENT.split(command):
+        named = _names_canonical(segment)
+        if named and not _GOVERNED_VERB.search(segment):
+            hit = named
+            break
     if not hit:
         return Decision("sandbox-state", True)
     return Decision(
         "sandbox-state", False,
         reason=(
-            f"TOOL-HIERARCHY (E-071): this shell is the Cowork sandbox and the "
-            f"command names {hit}, which is canonical state. Refused. Read state "
-            f"with `rag_kernel session-start` / `rag_kernel items` and WRITE it "
-            f"only through a governed verb (add / note / priority / start / "
-            f"resolve / defer / reopen / discard / supersede / checkpoint), "
-            f"executed over tmux-mcp. Atomicity, the WAL append, the checksum and "
-            f"the .bak rotation are preconditions of the write, not follow-ups."
+            f"TOOL-HIERARCHY (E-071): this shell command names {hit}, which is "
+            f"canonical state, OUTSIDE a governed kernel verb. Refused. Read "
+            f"state with `rag_kernel session-start` (boot) or `rag_kernel items` "
+            f"/ `report` (mid-session), and WRITE it only through a governed verb "
+            f"(add / note / priority / start / resolve / defer / reopen / discard "
+            f"/ supersede / checkpoint). Atomicity, the WAL append, the checksum "
+            f"and the .bak rotation are preconditions of the write, not "
+            f"follow-ups. Invoking the kernel CLI in this same command is allowed "
+            f"and is the intended path."
         ),
     )
 

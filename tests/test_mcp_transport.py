@@ -289,12 +289,23 @@ class TestJSONRPCFraming:
 
 class TestMessageIO:
     def test_write_message(self):
+        """One message MUST be exactly one line of JSON — MCP stdio framing.
+
+        S201: this assertion used to require ``Content-Length:``, which is LSP
+        framing that no MCP client parses. The bug was not merely uncovered, it
+        was PROTECTED by its own coverage: the test pinned the wrong protocol,
+        so the server could never register with a real client and the suite
+        stayed green about it for three sessions. Same shape as the S200
+        heartbeat finding — the check certified the defect.
+        """
         out = io.StringIO()
         server = MCPServer(None, output_stream=out)
         server._write_message({"test": "value"})
         output = out.getvalue()
-        assert "Content-Length:" in output
-        assert '"test"' in output
+        assert "Content-Length:" not in output
+        assert output.endswith("\n")
+        assert output.count("\n") == 1, "a message must not span lines"
+        assert json.loads(output) == {"test": "value"}
 
     def test_read_newline_delimited(self):
         msg = {"jsonrpc": "2.0", "method": "ping", "id": 1}
