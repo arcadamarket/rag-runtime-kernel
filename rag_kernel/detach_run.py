@@ -142,18 +142,16 @@ def _default_shell() -> str:
     Git-for-Windows bash is the sanctioned one: this project already depends on
     git, so it is not a new dependency.
     """
-    if os.name != "nt":
-        return "/bin/bash"
-    candidates = [
-        shutil.which("bash"),
-        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
-                     "Git", "bin", "bash.exe"),
-        os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-                     "Git", "bin", "bash.exe"),
-    ]
-    for cand in candidates:
-        if cand and Path(cand).exists():
-            return cand
+    # ONE source for this answer: rag_kernel.toolchain. Resolving it a second
+    # time here would recreate exactly the per-call-site platform assumption
+    # that broke this function in the first place.
+    try:
+        from rag_kernel.toolchain import _probe_posix_shell
+        found, _evidence = _probe_posix_shell()
+        if found:
+            return found
+    except Exception:                                    # noqa: BLE001
+        pass                                             # fall through to the refusal
     raise RunDetachError(
         "RUN-DETACH-AWAIT requires a POSIX shell and none was found on this "
         "Windows host (looked for bash on PATH and in the Git for Windows "
