@@ -175,12 +175,37 @@ def render() -> str:
                     "non-zero. Authority for every tool path is `toolchain/toolchain.json`.",
                     ""]
 
-    for key in ("boot_read_path", "tool_hierarchy", "no_polling", "token_economy",
-                "reuse_registry_guard", "strict_obey", "retro_clarity"):
-        v = op.get(key)
-        if isinstance(v, str) and v.strip():
-            head = v.strip().split(". ")[0]
-            L.append(f"- **{key}** — {head}.")
+    # BOOT-CRITICAL RULES, named explicitly and CHECKED. S203 regression: the
+    # first cut asked for boot_read_path / tool_hierarchy / no_polling — two of
+    # which do not exist under those names — and emitted NOTHING for them
+    # without a word. The generated document silently lost three
+    # non-negotiables the Cowork Project Instructions had carried since S176:
+    # never read canonical state with a file tool, do not answer the operator
+    # before READY, and the recovery path when the kernel is unreachable. A
+    # renderer whose empty output is indistinguishable from a clean one is the
+    # same disease as everything else in this project, so a missing key is now
+    # a loud placeholder in the document itself, not a silent omission.
+    BOOT_CRITICAL = ("session_start_protocol", "session_start_shell_rule",
+                     "tool_hierarchy", "tool_contract", "circuit_breaker",
+                     "token_economy", "reuse_registry_guard", "strict_obey",
+                     "retro_clarity", "context_window_management",
+                     "increment_status_honesty", "root_hygiene")
+    missing_rules = [k for k in BOOT_CRITICAL if not str(op.get(k) or "").strip()]
+    for key in BOOT_CRITICAL:
+        v = str(op.get(key) or "").strip()
+        if v:
+            L.append(f"- **{key}** — {v.split('. ')[0]}.")
+    if missing_rules:
+        L.append("")
+        L.append(f"> **RENDER GAP:** these boot-critical rule keys are named by "
+                 f"the renderer but absent from `operating_protocol`, so nothing "
+                 f"was emitted for them: `{'`, `'.join(missing_rules)}`. Either "
+                 f"the rule moved and the renderer must be corrected, or the rule "
+                 f"is genuinely missing from the RAG. Do not read their absence "
+                 f"here as their absence in policy.")
+    L.append("")
+    L.append(f"All {len(op)} operating_protocol rules are rendered in full by "
+             f"`session-start`; the list above is only the boot-critical subset.")
     L += ["", "## 2. STATE (read from the RAG, measured where stated)", "",
           "| Fact | Value |", "|---|---|"]
     for label, val in (

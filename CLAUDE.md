@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=5cf37df00e746511...
+> state_hash: stored=bd27b925865d0de2... computed=2578fe7f8eecba7f...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -26,21 +26,31 @@ MEASURED INTERPRETER: `C:\Python314\python.exe`. Use `python`, never `python3` �
 `python3` on this host is the Microsoft Store alias and exits
 non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 
+- **session_start_protocol** — HARD RULE -- GC-FIRST CARRY-FORWARD RITUAL.
+- **session_start_shell_rule** — HARD RULE: the FIRST shell/git/test action of every session goes through tmux-mcp (NOT wsl-exec, NEVER the Cowork sandbox); wsl-exec is the ATOMIC single-command fallback only.
+- **tool_hierarchy** — {'file_read_write_list': 'File tools (primary for file CONTENT read/write) > tmux-mcp (real WSL shell for listing/scan) > wsl-exec (atomic).
+- **tool_contract** — ALLOWED: read/list/write within declared roots, compute checksum, append WAL, rotate backup.
+- **circuit_breaker** — Rule 5.
 - **token_economy** — Rule 17 (TOKEN-ECONOMY / CONTEXT-EMISSION DISCIPLINE — KA-15, S108; source: eBay Session-Zero field incident, triaged UNIVERSAL per deployment_test_result_triage / Rule 15).
 - **reuse_registry_guard** — Rule 25 (REUSE-REGISTRY-GUARD -- S165; eBay S12 field evidence, Rule 15 lane-A + S165 E-069 design-level instance).
 - **strict_obey** — Rule 16 (STRICT-OBEY — S70/S79 operator directive; encoded via the governed add-rule verb).
 - **retro_clarity** — Rule 43 (RETRO-CLARITY - operator directive, raised repeatedly against the Cowork agent from S190 onward and NEVER baked; encoded S202 via the governed add-rule verb after a live grep proved 0 occurrences anywhere in the RAG).
+- **context_window_management** — COMPRESSION/COMPACTION FORBIDDEN.
+- **increment_status_honesty** — Rule 14 (migrated S46; codifies a principle Rule 12 only REFERENCED but never defined).
+- **root_hygiene** — Rule 20 (ROOT-HYGIENE — S116 origin; UPDATED S135 by operator standing directive granting auto-purge authority).
+
+All 57 operating_protocol rules are rendered in full by `session-start`; the list above is only the boot-critical subset.
 
 ## 2. STATE (read from the RAG, measured where stated)
 
 | Fact | Value |
 |---|---|
-| git HEAD | 7bd90d5 |
+| git HEAD | cdbbfd1 |
 | runtime | see current_status |
-| test gate | 2818  (session S202 @ c6a3379) |
+| test gate | 2818  (session S202 @ cdbbfd1) |
 | written_by_session | S202 |
-| active items | 99 |
-| P1 | 22 |
+| active items | 100 |
+| P1 | 21 |
 | baked assets | 129 |
 | posix shell | C:\Program Files\Git\usr\bin\bash.EXE |
 | tmux transport | wsl:tmux |
@@ -48,7 +58,7 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 
 ## 3. P1 — what is owed, in ledger order
 
-- `ACTIVATION-GAP-S197`
+- `CONTEXT-COMPACTION-FORBIDDEN-BUT-UNGATED-S203`
 - `E-116`
 - `E-117`
 - `E-128`
@@ -59,7 +69,6 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 - `GC-IS-INVERTED-S202`
 - `GC-WOULD-DELETE-LIVE-TESTS-S202`
 - `INFERENCE-LEDGER-NO-LIFECYCLE`
-- `MCP-REGISTRATION-SURFACE-S199`
 - `MEASUREMENT-PROVENANCE-S201`
 - `OPERATOR-ONE-NUMBER`
 - `PLAN-FEASIBILITY-GATE`
@@ -71,7 +80,7 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 22, 'P2': 34, 'P3': 30, 'P4': 9, 'P5': 4}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 21, 'P2': 36, 'P3': 30, 'P4': 9, 'P5': 4}.
 
 ## 5. TRAPS (from operating_protocol)
 
