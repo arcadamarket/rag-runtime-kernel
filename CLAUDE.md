@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=2578fe7f8eecba7f...
+> state_hash: stored=bd27b925865d0de2... computed=b566e356b4cde8b7...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -45,12 +45,12 @@ All 57 operating_protocol rules are rendered in full by `session-start`; the lis
 
 | Fact | Value |
 |---|---|
-| git HEAD | cdbbfd1 |
+| git HEAD | e5aebb3 |
 | runtime | see current_status |
-| test gate | 2818  (session S202 @ cdbbfd1) |
+| test gate | 2818  (session S203 @ 4de622d) |
 | written_by_session | S202 |
-| active items | 100 |
-| P1 | 21 |
+| active items | 102 |
+| P1 | 22 |
 | baked assets | 129 |
 | posix shell | C:\Program Files\Git\usr\bin\bash.EXE |
 | tmux transport | wsl:tmux |
@@ -74,13 +74,14 @@ All 57 operating_protocol rules are rendered in full by `session-start`; the lis
 - `PLAN-FEASIBILITY-GATE`
 - `PROBE-DEFINES-ITS-OWN-PROTOCOL-S201`
 - `RESOLVE-EVIDENCE-GATE-NOT-ENFORCED-S202`
+- `RULE-ORPHANS-31-OF-57-S203`
 - `SEAL-NOT-INVALIDATED-BY-LATER-WRITES-S201`
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `SESSION-END-RESUME-HANDOFF`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 21, 'P2': 36, 'P3': 30, 'P4': 9, 'P5': 4}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 22, 'P2': 37, 'P3': 30, 'P4': 9, 'P5': 4}.
 
 ## 5. TRAPS (from operating_protocol)
 
