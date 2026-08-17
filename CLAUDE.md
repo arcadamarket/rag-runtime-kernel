@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=b4332a11c62b443d...
+> state_hash: stored=bd27b925865d0de2... computed=a2ac59dc88f9d8b5...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -46,19 +46,19 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 - role: AI/ML Engineer - LLM pipelines, RAG architectures, context optimization, token efficiency, agent orchestration
 - role: Senior CS Specialist - Deterministic state machines, DAG execution, atomic writes, WAL, crash recovery, formal transition guards
 
-All 57 operating_protocol rules are rendered in full by `session-start`; the list above is only the boot-critical subset.
+All 58 operating_protocol rules are rendered in full by `session-start`; the list above is only the boot-critical subset.
 
 ## 2. STATE (read from the RAG, measured where stated)
 
 | Fact | Value |
 |---|---|
-| git HEAD | ef37ddc |
+| git HEAD | aedc861 |
 | runtime | see current_status |
-| test gate | 2818  (session S203 @ ef37ddc) |
+| test gate | 2818  (session S204 @ aedc861) |
 | written_by_session | S203 |
-| active items | 103 |
-| P1 | 22 |
-| baked assets | 129 |
+| active items | 104 |
+| P1 | 23 |
+| baked assets | 132 |
 | posix shell | C:\Program Files\Git\usr\bin\bash.EXE |
 | tmux transport | wsl:tmux |
 | TLC jar | C:\Users\pakhol\Desktop\GitHub Project (RAG Runtime Kernel)\toolchain\tla2tools.jar |
@@ -79,6 +79,7 @@ All 57 operating_protocol rules are rendered in full by `session-start`; the lis
 - `MEASUREMENT-PROVENANCE-S201`
 - `OPERATOR-ONE-NUMBER`
 - `PLAN-FEASIBILITY-GATE`
+- `POLICY-LIVES-IN-CODE-NOT-IN-THE-RAG-S204`
 - `PROBE-DEFINES-ITS-OWN-PROTOCOL-S201`
 - `RESOLVE-EVIDENCE-GATE-NOT-ENFORCED-S202`
 - `RULE-ORPHANS-31-OF-57-S203`
@@ -88,7 +89,7 @@ All 57 operating_protocol rules are rendered in full by `session-start`; the lis
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 22, 'P2': 38, 'P3': 30, 'P4': 9, 'P5': 4}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 23, 'P2': 38, 'P3': 30, 'P4': 9, 'P5': 4}.
 
 ## 5. TRAPS (from operating_protocol)
 
