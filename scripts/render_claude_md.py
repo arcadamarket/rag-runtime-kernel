@@ -190,7 +190,11 @@ def render() -> str:
                      "token_economy", "reuse_registry_guard", "strict_obey",
                      "retro_clarity", "context_window_management",
                      "increment_status_honesty", "root_hygiene",
-                     "interval_guards", "session_end_protocol")
+                     "interval_guards", "session_end_protocol",
+                     # Encoded S204. Until then the most-violated clause in the
+                     # project had no key, so this renderer could not emit it and
+                     # pi_coverage_check reported PI-7 as a permanent gap.
+                     "no_polling")
     missing_rules = [k for k in BOOT_CRITICAL if not str(op.get(k) or "").strip()]
     # SUBSTANCE, NOT CITATION. S203, caught by the operator against LAST_PI.txt:
     # this emitted v.split('. ')[0], and the first sentence of most rules is a
