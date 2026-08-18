@@ -76,7 +76,7 @@ def test_gate_names_are_stable():
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.6.0"  # S206: +stop-status
+    assert HOOK_GUARD_VERSION == "1.7.0"  # S206: unsealed-session check
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():
@@ -461,3 +461,37 @@ def test_stopping_with_uncommitted_work_says_it_is_at_risk(tmp_path, monkeypatch
 def test_stop_never_refuses():
     """Stop cannot carry a permission decision; a deny here refuses nothing."""
     assert decide("stop-status", {}).allow is True
+
+
+def test_an_unsealed_session_cannot_be_declared_transferable(tmp_path, monkeypatch):
+    """MEASURED S206: the agent announced readiness to transfer without calling
+    session-end. transfer_ready was false in the marker the whole time and no
+    gate compared that field against the claim, because the claim was prose."""
+    root, _ = _mkproject(tmp_path)
+    (root / "RAG" / "RAG_MASTER.json").write_text(
+        '{"session_close": {"session": "S206", "transfer_ready": false}}',
+        encoding="utf-8")
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 0)
+
+    ctx = decide("stop-status", {}, project_root=root).context
+    assert "NOT SEALED" in ctx
+    assert "session-end" in ctx
+
+
+def test_a_sealed_session_is_quiet(tmp_path, monkeypatch):
+    root, _ = _mkproject(tmp_path)
+    (root / "RAG" / "RAG_MASTER.json").write_text(
+        '{"session_close": {"session": "S206", "transfer_ready": true}}',
+        encoding="utf-8")
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 0)
+
+    assert decide("stop-status", {}, project_root=root).context == ""
+
+
+def test_rule_45_is_delivered_by_a_refused_boot():
+    """The rule every deliverable is measured against was ORPHAN and absent from
+    the boot-critical set, so a refused boot delivered every rule about HOW to
+    work and not the one about WHAT the agent is."""
+    from rag_kernel.__main__ import BOOT_CRITICAL_RULES
+
+    assert "agent_role_boundary" in BOOT_CRITICAL_RULES

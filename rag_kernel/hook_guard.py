@@ -75,7 +75,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.6.0"  # S206: +stop-status (Stop)
+HOOK_GUARD_VERSION = "1.7.0"  # S206: stop-status sees an unsealed session
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -944,6 +944,33 @@ def _inflight_jobs(rag_dir: Path) -> list[str]:
     return out
 
 
+def _unsealed_session(rag_dir: Path) -> Optional[str]:
+    """The session id that is open and NOT sealed, or None.
+
+    MEASURED S206: the agent announced "ready to transfer" without ever calling
+    session-end. Nothing objected, and nothing COULD: the claim was prose in a
+    chat window while ``transfer_ready`` sat false in the close marker, and no
+    gate compared the two. The whole close ritual is mechanised inside the verb,
+    but the decision to invoke the verb was left to the agent -- which is the
+    Rule 45 failure in its purest form, one layer above the ritual it protects.
+
+    Reads the marker only; never writes, never seals, never guesses.
+    """
+    try:
+        import json as _json
+        with open(rag_dir / "RAG_MASTER.json", "r", encoding="utf-8-sig") as fh:
+            hot = _json.load(fh)
+    except (OSError, ValueError):
+        return None
+    marker = hot.get("session_close")
+    if not isinstance(marker, dict):
+        return None
+    if marker.get("transfer_ready") is True:
+        return None
+    sid = marker.get("session")
+    return str(sid) if sid else None
+
+
 def _gate_stop_status(event: dict, *, project_root: Optional[Path] = None,
                       **_: Any) -> Decision:
     """At a turn boundary, refuse a SILENT stop while state is at risk.
@@ -982,10 +1009,17 @@ def _gate_stop_status(event: dict, *, project_root: Optional[Path] = None,
 
     n = _uncommitted_count(repo) if repo is not None else None
     jobs = _inflight_jobs(rag_dir)
-    if not jobs and not n:
+    unsealed = _unsealed_session(rag_dir)
+    if not jobs and not n and not unsealed:
         return Decision("stop-status", True)
 
     bits = []
+    if unsealed:
+        bits.append(
+            f"session {unsealed} is OPEN and NOT SEALED (transfer_ready=false) — "
+            "you may not declare readiness to transfer; the close is a VERB, "
+            "`rag_kernel session-end`, not a statement in chat"
+        )
     if n:
         bits.append(f"{n} uncommitted change(s) in the kernel worktree — AT RISK")
     if jobs:

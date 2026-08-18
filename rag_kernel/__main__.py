@@ -4182,6 +4182,15 @@ BOOT_CRITICAL_RULES = (
     # agent that does not receive this rule at boot will do the wrong thing while
     # following the only instruction it has.
     "scratch_storage",
+    # Rule 45. The operator calls it the rule that stands above the others, and
+    # the S206 gate census found it ORPHAN -- referenced by no code at all -- and
+    # absent from this very tuple. A refused boot therefore delivered every rule
+    # about HOW to work and not the one about WHAT the agent is: orchestrator,
+    # task assignor, validator, decision-maker, and nothing else. That rule is
+    # the test every other deliverable is measured against ("could a tired or
+    # freshly transferred agent get this wrong with nothing refusing?"), so an
+    # agent that boots without it cannot apply the standard it is judged by.
+    "agent_role_boundary",
 )
 
 _COLD_BOOT_RULE_CHARS = 1200
