@@ -5308,6 +5308,43 @@ def _close_order_prepare(
     for ln in (t.stdout or "").splitlines()[-3:]:
         if ln.strip():
             print(f"      {ln.strip()}")
+
+    # (d) GRAND AUDIT (GRAND-AUDIT-NOT-IN-THE-CLOSE-S206). The close performed
+    # claim-reconciliation, checkpoint, the ERROR_LOG fold, the interval guards,
+    # FORENSICS-AS-GATE and drift_audit -- and never this. session-start wires
+    # only AXIS 1; every remaining axis ran when a human remembered, which is to
+    # say six consecutive sessions sealed without it. It is owned here, beside
+    # the ordering, because both answer the same question: a step whose
+    # invocation is a judgement call is not part of the ritual, it is an
+    # intention about the ritual.
+    grand = rag_dir / "scripts" / "grand_audit.py"
+    if not grand.is_file():
+        # Absence is a REFUSAL, never a skip. The audit was missing from the
+        # deployed tree for its whole life precisely because nothing looked.
+        print(
+            f"ERROR: close-order grand audit MISSING at {grand}; nothing banked. "
+            "It exists in the kernel worktree under scripts/ -- deploy it. A "
+            "mandatory audit that is unreachable from the tree the kernel runs "
+            "from is the defect GRAND-AUDIT-NOT-IN-THE-CLOSE-S206 records.",
+            file=sys.stderr,
+        )
+        return 1
+    g = subprocess.run([sys.executable, str(grand)], cwd=str(rag_dir),
+                       capture_output=True, text=True)
+    if g.returncode != 0:
+        print(
+            "ERROR: close-order GRAND AUDIT FAILED; nothing banked.\n"
+            + (g.stdout or g.stderr or "").strip()[-1500:]
+            + "\n  Repair the failing axis, or re-run the close with "
+              "--no-auto-close-order and say in the handoff which axis was "
+              "accepted red and why.",
+            file=sys.stderr,
+        )
+        return 1
+    print("  (d) grand audit: PASS")
+    for ln in (g.stdout or "").splitlines()[-3:]:
+        if ln.strip():
+            print(f"      {ln.strip()}")
     return 0
 
 
