@@ -345,6 +345,13 @@ def build_parser() -> argparse.ArgumentParser:
     send_parser.add_argument("--status", type=str, default=None, help="New state_machine_status value")
     send_parser.add_argument("--strict", action="store_true", help="Treat audit warnings as failures too")
     send_parser.add_argument(
+        "--no-auto-close-order", action="store_true",
+        help="Skip STEP 0 (render CLAUDE.md -> commit -> measure) and own the "
+             "close order yourself. UNSAFE: that order is what keeps a seal "
+             "true, and it has failed twice under agent discipline "
+             "(SEAL-ORDER-IN-AGENT-HANDS-S205).",
+    )
+    send_parser.add_argument(
         "--git-head", type=str, default=None,
         help="Expected git HEAD for the audit freshness check (default: auto-detect)",
     )
@@ -436,6 +443,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Detect and resume an interrupted (transfer_ready=false) session close.",
     )
     sresume_parser.add_argument("--rag", type=Path, required=True, help="Path to RAG_MASTER.json")
+    sresume_parser.add_argument(
+        "--no-auto-close-order", action="store_true",
+        help="Skip STEP 0 (render CLAUDE.md -> commit -> measure) and own the "
+             "close order yourself. UNSAFE: that order is what keeps a seal "
+             "true, and it has failed twice under agent discipline "
+             "(SEAL-ORDER-IN-AGENT-HANDS-S205).",
+    )
     sresume_parser.add_argument(
         "--session", type=str, default=None,
         help="Session ID to resume (default: read from the session_close marker).",
@@ -5195,6 +5209,99 @@ def _write_close_report_artifact(rag_dir: Path, sid: str, report_text: str) -> P
     return path
 
 
+def _close_order_prepare(
+    rag_path: Path, rag_dir: Path, sid: str,
+    report_args: "argparse.Namespace | None",
+) -> int:
+    """STEP 0 of the close: render, commit, THEN measure. Returns 0, or 1 to abort.
+
+    SEAL-ORDER-IN-AGENT-HANDS-S205. The seal already REFUSES a stale test gate
+    (CLOSE-TESTGATE-STALE-BLOCKS) and a dirty worktree (interval_guards), so the
+    failure was never that the gates were missing -- it was that recovering from
+    them put the agent back in charge of the ORDER, and the order is the thing
+    that keeps failing. S204 sealed, then re-rendered CLAUDE.md and committed,
+    moving HEAD past its own measurement; the next boot refused. S206 repeated it
+    verbatim while fixing it. Two agents, one rule, identical mistake.
+
+    So the kernel does the ordering:
+      (a) render CLAUDE.md from canonical state,
+      (b) commit the worktree if it is dirty,
+      (c) measure the suite -- at the HEAD that now cannot move again.
+
+    Each step is skippable only by declaration (``--no-auto-close-order``), and
+    each failure ABORTS before anything is banked, because a half-ordered close
+    is the state this exists to prevent.
+    """
+    if getattr(report_args, "no_auto_close_order", False):
+        print("[0/4] Close order: SKIPPED (--no-auto-close-order; you own the order).")
+        return 0
+
+    import subprocess
+
+    repo = _guess_repo_root(Path(rag_dir))
+    if repo is None:
+        print("[0/4] Close order: no kernel repo resolved — nothing to order.")
+        return 0
+    repo = Path(repo)
+    print("[0/4] Close order (render -> commit -> measure), so no agent owns it:")
+
+    # (a) RENDER. The boot document is derived state; rendering it after the
+    #     commit is what churned the seal in S203/S205.
+    renderer = rag_dir / "scripts" / "render_claude_md.py"
+    if renderer.is_file():
+        r = subprocess.run([sys.executable, str(renderer)], cwd=str(rag_dir),
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print("ERROR: close-order render FAILED; nothing banked.\n"
+                  + (r.stderr or r.stdout or "").strip()[:800], file=sys.stderr)
+            return 1
+        print("  (a) CLAUDE.md rendered from canonical state.")
+    else:
+        print(f"  (a) render skipped — no renderer at {renderer}.")
+
+    # (b) COMMIT. After this the HEAD the measurement names cannot move.
+    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=str(repo),
+                           capture_output=True, text=True)
+    n = len([ln for ln in (dirty.stdout or "").splitlines() if ln.strip()])
+    if n:
+        msg_path = rag_dir / ".boot" / f"close_commit_{sid}.txt"
+        msg_path.parent.mkdir(parents=True, exist_ok=True)
+        if not msg_path.is_file():
+            msg_path.write_text(
+                f"{sid}: close-order commit ({n} path(s))\n\n"
+                "Written by session-end STEP 0 (SEAL-ORDER-IN-AGENT-HANDS-S205).\n"
+                "The close renders, commits, and only THEN measures, so the test\n"
+                "gate can never name a HEAD the seal has already moved past.\n"
+                "Replace this file before the close to author the message yourself.\n",
+                encoding="utf-8",
+            )
+        subprocess.run(["git", "add", "-A"], cwd=str(repo),
+                       capture_output=True, text=True)
+        c = subprocess.run(["git", "commit", "-F", str(msg_path)], cwd=str(repo),
+                           capture_output=True, text=True)
+        if c.returncode != 0:
+            print("ERROR: close-order commit FAILED; nothing banked.\n"
+                  + (c.stderr or c.stdout or "").strip()[:800], file=sys.stderr)
+            return 1
+        print(f"  (b) committed {n} dirty path(s) BEFORE measuring.")
+    else:
+        print("  (b) worktree already clean — nothing to commit.")
+
+    # (c) MEASURE, last, at the frozen HEAD.
+    t = subprocess.run([sys.executable, "-m", "rag_kernel", "tests", "--run",
+                        "--session", sid], cwd=str(rag_dir),
+                       capture_output=True, text=True)
+    if t.returncode != 0:
+        print("ERROR: close-order test measurement FAILED; nothing banked.\n"
+              + (t.stdout or t.stderr or "").strip()[-800:], file=sys.stderr)
+        return 1
+    print("  (c) suite measured at the frozen HEAD:")
+    for ln in (t.stdout or "").splitlines()[-3:]:
+        if ln.strip():
+            print(f"      {ln.strip()}")
+    return 0
+
+
 def _drive_close(
     rag_path: Path, rag_dir: Path, sid: str, *, summary: "str | None",
     tasks, status, strict: bool, git_head: "str | None",
@@ -5247,6 +5354,14 @@ def _drive_close(
                   "number is deliberately about something else (say which, in the "
                   "handoff). Nothing has been banked.", file=sys.stderr)
             return 1
+
+    # Step 0/4 — THE ORDER ITSELF (SEAL-ORDER-IN-AGENT-HANDS-S205). Render,
+    # commit, then measure, performed by the kernel so no agent can order it
+    # wrongly. Runs before anything is banked; a failure here aborts clean.
+    if not steps.get("checkpoint"):
+        _rc0 = _close_order_prepare(rag_path, rag_dir, sid, report_args)
+        if _rc0:
+            return _rc0
 
     # Step 1/4 — checkpoint (+ idempotent ERROR_LOG fold).
     if not steps.get("checkpoint"):
