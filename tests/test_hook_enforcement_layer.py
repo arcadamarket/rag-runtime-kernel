@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from rag_kernel import hook_guard
 from rag_kernel.hook_guard import (
     CANONICAL_FILES,
     GATES,
@@ -74,7 +75,7 @@ def test_gate_names_are_stable():
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.4.0"  # S206: +tmux-heredoc
+    assert HOOK_GUARD_VERSION == "1.5.0"  # S206: +uncommitted counter
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():
@@ -363,3 +364,44 @@ def test_the_gate_does_not_mediate_other_transports():
     assert decide("tmux-heredoc",
                   {"tool_name": "PowerShell",
                    "tool_input": {"command": "x <<EOF\ny\nEOF"}}).allow
+
+
+# --------------------------------------------------------------------------- #
+# UNCOMMITTED-WORK-HAS-NO-GATE-S206
+# --------------------------------------------------------------------------- #
+
+def test_uncommitted_context_is_silent_below_the_threshold(monkeypatch):
+    """Two edits in flight is a working set, not a warning. A gate that fires on
+    normal work is a gate that gets tuned out."""
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 2)
+
+    assert hook_guard._uncommitted_context(Path("/wt"), Path("/wt/RAG")) == ""
+
+
+def test_uncommitted_context_warns_at_the_threshold(monkeypatch):
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 3)
+
+    out = hook_guard._uncommitted_context(Path("/wt"), Path("/wt/RAG"))
+    assert "3 uncommitted change(s)" in out
+    assert "E-109/E-123" in out
+    assert "git add -A" not in out, "the command is reserved for the loud tier"
+
+
+def test_uncommitted_context_names_the_exact_command_when_loud(monkeypatch):
+    """Past the loud threshold it stops describing and starts instructing —
+    Rule 43: an instruction the reader cannot execute is a wall."""
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 11)
+
+    out = hook_guard._uncommitted_context(Path("/wt"), Path("/wt/RAG"))
+    assert "git add -A && git commit -F" in out
+    assert "commit_msg.txt" in out
+    # and it must not send the reader into the transport that hangs
+    assert "TMUX-HEREDOC-HANGS-THE-SHELL-S206" in out
+
+
+def test_unmeasurable_git_is_silent_not_reported_clean(monkeypatch):
+    """SELF-CERTIFYING-EVIDENCE-GATE-S201: a probe that cannot measure must not
+    report success. None is not zero."""
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: None)
+
+    assert hook_guard._uncommitted_context(Path("/wt"), Path("/wt/RAG")) == ""

@@ -66,6 +66,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -74,7 +75,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.4.0"  # S206: +tmux-heredoc (PreToolUse)
+HOOK_GUARD_VERSION = "1.5.0"  # S206: +uncommitted-work counter
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -593,6 +594,57 @@ def _gate_canonical_read(event: dict, **_: Any) -> Decision:
     )
 
 
+#: UNCOMMITTED-WORK-HAS-NO-GATE-S206. Silent below WARN, warns from WARN, and
+#: from LOUD it stops describing the problem and prints the command. The numbers
+#: are the operator's: three edits is a working set, eleven is a session's work
+#: standing on one power cut.
+_UNCOMMITTED_WARN = 3
+_UNCOMMITTED_LOUD = 10
+
+
+def _uncommitted_count(worktree: Path) -> Optional[int]:
+    """Number of dirty paths in ``worktree``. None when git cannot answer.
+
+    None is NOT zero and must never be rendered as "clean": an unanswerable
+    probe is the SELF-CERTIFYING-EVIDENCE-GATE-S201 shape, where a check that
+    cannot measure reports success. The caller stays silent instead.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=str(worktree),
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return len([ln for ln in r.stdout.splitlines() if ln.strip()])
+
+
+def _uncommitted_context(worktree: Path, rag_dir: Optional[Path]) -> str:
+    """The at-the-edit nag, or '' while the working set is still small."""
+    n = _uncommitted_count(worktree)
+    if n is None or n < _UNCOMMITTED_WARN:
+        return ""
+    msg_path = (rag_dir / ".boot" / "commit_msg.txt") if rag_dir else Path(".boot/commit_msg.txt")
+    head = (
+        f"UNCOMMITTED-WORK: {n} uncommitted change(s) in the kernel worktree. "
+        "Work that is not committed does not survive a client restart, and this "
+        "session's own predecessor lost a transfer to exactly that "
+        "(E-109/E-123)."
+    )
+    if n <= _UNCOMMITTED_LOUD:
+        return head + " Commit at a natural boundary rather than at the seal."
+    return (
+        head + " THIS IS PAST THE POINT WHERE IT IS A PREFERENCE. Write the "
+        f"message to a file, then run, in ONE tmux command:\n"
+        f'  cd "{worktree}" && git add -A && git commit -F "{msg_path}"\n'
+        "The message goes through a FILE, never a heredoc: tmux-mcp appends its "
+        "completion echo to the delimiter line and the shell hangs "
+        "(TMUX-HEREDOC-HANGS-THE-SHELL-S206)."
+    )
+
+
 def _gate_deploy_parity(event: dict, *, project_root: Optional[Path] = None,
                         **_: Any) -> Decision:
     """Report deployed-vs-committed kernel drift at the edit, not at the seal.
@@ -607,23 +659,39 @@ def _gate_deploy_parity(event: dict, *, project_root: Optional[Path] = None,
     if not _KERNEL_SOURCE.search(target):
         return Decision("deploy-parity", True)
     twin = _deployed_twin(Path(target), project_root)
+
+    # UNCOMMITTED-WORK-HAS-NO-GATE-S206. Counted on EVERY kernel-source edit,
+    # not only when parity is broken: an agent that re-deploys diligently and
+    # never commits is the exact case that lost a transfer, and it would sail
+    # past a check folded into the parity-failure branch.
+    wt = Path(target).resolve()
+    for parent in wt.parents:
+        if (parent / ".git").exists():
+            wt = parent
+            break
+    else:
+        wt = None
+    rag_dir = None
+    if twin is not None and "RAG" in twin.parts:
+        rag_dir = Path(*twin.parts[: twin.parts.index("RAG") + 1])
+    nag = _uncommitted_context(wt, rag_dir) if wt is not None else ""
+
     if twin is None:
-        return Decision("deploy-parity", True)
+        return Decision("deploy-parity", True, context=nag)
     try:
         same = twin.read_bytes() == Path(target).read_bytes()
     except OSError:
-        return Decision("deploy-parity", True)
+        return Decision("deploy-parity", True, context=nag)
     if same:
-        return Decision("deploy-parity", True)
-    return Decision(
-        "deploy-parity", True,
-        context=(
-            f"DEPLOY-PARITY: {os.path.basename(target)} now differs from the "
-            f"deployed copy at {twin}. The kernel you are RUNNING is not the "
-            f"kernel you just edited — re-deploy before you measure anything "
-            f"against it, or the measurement describes the old build."
-        ),
+        return Decision("deploy-parity", True, context=nag)
+    parity = (
+        f"DEPLOY-PARITY: {os.path.basename(target)} now differs from the "
+        f"deployed copy at {twin}. The kernel you are RUNNING is not the "
+        f"kernel you just edited — re-deploy before you measure anything "
+        f"against it, or the measurement describes the old build."
     )
+    return Decision("deploy-parity", True,
+                    context=parity + (("\n" + nag) if nag else ""))
 
 
 def _deployed_twin(edited: Path, project_root: Optional[Path]) -> Optional[Path]:
