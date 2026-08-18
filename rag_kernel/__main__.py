@@ -5460,6 +5460,44 @@ def _drive_close(
                 rag_path, _build_close_marker(sid, "CHECKPOINTED", steps, started, None)
             )
 
+        # SESSION-END-RESUME-HANDOFF (P1, closed S207). The stated handoff is
+        # persisted by exactly ONE code path -- cmd_checkpoint in step 1/4 -- and
+        # that step is skipped here as "already banked". So a close RESUMED with a
+        # changed (or previously unstated) --handoff had nowhere to write it, while
+        # step 1b below went on comparing the stated text against the STALE stored
+        # directive. That is not a strict gate, it is an unbreakable one: no number
+        # of retries could satisfy it, and it is what left S206 unsealable until a
+        # successor read the source. Same shape as CLOSE-RESUME-CAN-BANK-ERRLOG
+        # directly above -- the resume path was taught to re-bank one field and not
+        # its sibling. Re-bank idempotently HERE, then let step 1b verify that the
+        # write actually landed: the gate keeps its teeth and stops policing a
+        # condition no code path could reach. error_log_entry is deliberately None
+        # so this cannot double-fold an entry already banked above.
+        if isinstance(handoff, str) and handoff.strip():
+            from rag_kernel.schemas import directive_matches as _dm_resume
+            try:
+                with open(rag_path, "r", encoding="utf-8-sig") as _f:
+                    _cur_nsd = json.load(_f).get("next_session_directive")
+            except (OSError, ValueError):
+                _cur_nsd = None
+            _cur_txt = _cur_nsd.get("directive") if isinstance(_cur_nsd, dict) else None
+            if not _dm_resume(handoff, _cur_txt):
+                print("[1b] handoff: stated directive is NOT the persisted one — "
+                      "re-banking it on resume (SESSION-END-RESUME-HANDOFF).")
+                rc = cmd_checkpoint(argparse.Namespace(
+                    rag=rag_path, session=sid, summary=summary, tasks=tasks,
+                    status=status, dry_run=False, error_log_entry=None,
+                    error_log_id=None, error_log_path=error_log_path,
+                    handoff=handoff,
+                ))
+                if rc != 0:
+                    print(
+                        "ERROR: could not persist the stated handoff on resume — "
+                        "aborting close (marker CHECKPOINTED, resumable).",
+                        file=sys.stderr,
+                    )
+                    return rc
+
     # Step 1b — KA-INTENT-FIDELITY inc1 SEAL GATE. If this close STATED a handoff,
     # refuse to advance toward transfer_ready unless it was persisted VERBATIM as
     # the structured next_session_directive. An independent re-read + normalized-

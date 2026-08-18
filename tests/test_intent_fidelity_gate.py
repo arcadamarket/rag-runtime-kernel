@@ -88,7 +88,17 @@ def test_checkpoint_dry_run_persists_nothing(tmp_path):
 
 # --- session-end seal gate ----------------------------------------------------
 
-def test_close_refuses_when_directive_mismatches(tmp_path):
+# SESSION-END-RESUME-HANDOFF (S207). These two cases used to assert a REFUSAL on
+# the resume path, and that assertion encoded the defect rather than the contract:
+# the handoff is persisted by exactly one code path (cmd_checkpoint in step 1/4),
+# which a resumed close skips as "already banked", so a handoff revised after a
+# failed first attempt had nowhere to land while the gate kept comparing it to the
+# stale stored text. No number of retries could satisfy that — it is what left S206
+# unsealable. The contract is now: on resume the stated handoff is RE-BANKED, and
+# the gate then verifies the write landed. Teeth are preserved and proved by
+# test_close_still_refuses_when_rebank_does_not_land below.
+
+def test_close_rebanks_revised_handoff_on_resume(tmp_path):
     p = tmp_path / "RAG_MASTER.json"
     rag = _minimal_rag("S1")
     rag["next_session_directive"] = {
@@ -96,22 +106,44 @@ def test_close_refuses_when_directive_mismatches(tmp_path):
     }
     rag["session_close"] = _checkpointed_marker("S1")
     _write(p, rag)
-    rc = main([
+    revised = "REVISED stated directive"
+    main([
         "session-end", "--rag", str(p), "--session", "S1",
-        "--summary", "x", "--handoff", "DIFFERENT stated directive", "--no-report",
+        "--summary", "x", "--handoff", revised, "--no-report",
     ])
-    assert rc == 1
-    # transfer_ready must NOT have flipped — the seal was refused.
-    assert _load(p)["session_close"]["transfer_ready"] is False
+    nsd = _load(p).get("next_session_directive")
+    assert isinstance(nsd, dict)
+    assert nsd["directive"] == revised   # re-banked VERBATIM, not left stale
 
 
-def test_close_refuses_when_directive_absent(tmp_path):
-    # The exact S146 scenario: a handoff is STATED but nothing persisted it.
+def test_close_persists_absent_directive_on_resume(tmp_path):
+    # The S146 scenario, resumed: a handoff is STATED and nothing had persisted it.
+    # Persisting it serves S146's intent (the successor actually receives the
+    # directive) strictly better than refusing and carrying nothing forward.
     p = tmp_path / "RAG_MASTER.json"
     rag = _minimal_rag("S1")
     rag["session_close"] = _checkpointed_marker("S1")
     _write(p, rag)
-    rc = main([
+    main([
+        "session-end", "--rag", str(p), "--session", "S1",
+        "--summary", "x", "--handoff", "carry this forward", "--no-report",
+    ])
+    nsd = _load(p).get("next_session_directive")
+    assert isinstance(nsd, dict)
+    assert nsd["directive"] == "carry this forward"
+
+
+def test_close_still_refuses_when_rebank_does_not_land(tmp_path, monkeypatch):
+    # The gate keeps its teeth. With persistence neutered, the re-bank reports
+    # success but banks nothing, and step 1b must still refuse the seal — this is
+    # the "persisted lossily / not at all" half of E-055 that survives the fix.
+    import rag_kernel.__main__ as m
+    p = tmp_path / "RAG_MASTER.json"
+    rag = _minimal_rag("S1")
+    rag["session_close"] = _checkpointed_marker("S1")
+    _write(p, rag)
+    monkeypatch.setattr(m, "cmd_checkpoint", lambda ns: 0)  # banks nothing
+    rc = m.main([
         "session-end", "--rag", str(p), "--session", "S1",
         "--summary", "x", "--handoff", "carry this forward", "--no-report",
     ])
