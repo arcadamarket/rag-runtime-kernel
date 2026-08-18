@@ -245,7 +245,10 @@ def test_every_gate_declares_the_event_it_answers():
 def test_only_pretooluse_gates_can_refuse():
     refusing = {g for g in GATES if hook_guard._EVENT_FOR_GATE[g] == "PreToolUse"}
 
-    assert refusing == {"poll", "sandbox-state", "canonical-read", "transport"}
+    assert refusing == {
+        "poll", "sandbox-state", "canonical-read", "transport",
+        "unbounded-wait",  # S206 — refuses at the boundary, so PreToolUse
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +262,11 @@ def test_the_layer_holds_only_boundary_gates():
     HOOK-TO-VERB-MIGRATION."""
     assert set(GATES) == {
         "poll", "sandbox-state", "canonical-read", "transport",
+        # S206. The growth answers the question this docstring demands: the
+        # unbounded wait is a shell loop typed into the Bash tool. It never
+        # becomes a kernel verb, so `wait-for` — the thing that would refuse it —
+        # is never called. Only a boundary gate can see it at all.
+        "unbounded-wait",
         "deploy-parity", "post-transport-audit",
     }
 

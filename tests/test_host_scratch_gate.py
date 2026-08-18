@@ -15,7 +15,10 @@ creates every session, is a gate that gets switched off:
   * the slug is the harness's own (abs path, non-alphanumerics -> '-');
   * an EMPTY scratchpad is clean — the harness makes it, the agent fills it;
   * another project's scratch tree is never read and never reported;
-  * a file in the scratchpad is an ERROR carrying an executable remediation;
+  * SEVERITY FOLLOWS WHO CAN ACT (S206 operator ruling): a dead session's
+    leftovers are ONE WARNING per directory, because the agent may not delete
+    outside root_project and the host recreates that tree every session — an
+    ERROR there deadlocks both the seal and the next boot, permanently;
   * the roots are manifest-overridable and additive, never replacing the defaults;
   * the scan is bounded and survives an unreadable directory.
 """
@@ -28,6 +31,7 @@ from pathlib import Path
 from rag_kernel import drift_audit
 from rag_kernel.drift_audit import (
     ERROR,
+    WARNING,
     check_host_scratch_storage,
     find_host_scratch_files,
     host_scratch_roots,
@@ -108,18 +112,63 @@ def test_files_outside_the_scratchpad_leaf_are_not_reported(tmp_path):
 # bite
 # ---------------------------------------------------------------------------
 
-def test_a_file_in_the_scratchpad_is_an_error(tmp_path):
+def test_a_foreign_scratchpad_is_one_warning_per_directory_not_per_file(tmp_path):
+    """S206 operator ruling: SEVERITY FOLLOWS WHO CAN ACT.
+
+    One ERROR per file bricked the project — 20 leftover files in a DEAD host
+    session produced 33 audit errors; session_end_protocol aborts the seal on a
+    dirty audit and the carry-forward gate refuses the next boot, so the project
+    could be neither opened nor closed until a human deleted files the agent is
+    barred from touching. The host recreates that tree every session, so the
+    deadlock was permanent. A guard only a human can clear is the manual rescue
+    Rule 45 exists to abolish.
+    """
     project = tmp_path / "proj"
     project.mkdir()
     base = tmp_path / "hosttmp"
-    (_make_pad(base, project) / "boot.txt").write_text("x", encoding="utf-8")
+    pad = _make_pad(base, project)
+    for name in ("boot.txt", "git.txt", "census.txt"):
+        (pad / name).write_text("x", encoding="utf-8")
 
     findings = check_host_scratch_storage(project, _hot(base))
-    assert len(findings) == 1
+    assert len(findings) == 1, "three files must collapse into ONE directory finding"
     f = findings[0]
     assert f.check == "host_scratch_storage"
-    assert f.severity == ERROR
-    assert "boot.txt" in f.detail
+    assert f.severity == WARNING, "the seal must not be hostage to a human-only fix"
+    assert "3 leftover project file(s)" in f.detail
+    assert str(pad) in f.detail
+
+
+def test_error_branch_is_currently_unreachable_and_says_so(tmp_path):
+    """HOST-SCRATCH-ERROR-BRANCH-IS-DEAD-S206, pinned so it cannot be forgotten.
+
+    The ERROR half keys off meta.host_session_id. MEASURED S206: that key is
+    absent from the RAG and NO code path writes it, so the branch never fires and
+    every finding is a WARNING. This test fails the day someone starts setting
+    the key — which is exactly when the branch stops being dead and the claim in
+    the docstring must be re-read.
+    """
+    project = tmp_path / "proj"
+    project.mkdir()
+    base = tmp_path / "hosttmp"
+    (_make_pad(base, project, "sess-1") / "boot.txt").write_text("x", encoding="utf-8")
+
+    # no host_session_id declared -> everything is foreign -> WARNING only
+    findings = check_host_scratch_storage(project, _hot(base))
+    assert [f.severity for f in findings] == [WARNING]
+
+    # declared and matching -> the ERROR branch is reachable in principle
+    hot = _hot(base)
+    hot["meta"]["host_session_id"] = "sess-1"
+    findings = check_host_scratch_storage(project, hot)
+    assert ERROR in [f.severity for f in findings]
+
+
+def test_clause_survives_hot_none(tmp_path):
+    """An auditor that raises is an auditor that gets switched off."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    assert check_host_scratch_storage(project, None) == []
 
 
 def test_finding_carries_an_executable_operator_remediation(tmp_path):
@@ -174,6 +223,64 @@ def test_declared_roots_are_additive_not_replacing(tmp_path):
     default = host_scratch_roots({})
     assert tmp_path in declared
     assert len(declared) > len(default) or set(default).issubset(set(declared))
+
+
+def test_wsl_root_also_yields_the_windows_slug_the_harness_actually_uses():
+    """THE SECOND MISSING REGRESSION. Same root cause as the one below, other half.
+
+    The harness slugs the WINDOWS path. Under WSL the kernel sees the project as
+    /mnt/c/..., whose slug is '-mnt-c-Users-...' and matches no directory that
+    exists. Measured S206: 22 real files, 0 findings, twice.
+    """
+    slugs = drift_audit.host_scratch_slugs(
+        "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)"
+    )
+    assert "C--Users-pakhol-Desktop-GitHub-Project--RAG-Runtime-Kernel-" in slugs, slugs
+
+
+def test_windows_form_translation():
+    assert drift_audit._windows_form("/mnt/c/Users/x/p") == r"C:\Users\x\p"
+    assert drift_audit._windows_form("/mnt/d/a/b") == r"D:\a\b"
+    assert drift_audit._windows_form("/home/x/p") is None
+    assert drift_audit._windows_form(r"C:\already\windows") is None
+
+
+def test_native_windows_root_yields_exactly_one_slug():
+    slugs = drift_audit.host_scratch_slugs(r"C:\Users\pakhol\Desktop\proj")
+    assert len(slugs) == 1
+
+
+def test_windows_profile_temp_is_derived_from_the_root_under_wsl():
+    """THE REGRESSION THAT WAS MISSING, and it cost a shipped-blind gate.
+
+    MEASURED S206: the first cut of this clause reported 0 findings over 22 real
+    files. The audit runs under WSL python, where gettempdir() is /tmp and
+    LOCALAPPDATA is unset, so no env-derived default can ever name the Windows
+    host scratchpad. Every test above passed because each one injected its root
+    through meta.host_scratch_roots — so the DEFAULT resolution, the thing that
+    actually runs in production, was never exercised once.
+
+    The derivation must take its path space from the project root itself.
+    """
+    wsl_root = "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)"
+    roots = [str(p).replace("\\", "/") for p in host_scratch_roots({}, wsl_root)]
+    assert any(
+        r.endswith("/mnt/c/Users/pakhol/AppData/Local/Temp")
+        or r == "/mnt/c/Users/pakhol/AppData/Local/Temp"
+        for r in roots
+    ), f"the Windows profile temp was not derived from the root: {roots}"
+
+
+def test_windows_profile_temp_is_derived_from_a_native_windows_root():
+    roots = [str(p).replace("\\", "/") for p in
+             host_scratch_roots({}, r"C:\Users\pakhol\Desktop\proj")]
+    assert any(r.lower().endswith("users/pakhol/appdata/local/temp") for r in roots)
+
+
+def test_posix_home_root_yields_no_profile_temp_and_does_not_raise():
+    """A /home/<user>/ layout has no Users component; env defaults are correct there."""
+    assert drift_audit._profile_temp_from_root("/home/pakhol/proj") == []
+    assert drift_audit._profile_temp_from_root(None) == []
 
 
 def test_roots_are_deduplicated():

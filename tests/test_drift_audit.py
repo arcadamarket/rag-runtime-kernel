@@ -89,7 +89,7 @@ def _rendered_hot(store):
 # ---------------------------------------------------------------------------
 
 def test_version_and_severities():
-    assert DRIFT_AUDIT_VERSION == "1.17.0"
+    assert DRIFT_AUDIT_VERSION == "1.18.0"  # S206: +check_host_scratch_storage
     assert ERROR == "error" and WARNING == "warning"
 
 

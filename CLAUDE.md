@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=6ee85a3542792083...
+> state_hash: stored=bd27b925865d0de2... computed=496cf0a24c808389...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -41,25 +41,26 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 - **interval_guards** — SEAL AND BOOT ARE MEASURED AT THE INSTANT, NOT THE INTENTION (S192, E-123/E-124/E-125/E-126). Four probes now run as HARD REFUSALS at BOTH ends of a session - step 5 of the boot carry-forward gate, and again as the last act before transfer_ready is written: (1) test gate measured, green, and measured at the LIVE kernel HEAD; (2) no E-number cited in ERROR_LOG.md without a tracked item behind it; (3) kernel worktree free of uncommitted changes; (4) the deployed RAG/rag_kernel/ tree byte-identical to the committed one. All four are ASSERTED state and are NEVER auto-repaired. WHY THIS EXISTS, in the operator's words: when state fails to reach the next session it is either because the agent disregarded a rule the RAG already carried, or because the RAG could not carry the fact at all. E-124 was the first - meta.test_gate held STALE the whole time and nothing on the boot path asked. E-125 and E-126 were the second - three findings lived as prose with no tracked item, and the divergence between the running kernel and the committed kernel had no representation anywhere. THE OPERATIONAL RULE FOR THE AGENT: do not report green from a report you wrote. Run git status, tests --verify and audit BEFORE any claim of done, not after the operator asks. A guard that only prints is a guard that gets ignored; if you find yourself about to say something is clean, run the command that would prove …[truncated — full text renders at session-start]
 - **session_end_protocol** — HARD RULE -- SESSION-END RITUAL, run through the governed `session-end` verb, in order: (1) CLAIM-RECONCILIATION PASS (Rule 11 / INS-018) -- reconcile every published status-claim on the project's declared drift-prone surfaces (meta.reconciliation_surfaces) against its tracked records, and map every newly-resolved record back onto those public surfaces so the public view stays current; the closing audit mechanizes the surfaces it can resolve from the manifest, and this pass covers the un-mechanizable residual (natural-language claims no auditor can fully check). (2) CHECKPOINT -- merge the session summary atomically; the session-id increment persists HERE, not at boot. (3) ERROR_LOG FOLD + LOGGER CLOSE (KA-4 gate). (4) AUDIT, fail-loud. HARDENED (S181, from the S178-S180 gate work): (a) THE SEAL IS A GATE, NOT A CEREMONY -- session-end ABORTS rather than sealing on a red test suite or a dirty audit; this fired twice in S180 and is the difference between a rule and a mechanism. (b) XFER-PRESENT-GATE -- the seal is bound to EMISSION of a canonical-report pointer: a close that produced no verifiable transfer surface is not a close. (c) CLOSE-SEAL-ENFORCE -- an unsealed prior session blocks the next boot, which must run `session-resume` or close the prior id; `--force` requires explicit operator direction. (d) A NARRATED FAILURE THAT IS NOT BANKED IS A LOST FAILURE (Rule 8) -- …[truncated — full text renders at session-start]
 - **no_polling** — Rule 44 (NO-POLLING / DETACHED-RUN DISCIPLINE - encoded S204 via the governed add-rule verb after a live check proved it was NOT a rule at all). Long jobs run DETACHED to a file; block ONCE on a single long wait; NEVER poll a running command (E-081). The sanctioned wait is a verb, not a judgement call: 'rag_kernel wait-for <file> --timeout N --contains <token> --emit 20' blocks server-side and returns the tail in one round-trip. Over MCP the same primitive is rag_wait, but it is capped by the client's own request timeout (~30s, measured S203), so long jobs use the CLI. CHOOSE A DISTINCTIVE SENTINEL TOKEN: S203 used 'D' and wait-for matched the first capital D in the output and returned instantly. THREE SIGNATURES THAT COUNT AS POLLING EVEN WHEN THE TOOL IS 'CORRECT': (1) a second get-command-result against the same command id inside the cooldown; (2) a wait-for that RETURNS IN MILLISECONDS - a blocking wait that returns in half a millisecond did not wait, the sentinel already existed, and S198 did this 39 times out of 65 (WAIT-FOR-USED-AS-A-POLL-S198); (3) any re-query of a job whose completion the agent has not been told about. WHY THIS BECOMES A RULE ONLY AT S204, and it is the whole point: the clause was printed at every boot from a hardcoded [BOOT-FRAME] block in __main__.py and was never a key in operating_protocol. So the most-violated discipline in this project - E-081 …[truncated — full text renders at session-start]
+- **scratch_storage** — Rule 46 (SCRATCH-STORAGE / NO-PROJECT-STATE-OUTSIDE-ROOT — SCRATCH-OUTSIDE-ROOT-S205; encoded S206 via the governed add-rule verb, after S205 measured two consecutive agents violating a directive the RAG had never carried). OPERATOR DIRECTIVE: nothing this project depends on may live outside root_project. PROJECT SCRATCH IS `RAG/.boot/` — absolute path on this host: `C:\Users\pakhol\Desktop\GitHub Project (RAG Runtime Kernel)\RAG\.boot\`, and from WSL `/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG/.boot/`. EVERY temporary file the work produces goes there: detached job output, pytest logs, census output, probe results, rule drafts, anything an agent would otherwise call scratch. THE CLAUDE HOST SCRATCHPAD IS FORBIDDEN. This rule exists precisely because the host system prompt instructs the OPPOSITE, in writing, to every agent that boots: it names `%LOCALAPPDATA%\Temp\claude\<project-slug>\<session-uuid>\scratchpad` as the place for temporary files. That instruction is reasonable for a generic project and wrong HERE, because a file there is invisible to root_hygiene (Rule 20 scans root_project only), uncovered by the boot-map, unreachable by the GC, carried by no backup and no remote, and removed by the host without notice — project state with no governance is the one thing this project exists to prevent. `/tmp` inside WSL is forbidden for the same reason. …[truncated — full text renders at session-start]
 
 **pov_mandate / pov_roles — adopt these as your reasoning stance for EVERY deliverable, not one of them (rendered again in the [BOOT-FRAME] block at session-start):**
 - mandate: {'count': 2, 'mode': 'strict'}
 - role: AI/ML Engineer - LLM pipelines, RAG architectures, context optimization, token efficiency, agent orchestration
 - role: Senior CS Specialist - Deterministic state machines, DAG execution, atomic writes, WAL, crash recovery, formal transition guards
 
-All 59 operating_protocol rules are rendered in full by `session-start`; the list above is only the boot-critical subset.
+All 60 operating_protocol rules are rendered in full by `session-start`; the list above is only the boot-critical subset.
 
 ## 2. STATE (read from the RAG, measured where stated)
 
 | Fact | Value |
 |---|---|
-| git HEAD | f157e38 |
+| git HEAD | 6d6deea |
 | runtime | see current_status |
-| test gate | 2818  (session S205 @ f157e38) |
-| written_by_session | S204 |
-| active items | 111 |
-| P1 | 27 |
-| baked assets | 134 |
+| test gate | 2818  (session S205 @ 6d6deea) |
+| written_by_session | S205 |
+| active items | 113 |
+| P1 | 28 |
+| baked assets | 136 |
 | posix shell | C:\Program Files\Git\usr\bin\bash.EXE |
 | tmux transport | wsl:tmux |
 | TLC jar | C:\Users\pakhol\Desktop\GitHub Project (RAG Runtime Kernel)\toolchain\tla2tools.jar |
@@ -92,9 +93,10 @@ All 59 operating_protocol rules are rendered in full by `session-start`; the lis
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `SESSION-END-RESUME-HANDOFF`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
+- `UNBOUNDED-WAIT-GATE-S206`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 27, 'P2': 40, 'P3': 31, 'P4': 9, 'P5': 4}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 28, 'P2': 40, 'P3': 31, 'P4': 9, 'P5': 4, 'unprioritized': 1}.
 
 ## 5. TRAPS (from operating_protocol)
 

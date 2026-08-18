@@ -74,7 +74,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.1.0"
+HOOK_GUARD_VERSION = "1.2.0"  # S206: +unbounded-wait (PreToolUse)
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:

@@ -76,7 +76,8 @@ also *verifies* that every render still equals the state it persisted.
               "check_render_parity", "check_supersede_refs",
               "check_note_status_contradiction", "check_side_rule_stores",
               "check_context_side_stores", "check_host_scratch_storage",
-              "host_scratch_slug", "host_scratch_roots", "find_host_scratch_files",
+              "host_scratch_slug",
+    "host_scratch_slugs", "host_scratch_roots", "find_host_scratch_files",
               "check_secrets_boundary",
               "check_ledger_consistency", "check_record_coverage",
               "check_repo_claim_reconciliation", "check_current_status_freshness",
@@ -104,6 +105,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+import pathlib
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -766,7 +768,92 @@ def host_scratch_slug(root: Path | str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", str(Path(root).resolve()))
 
 
-def host_scratch_roots(hot: Optional[dict] = None) -> list[Path]:
+def _windows_form(path: str) -> Optional[str]:
+    """``/mnt/c/Users/x/p`` -> ``C:\\Users\\x\\p``; None when not a WSL drive mount."""
+    m = re.match(r"^/mnt/([a-zA-Z])(/.*)?$", str(path).replace("\\", "/"))
+    if not m:
+        return None
+    rest = (m.group(2) or "/").lstrip("/").replace("/", "\\")
+    return f"{m.group(1).upper()}:\\{rest}"
+
+
+def host_scratch_slugs(root: Path | str) -> list[str]:
+    """EVERY slug the harness could have used for ``root``, native form first.
+
+    THE SECOND HALF OF THE S206 PROVENANCE BUG, and it is why this returns a list
+    instead of a string. The harness always slugs the WINDOWS path
+    (``C--Users-pakhol-…``). The kernel usually runs under WSL, where the same
+    project root is ``/mnt/c/Users/pakhol/…`` and slugs to ``-mnt-c-Users-…``.
+    Those two strings never match, so a gate keyed on the native slug alone is
+    blind on the exact host it was written for — measured S206, 22 real files and
+    0 findings, twice, with every unit test green because each one injected its
+    own root. Emit both spellings and let the filesystem decide which exists.
+    """
+    raw = str(root)
+    try:
+        resolved = str(Path(root).resolve())
+    except (OSError, ValueError):
+        resolved = raw
+
+    # TRANSLATE ONLY WHAT IS A WSL MOUNT AS GIVEN. resolve() is PLATFORM-DEPENDENT
+    # and both directions of trusting it are wrong, each proven by a test failing
+    # on the platform the other passed on (measured S206, one full suite each way):
+    #   - on Windows, resolve() rewrites '/mnt/c/Users/x' to 'C:\\mnt\\c\\Users\\x',
+    #     losing the mount, so translating the RESOLVED form finds nothing;
+    #   - on WSL, a native 'C:\\Users\\x' is not absolute, so resolve() prefixes it
+    #     with the CWD and the result starts '/mnt/c/…' — translating THAT invents
+    #     a second, fictitious slug out of the current directory.
+    # The decidable rule that is correct on both: consider the raw input only, and
+    # only when it is itself an absolute POSIX path. A path-space translator whose
+    # answer depends on which host asked is the very bug this was written to fix.
+    forms = [resolved]
+    win = _windows_form(raw) if raw.startswith("/") else None
+    if win:
+        forms.append(win)
+
+    out: list[str] = []
+    for form in forms:
+        slug = re.sub(r"[^A-Za-z0-9]", "-", form)
+        if slug not in out:
+            out.append(slug)
+    return out
+
+
+def _profile_temp_from_root(root: Optional[Path | str]) -> list[str]:
+    """Windows-profile temp dirs derived from the PROJECT ROOT's own path space.
+
+    MEASURED S206, and this function exists because the first cut of this gate
+    reported CLEAN over 22 files that were sitting right there. The kernel runs
+    under WSL python: ``tempfile.gettempdir()`` is ``/tmp``, ``LOCALAPPDATA`` is
+    unset, and the host scratchpad — a WINDOWS directory — is reachable only as
+    ``/mnt/c/Users/<user>/AppData/Local/Temp``. Env-and-tempfile defaults can
+    never name it, so the gate was blind on the exact host it was written for.
+    That is MEASUREMENT-PROVENANCE-S201 in miniature: a probe that does not carry
+    the platform it runs on measures a different machine than the one it is on.
+
+    The fix takes the path space from the ROOT, which is always expressed in
+    whatever space the running interpreter uses. Walk up looking for a ``Users``
+    component; its child is the profile directory. Works identically for
+    ``/mnt/c/Users/x/…`` (WSL) and ``C:\\Users\\x\\…`` (Windows), and yields
+    nothing on a POSIX ``/home/x/…`` layout, where the env defaults are correct.
+    """
+    if root is None:
+        return []
+    try:
+        parts = Path(root).resolve().parts
+    except (OSError, ValueError):
+        return []
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if part.lower() == "users" and i + 1 < len(parts):
+            profile = Path(*parts[: i + 2])
+            out.append(str(profile / "AppData" / "Local" / "Temp"))
+    return out
+
+
+def host_scratch_roots(
+    hot: Optional[dict] = None, root: Optional[Path | str] = None
+) -> list[Path]:
     """Candidate host scratch roots: ``meta.host_scratch_roots`` UNIONed with defaults.
 
     Additive like :func:`_secret_globs`, for the same reason: a deployment on a
@@ -779,6 +866,7 @@ def host_scratch_roots(hot: Optional[dict] = None) -> list[Path]:
     declared = meta.get("host_scratch_roots") if isinstance(meta, dict) else None
     if isinstance(declared, (list, tuple)):
         cands += [str(x) for x in declared if str(x).strip()]
+    cands += _profile_temp_from_root(root)
     cands.append(tempfile.gettempdir())
     for env in ("TMPDIR", "TEMP", "TMP", "LOCALAPPDATA"):
         val = os.environ.get(env)
@@ -812,44 +900,102 @@ def find_host_scratch_files(
     rather than raised, because an auditor that crashes on a permission error is
     an auditor that gets switched off.
     """
-    slug = host_scratch_slug(root)
     hits: list[Path] = []
-    for base in host_scratch_roots(hot):
-        proj = base / _HOST_SCRATCH_HARNESS_DIR / slug
-        try:
-            if not proj.is_dir():
-                continue
-            sessions = sorted(proj.iterdir())
-        except OSError:
-            continue
-        for sess in sessions:
-            pad = sess / _HOST_SCRATCH_LEAF
+    for base in host_scratch_roots(hot, root):
+        for slug in host_scratch_slugs(root):
+            proj = base / _HOST_SCRATCH_HARNESS_DIR / slug
             try:
-                if not pad.is_dir():
+                if not proj.is_dir():
                     continue
-                for p in sorted(pad.rglob("*")):
-                    if p.is_file():
-                        hits.append(p)
-                        if len(hits) >= _HOST_SCRATCH_MAX_HITS:
-                            return hits
+                sessions = sorted(proj.iterdir())
             except OSError:
                 continue
+            for sess in sessions:
+                pad = sess / _HOST_SCRATCH_LEAF
+                try:
+                    if not pad.is_dir():
+                        continue
+                    for p in sorted(pad.rglob("*")):
+                        if p.is_file():
+                            hits.append(p)
+                            if len(hits) >= _HOST_SCRATCH_MAX_HITS:
+                                return hits
+                except OSError:
+                    continue
     return hits
 
 
 def check_host_scratch_storage(
     root: Path | str, hot: Optional[dict] = None
 ) -> list[AuditFinding]:
-    """ERROR when project working files are found in the HOST scratchpad (S205).
+    """Report project working files found in the HOST scratchpad (S205).
 
-    One finding per file, capped. Each finding carries the operator remediation
-    verbatim (Rule 43 retro_clarity) because the AGENT CANNOT CLEAR THIS ITSELF:
-    the files sit outside root_project and filesystem_boundary (E-026) forbids
-    the agent from deleting there. Naming the exact command is therefore part of
-    the finding, not a courtesy — a refusal the reader cannot act on is a wall.
+    SEVERITY FOLLOWS WHO CAN ACT (operator ruling, S206):
+      * leftovers in ANOTHER host session's scratchpad -> WARNING, ONE per
+        directory. The agent cannot delete them (filesystem_boundary/E-026) and
+        the host recreates that tree every session, so an ERROR here holds the
+        seal hostage to a human — the manual-rescue pattern Rule 45 abolishes.
+      * files attributable to THIS host session -> ERROR, one per file.
+
+    Every finding carries the operator remediation verbatim (Rule 43
+    retro_clarity): a refusal the reader cannot act on is a wall.
+
+    KNOWN INERT (measured S206): the ERROR branch keys off
+    ``meta.host_session_id``, which no code path sets and which is absent from
+    this RAG, so in practice every finding is currently a WARNING. Tracked as
+    HOST-SCRATCH-ERROR-BRANCH-IS-DEAD-S206 rather than left to be discovered —
+    and see that item for why the agent-facing half belongs at WRITE time (a
+    PreToolUse refusal) rather than here: by the time the audit runs, the file
+    exists and the agent cannot remove it, so no audit severity can make the
+    agent the actor.
     """
+    hits = list(find_host_scratch_files(root, hot))
+    # S206 CORRECTION, measured: emitting one ERROR PER FILE bricked the project.
+    # 20 leftover files in a DEAD session's scratchpad produced 33 audit errors;
+    # session_end_protocol aborts the seal on a dirty audit and the carry-forward
+    # gate refuses the next boot, so neither closing nor opening was possible
+    # until a human deleted files the agent is barred from touching by
+    # filesystem_boundary/E-026. The host recreates that directory for EVERY
+    # session, so the deadlock recurred forever. That is the manual-rescue
+    # pattern Rule 45 exists to abolish, produced by a guard meant to enforce it.
+    #
+    # The severity now follows who can ACT: files this session could have avoided
+    # writing are an ERROR the agent must fix; leftovers in another session's
+    # scratchpad are a WARNING addressed to the operator, aggregated into ONE
+    # finding per directory instead of one per file.
     findings: list[AuditFinding] = []
-    for p in find_host_scratch_files(root, hot):
+    mine, foreign = [], []
+    # None-safe: this clause is called with hot=None from find-only paths and
+    # from tests, and `hot.get` on None is an AttributeError that would take the
+    # whole audit down — an auditor that crashes is an auditor that gets removed.
+    _meta = (hot or {}).get("meta") or {}
+    _own = str(_meta.get("host_session_id") or "") if isinstance(_meta, dict) else ""
+    for h in hits:
+        (mine if (_own and _own in str(h)) else foreign).append(h)
+
+    # The scan is capped at _HOST_SCRATCH_MAX_HITS, so a count taken from it is a
+    # LOWER BOUND once the cap is reached. Say "at least" rather than print a
+    # number that quietly understates the mess (ASSET-REGISTRY-OUTSIDE-GIT-S199:
+    # a figure whose limits are unstated reads as exact).
+    _capped = len(hits) >= _HOST_SCRATCH_MAX_HITS
+    for d in sorted({str(pathlib.Path(f).parent) for f in foreign}):
+        n = sum(1 for f in foreign if str(pathlib.Path(f).parent) == d)
+        n_txt = f"at least {n}" if _capped else str(n)
+        findings.append(AuditFinding(
+            check="host_scratch_storage",
+            severity=WARNING,
+            detail=(f"{n_txt} leftover project file(s) in a host scratchpad this agent "
+                    f"cannot delete (filesystem_boundary/E-026): {d} — project scratch "
+                    f"belongs in RAG/.boot/. "
+                    f"operator remediation, in PowerShell:  Remove-Item -Recurse "
+                    f"-Force \"{d}\"  — success looks like this warning "
+                    f"disappearing from `rag_kernel audit`. WARNING, not ERROR: "
+                    f"the seal must not be hostage to a directory the host "
+                    f"recreates and the agent may not touch "
+                    f"(SCRATCH-OUTSIDE-ROOT-S205)."),
+        ))
+
+    for p in mine:
         findings.append(AuditFinding(
             check="host_scratch_storage",
             severity=ERROR,
@@ -3317,6 +3463,7 @@ __all__ = [
     "check_context_side_stores",
     "check_host_scratch_storage",
     "host_scratch_slug",
+    "host_scratch_slugs",
     "host_scratch_roots",
     "find_host_scratch_files",
     "collect_declared_secret_values",

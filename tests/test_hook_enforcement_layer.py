@@ -59,12 +59,21 @@ def test_gate_names_are_stable():
     # `post-transport-audit` (does the layer actually cover this call path).
     # The version moves with them: a layer whose policy changed without a
     # version bump is indistinguishable from one that stopped running.
+    # S206 added `unbounded-wait`: a hand-rolled `while/until … sleep` wait with
+    # no timeout is refused at the boundary. It survives the "why can't
+    # session-start refuse this?" question below, which is the admission test for
+    # this layer — the loop is typed into the Bash tool and never reaches a kernel
+    # verb, so `wait-for` cannot refuse what it never sees.
     assert GATES == (
         "poll", "sandbox-state", "canonical-read",
+        "unbounded-wait",
         "transport",
         "deploy-parity", "post-transport-audit",
     )
-    assert HOOK_GUARD_VERSION == "1.1.0"
+    # Bumped WITH the gate. The pin and the bump were both left undone by the
+    # commit that added it (d4d86c1), which is why this test was red at HEAD —
+    # see RED-TESTS-COMMITTED-AT-HEAD-S206.
+    assert HOOK_GUARD_VERSION == "1.2.0"
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():
