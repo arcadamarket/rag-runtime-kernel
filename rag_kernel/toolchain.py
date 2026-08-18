@@ -165,6 +165,33 @@ def _probe_simple(name: str) -> tuple[Optional[str], str]:
 # --------------------------------------------------------------------------- #
 # public API
 # --------------------------------------------------------------------------- #
+def declared(project_root: "str | Path") -> dict[str, Any]:
+    """The manifest's DECLARED toolchain, or {} when there is none.
+
+    RENDERER-PINS-THE-RUNNING-INTERPRETER-S206. :func:`measure` answers what is
+    running RIGHT NOW; this answers what the deployment says it runs ON. They are
+    different questions and conflating them made the boot document assert
+    whichever interpreter happened to render it. Read-only, never probes, never
+    writes: a document that must agree with the manifest has to READ the
+    manifest.
+    """
+    import json as _json
+    p = Path(project_root).resolve() / "toolchain" / "toolchain.json"
+    try:
+        with open(p, "r", encoding="utf-8-sig") as fh:
+            data = _json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def declared_python(project_root: "str | Path") -> "str | None":
+    """The DEPLOYED interpreter path from the manifest, or None if undeclared."""
+    tools = (declared(project_root).get("tools") or {})
+    path = (tools.get("python") or {}).get("path")
+    return str(path) if path else None
+
+
 def measure(project_root: "str | Path") -> dict[str, Any]:
     """Measure the toolchain from the live machine. Never reads the manifest."""
     # ABSOLUTE, always. A measured tool path is consumed by callers running in

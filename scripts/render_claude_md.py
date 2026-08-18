@@ -136,7 +136,22 @@ def render() -> str:
     op = hot.get("operating_protocol") or {}
     items = _items(hot)
 
-    py = (tc["tools"]["python"] or {}).get("path", "?")
+    # RENDERER-PINS-THE-RUNNING-INTERPRETER-S206. The DEPLOYED interpreter is a
+    # declared fact in toolchain/toolchain.json -- the authority this very
+    # document cites -- not whatever happens to be executing this renderer.
+    # `tc` comes from toolchain.measure(), which answers sys.executable: correct
+    # for "who is running me", wrong for "what does this project run on". Render
+    # the declared value; report the running one ONLY when it disagrees, as a
+    # divergence rather than as the answer.
+    from rag_kernel import toolchain as _tcmod                    # noqa: PLC0415
+    _running = (tc["tools"]["python"] or {}).get("path", "?")
+    py = _tcmod.declared_python(ROOT) or _running
+    py_divergence = ""
+    if _tcmod.declared_python(ROOT) and _running != py:
+        py_divergence = (
+            f" (this document was rendered by `{_running}`, which is NOT the "
+            f"declared interpreter — the declared one governs)"
+        )
     shell = (tc["tools"]["posix_shell"] or {}).get("path", "?")
     tmux = (tc["tools"]["tmux"] or {}).get("path", "?")
     jar = (tc["tools"]["tla2tools_jar"] or {}).get("path", "?")
@@ -170,7 +185,7 @@ def render() -> str:
                     "```", "",
                     "Then run the `--attest <TOKEN>` line it prints, verbatim. You are",
                     "booted at `Session S<NNN> READY`.", "",
-                    f"MEASURED INTERPRETER: `{py}`. Use `python`, never `python3` —",
+                    f"DEPLOYED INTERPRETER (declared in toolchain/toolchain.json): `{py}`{py_divergence}. Use `python`, never `python3` —",
                     "`python3` on this host is the Microsoft Store alias and exits",
                     "non-zero. Authority for every tool path is `toolchain/toolchain.json`.",
                     ""]

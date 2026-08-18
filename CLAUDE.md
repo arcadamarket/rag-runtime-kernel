@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=496cf0a24c808389...
+> state_hash: stored=bd27b925865d0de2... computed=3d64eb3d7d558a03...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -16,13 +16,13 @@ store or measured live; none of it is typed into this file.
 ## 1. BOOT — first action of every session
 
 ```bash
-cd "C:/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG" && python -m rag_kernel session-start
+cd "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG" && python -m rag_kernel session-start
 ```
 
 Then run the `--attest <TOKEN>` line it prints, verbatim. You are
 booted at `Session S<NNN> READY`.
 
-MEASURED INTERPRETER: `C:\Python314\python.exe`. Use `python`, never `python3` —
+DEPLOYED INTERPRETER (declared in toolchain/toolchain.json): `C:\Python314\python.exe` (this document was rendered by `/home/pakhol/miniconda3/bin/python`, which is NOT the declared interpreter — the declared one governs). Use `python`, never `python3` —
 `python3` on this host is the Microsoft Store alias and exits
 non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 
@@ -54,19 +54,20 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 
 | Fact | Value |
 |---|---|
-| git HEAD | 6d6deea |
+| git HEAD | dd51714 |
 | runtime | see current_status |
-| test gate | 2818  (session S205 @ 6d6deea) |
+| test gate | 2868  (session S206 @ 58399cd) |
 | written_by_session | S205 |
-| active items | 113 |
-| P1 | 28 |
-| baked assets | 136 |
-| posix shell | C:\Program Files\Git\usr\bin\bash.EXE |
-| tmux transport | wsl:tmux |
-| TLC jar | C:\Users\pakhol\Desktop\GitHub Project (RAG Runtime Kernel)\toolchain\tla2tools.jar |
+| active items | 122 |
+| P1 | 33 |
+| baked assets | 139 |
+| posix shell | /bin/bash |
+| tmux transport | /usr/bin/tmux |
+| TLC jar | /mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/toolchain/tla2tools.jar |
 
 ## 3. P1 — what is owed, in ledger order
 
+- `AGENT-STOPS-WITHOUT-A-STATUS-S206`
 - `COLD-BOOT-HAS-NO-RULES-S205`
 - `CONTEXT-COMPACTION-FORBIDDEN-BUT-UNGATED-S203`
 - `E-116`
@@ -74,6 +75,7 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `E-128`
 - `E-132`
 - `E-134`
+- `GATE-CONTRADICTS-ITS-OWN-RULE-POWERSHELL-S206`
 - `GATE-FALSE-POSITIVE-ON-PROSE-S201`
 - `GATE-OR-HOPE-PRINCIPLE`
 - `GC-IS-INVERTED-S202`
@@ -85,6 +87,7 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `PLAN-FEASIBILITY-GATE`
 - `POLICY-LIVES-IN-CODE-NOT-IN-THE-RAG-S204`
 - `PROBE-DEFINES-ITS-OWN-PROTOCOL-S201`
+- `RENDERER-PINS-THE-RUNNING-INTERPRETER-S206`
 - `RESOLVE-EVIDENCE-GATE-NOT-ENFORCED-S202`
 - `RULE-ORPHANS-31-OF-57-S203`
 - `SCRATCH-OUTSIDE-ROOT-S205`
@@ -93,10 +96,12 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `SESSION-END-RESUME-HANDOFF`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
+- `TRANSPORT-RULE-HAS-NO-ENFORCER-S206`
 - `UNBOUNDED-WAIT-GATE-S206`
+- `UNCOMMITTED-WORK-HAS-NO-GATE-S206`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 28, 'P2': 40, 'P3': 31, 'P4': 9, 'P5': 4, 'unprioritized': 1}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 33, 'P2': 42, 'P3': 32, 'P4': 9, 'P5': 4, 'unprioritized': 2}.
 
 ## 5. TRAPS (from operating_protocol)
 
