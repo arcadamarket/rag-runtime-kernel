@@ -42,8 +42,34 @@ from pathlib import Path
 RAG = Path(__file__).resolve().parent.parent
 ROOT = RAG.parent
 WT = ROOT / "GIT WORKTREES" / "rag-runtime-kernel"
-TRANSCRIPTS = Path.home() / ".claude" / "projects" / \
-    "C--Users-pakhol-Desktop-GitHub-Project--RAG-Runtime-Kernel-"
+_SLUG = "C--Users-pakhol-Desktop-GitHub-Project--RAG-Runtime-Kernel-"
+
+
+def _transcripts() -> Path:
+    """The transcript directory, from whichever path space is running us.
+
+    MEASURED S207-review: transcripts live on the WINDOWS profile. Under WSL
+    python Path.home() is /home/<user> and the directory simply is not there, so
+    the reviewer silently had nothing to score. Try the running home first, then
+    the Windows profile reached through /mnt/c -- the same "take the path space
+    from something that knows it" fix the interpreter line needed.
+    """
+    cands = [Path.home() / ".claude" / "projects" / _SLUG]
+    here = Path(__file__).resolve()
+    for part in here.parts:
+        if part.lower() == "users":
+            i = here.parts.index(part)
+            if i + 1 < len(here.parts):
+                cands.append(Path(*here.parts[: i + 2]) / ".claude"
+                             / "projects" / _SLUG)
+            break
+    for c in cands:
+        if c.is_dir():
+            return c
+    return cands[0]
+
+
+TRANSCRIPTS = _transcripts()
 
 HOST_SCRATCH = re.compile(r"Temp[\/]claude[\/]|/tmp/", re.I)
 HANDROLLED = re.compile(r"\b(while|until)\b[^\n]*?\bdo\b[^\n]*?\bsleep\b", re.I | re.S)
@@ -168,9 +194,24 @@ def review(path: Path, full: bool = False) -> int:
         "selftest green" if st.returncode == 0 else "SELFTEST NOT GREEN")
 
     # 7. deploy parity
-    par = subprocess.run(["diff", "-rq", str(RAG / "rag_kernel"),
-                          str(WT / "rag_kernel")], capture_output=True, text=True)
-    bad = [l for l in par.stdout.splitlines() if "__pycache__" not in l]
+    # Pure Python: the `diff` binary does not exist on Windows, and this tool
+    # must run on the DECLARED interpreter. Same comparison as
+    # drift_audit.check_kernel_copy_lockstep -- *.py, __pycache__ excluded,
+    # because bytecode differs legitimately by interpreter.
+    def _mods(base: Path) -> dict[str, Path]:
+        if not base.is_dir():
+            return {}
+        return {str(f.relative_to(base)).replace("\\", "/"): f
+                for f in base.rglob("*.py") if "__pycache__" not in f.parts}
+
+    dep, tst = _mods(RAG / "rag_kernel"), _mods(WT / "rag_kernel")
+    bad = [n for n in sorted(set(dep) ^ set(tst))]
+    for n in sorted(set(dep) & set(tst)):
+        try:
+            if dep[n].read_bytes() != tst[n].read_bytes():
+                bad.append(n)
+        except OSError:
+            bad.append(n)
     chk("deploy parity", not bad, f"{len(bad)} divergence(s)" if bad else "identical")
 
     if cutoff is None:
