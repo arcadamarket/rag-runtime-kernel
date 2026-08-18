@@ -311,3 +311,28 @@ def test_disable_env_is_honoured_and_announces_itself(monkeypatch):
 
 def test_projection_constant_points_inside_dot_claude():
     assert ".claude" in TRANSPORT_ALLOWLIST_PROJECTION
+
+
+# ---------------------------------------------------------------------------
+# GATE-CONTRADICTS-ITS-OWN-RULE-POWERSHELL-S206
+# ---------------------------------------------------------------------------
+
+def test_powershell_the_documented_recovery_path_is_not_refused():
+    """Two rules disagreed and the allowlist moved. Measured S206: the transport
+    gate answered allow=False for PowerShell while operating_protocol.tool_hierarchy
+    named it the LAST RESORT and THE recovery path for a downed WSL transport —
+    and WSL died twice on 2026-08-17. A recovery path that is refused is worse
+    than none: the agent follows the instruction, is refused, and then improvises
+    under pressure with no sanctioned route left.
+    """
+    assert any("PowerShell" in p for p in hook_guard.DEFAULT_TRANSPORT_ALLOWLIST)
+    d = decide("transport", {"tool_name": "PowerShell",
+                             "tool_input": {"command": "Get-ChildItem"}})
+    assert d.allow is True
+
+
+def test_an_undeclared_transport_is_still_refused():
+    """Widening for PowerShell must not have turned the default-deny into allow-all."""
+    d = decide("transport", {"tool_name": "mcp__Desktop_Commander__read_file",
+                             "tool_input": {}})
+    assert d.allow is False

@@ -120,8 +120,12 @@ GATES: tuple[str, ...] = (
 #: connecting a new server is a deliberate act that has to pass through the
 #: declaration rather than an accident that silently widens the attack surface.
 #:
-#: This tuple is the FALLBACK only. The authority is the RAG
-#: (`meta.transport_policy.allowlist`), projected to
+#: This tuple is the FALLBACK only. The authority is the RAG rule
+#: `operating_protocol.transport_allowlist` — corrected S206: this comment named
+#: `meta.transport_policy.allowlist`, a key that does not exist in this RAG and
+#: that nothing reads, while the projection header and the renderer both name the
+#: rule. A comment that misdirects the next reader to a non-existent authority is
+#: the same defect class as a rule with no enforcer. Projected to
 #: `.claude/transport_allowlist.json` by `tools/render_transport_allowlist.py`.
 #: The projection exists because the hook must answer in milliseconds with no
 #: kernel import and no lock; it is a cache of a RAG fact, never a second
@@ -139,6 +143,12 @@ DEFAULT_TRANSPORT_ALLOWLIST: tuple[str, ...] = (
     # Bash is allowlisted here and narrowed by the sandbox-state gate, which
     # already refuses it when it names canonical state.
     r"^Bash$",
+    # S206, GATE-CONTRADICTS-ITS-OWN-RULE-POWERSHELL-S206: tool_hierarchy names
+    # PowerShell as the LAST RESORT and as THE recovery path when the WSL
+    # transport is down. Refusing it left this deployment's single point of
+    # failure with its emergency exit disabled — WSL died twice on 2026-08-17.
+    # Narrowed by the same sandbox-state gate as Bash.
+    r"^PowerShell$",
 )
 
 #: Projection path, relative to the project root.
