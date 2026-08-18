@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=f4801219d8a0ad80...
+> state_hash: stored=bd27b925865d0de2... computed=ef6e708cf2d73789...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -42,6 +42,7 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 - **session_end_protocol** — HARD RULE -- SESSION-END RITUAL, run through the governed `session-end` verb, in order: (1) CLAIM-RECONCILIATION PASS (Rule 11 / INS-018) -- reconcile every published status-claim on the project's declared drift-prone surfaces (meta.reconciliation_surfaces) against its tracked records, and map every newly-resolved record back onto those public surfaces so the public view stays current; the closing audit mechanizes the surfaces it can resolve from the manifest, and this pass covers the un-mechanizable residual (natural-language claims no auditor can fully check). (2) CHECKPOINT -- merge the session summary atomically; the session-id increment persists HERE, not at boot. (3) ERROR_LOG FOLD + LOGGER CLOSE (KA-4 gate). (4) AUDIT, fail-loud. HARDENED (S181, from the S178-S180 gate work): (a) THE SEAL IS A GATE, NOT A CEREMONY -- session-end ABORTS rather than sealing on a red test suite or a dirty audit; this fired twice in S180 and is the difference between a rule and a mechanism. (b) XFER-PRESENT-GATE -- the seal is bound to EMISSION of a canonical-report pointer: a close that produced no verifiable transfer surface is not a close. (c) CLOSE-SEAL-ENFORCE -- an unsealed prior session blocks the next boot, which must run `session-resume` or close the prior id; `--force` requires explicit operator direction. (d) A NARRATED FAILURE THAT IS NOT BANKED IS A LOST FAILURE (Rule 8) -- …[truncated — full text renders at session-start]
 - **no_polling** — Rule 44 (NO-POLLING / DETACHED-RUN DISCIPLINE - encoded S204 via the governed add-rule verb after a live check proved it was NOT a rule at all). Long jobs run DETACHED to a file; block ONCE on a single long wait; NEVER poll a running command (E-081). The sanctioned wait is a verb, not a judgement call: 'rag_kernel wait-for <file> --timeout N --contains <token> --emit 20' blocks server-side and returns the tail in one round-trip. Over MCP the same primitive is rag_wait, but it is capped by the client's own request timeout (~30s, measured S203), so long jobs use the CLI. CHOOSE A DISTINCTIVE SENTINEL TOKEN: S203 used 'D' and wait-for matched the first capital D in the output and returned instantly. THREE SIGNATURES THAT COUNT AS POLLING EVEN WHEN THE TOOL IS 'CORRECT': (1) a second get-command-result against the same command id inside the cooldown; (2) a wait-for that RETURNS IN MILLISECONDS - a blocking wait that returns in half a millisecond did not wait, the sentinel already existed, and S198 did this 39 times out of 65 (WAIT-FOR-USED-AS-A-POLL-S198); (3) any re-query of a job whose completion the agent has not been told about. WHY THIS BECOMES A RULE ONLY AT S204, and it is the whole point: the clause was printed at every boot from a hardcoded [BOOT-FRAME] block in __main__.py and was never a key in operating_protocol. So the most-violated discipline in this project - E-081 …[truncated — full text renders at session-start]
 - **scratch_storage** — Rule 46 (SCRATCH-STORAGE / NO-PROJECT-STATE-OUTSIDE-ROOT — SCRATCH-OUTSIDE-ROOT-S205; encoded S206 via the governed add-rule verb, after S205 measured two consecutive agents violating a directive the RAG had never carried). OPERATOR DIRECTIVE: nothing this project depends on may live outside root_project. PROJECT SCRATCH IS `RAG/.boot/` — absolute path on this host: `C:\Users\pakhol\Desktop\GitHub Project (RAG Runtime Kernel)\RAG\.boot\`, and from WSL `/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG/.boot/`. EVERY temporary file the work produces goes there: detached job output, pytest logs, census output, probe results, rule drafts, anything an agent would otherwise call scratch. THE CLAUDE HOST SCRATCHPAD IS FORBIDDEN. This rule exists precisely because the host system prompt instructs the OPPOSITE, in writing, to every agent that boots: it names `%LOCALAPPDATA%\Temp\claude\<project-slug>\<session-uuid>\scratchpad` as the place for temporary files. That instruction is reasonable for a generic project and wrong HERE, because a file there is invisible to root_hygiene (Rule 20 scans root_project only), uncovered by the boot-map, unreachable by the GC, carried by no backup and no remote, and removed by the host without notice — project state with no governance is the one thing this project exists to prevent. `/tmp` inside WSL is forbidden for the same reason. …[truncated — full text renders at session-start]
+- **agent_role_boundary** — Rule 45 (AGENT-ROLE-BOUNDARY - operator directive, stated S204, and the governing principle the whole S200-S204 recovery was converging on). THE AGENT IS AN ORCHESTRATOR, A TASK ASSIGNOR, A RESULTS VALIDATOR AND A DECISION-MAKER. NOTHING ELSE. Everything else is a deterministic script, a hook, a gate or a guard. NO WORKFLOW MAY DEPEND ON THE ATTENTION OF EITHER THE AGENT OR THE OPERATOR. If a correct outcome requires someone to remember, notice, or be diligent, it is not a control - it is a hope, and this project's entire error log is the record of what hopes cost. THE TEST TO APPLY BEFORE ANY WORK IS CALLED DONE: could a careless, tired or newly-transferred agent get this wrong without something refusing? If yes, the work is not finished; the refusal is the deliverable, not the fix. WHAT THIS FORBIDS IN PRACTICE, each drawn from a measured failure: performing by hand a check that could be a script (S202 wrote root_tidy.py without running reuse-check, while session_cleanup.sh already existed - Rule 25 violated in the same breath as the boot frame rendering it); discovering a defect by accident and calling it diligence (S203 found no_polling only because a renderer happened to ask for a key that did not exist); reporting a rule as enforced when only a test names it (8 of the 14 GATED rules at the S203 census); and closing an item on a config that looks right rather than a gate …[truncated — full text renders at session-start]
 
 **pov_mandate / pov_roles — adopt these as your reasoning stance for EVERY deliverable, not one of them (rendered again in the [BOOT-FRAME] block at session-start):**
 - mandate: {'count': 2, 'mode': 'strict'}
@@ -54,13 +55,13 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 
 | Fact | Value |
 |---|---|
-| git HEAD | dd51714 |
+| git HEAD | 590807c |
 | runtime | see current_status |
-| test gate | 2873  (session S206 @ 62eb99f) |
-| written_by_session | S205 |
-| active items | 122 |
-| P1 | 33 |
-| baked assets | 139 |
+| test gate | 2877  (session S206 @ 590807c) |
+| written_by_session | S206 |
+| active items | 124 |
+| P1 | 34 |
+| baked assets | 140 |
 | posix shell | /bin/bash |
 | tmux transport | /usr/bin/tmux |
 | TLC jar | /mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/toolchain/tla2tools.jar |
@@ -75,11 +76,13 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `E-128`
 - `E-132`
 - `E-134`
+- `FORENSICS-GATE-MEASURES-WALL-CLOCK-S207`
 - `GATE-CONTRADICTS-ITS-OWN-RULE-POWERSHELL-S206`
 - `GATE-FALSE-POSITIVE-ON-PROSE-S201`
 - `GATE-OR-HOPE-PRINCIPLE`
 - `GC-IS-INVERTED-S202`
 - `GC-WOULD-DELETE-LIVE-TESTS-S202`
+- `GRAND-AUDIT-NOT-IN-THE-CLOSE-S206`
 - `INFERENCE-LEDGER-NO-LIFECYCLE`
 - `LEAN-RAG-INVERTED-LOADED-STORE-S204`
 - `MEASUREMENT-PROVENANCE-S201`
@@ -94,14 +97,13 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `SEAL-NOT-INVALIDATED-BY-LATER-WRITES-S201`
 - `SEAL-ORDER-IN-AGENT-HANDS-S205`
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
-- `SESSION-END-RESUME-HANDOFF`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `TRANSPORT-RULE-HAS-NO-ENFORCER-S206`
 - `UNBOUNDED-WAIT-GATE-S206`
 - `UNCOMMITTED-WORK-HAS-NO-GATE-S206`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 33, 'P2': 42, 'P3': 32, 'P4': 9, 'P5': 4, 'unprioritized': 2}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 34, 'P2': 43, 'P3': 32, 'P4': 9, 'P5': 4, 'unprioritized': 2}.
 
 ## 5. TRAPS (from operating_protocol)
 
