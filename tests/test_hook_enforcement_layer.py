@@ -67,13 +67,14 @@ def test_gate_names_are_stable():
     assert GATES == (
         "poll", "sandbox-state", "canonical-read",
         "unbounded-wait",
+        "tmux-heredoc",
         "transport",
         "deploy-parity", "post-transport-audit",
     )
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.3.0"  # S206: allowlist mirrors tool_hierarchy
+    assert HOOK_GUARD_VERSION == "1.4.0"  # S206: +tmux-heredoc
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():
@@ -316,3 +317,49 @@ def test_disable_switch_is_explicit_and_reported(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("RAG_HOOK_GUARD_DISABLED", "1")
     d = decide("canonical-read", _file("Read", "/x/RAG/RAG_MASTER.json"))
     assert d.allow and "layer disabled" in d.reason
+
+
+# --------------------------------------------------------------------------- #
+# TMUX-HEREDOC-HANGS-THE-SHELL-S206
+# --------------------------------------------------------------------------- #
+
+def _tmux(command):
+    return {"tool_name": "mcp__tmux-mcp__execute-command",
+            "tool_input": {"command": command}}
+
+
+def test_heredoc_through_tmux_is_refused():
+    """tmux-mcp appends its completion echo to the delimiter line, so the
+    here-document never closes and the pane hangs. Measured twice in S206; the
+    only recovery found was a new window."""
+    d = decide("tmux-heredoc", _tmux("cat > f <<EOF\nbody\nEOF"))
+
+    assert d.allow is False
+    assert "TMUX-HEREDOC-HANGS-THE-SHELL-S206" in d.reason
+
+
+def test_the_refusal_names_the_substitute_not_just_the_prohibition():
+    """A gate that only says no teaches nothing and the successor repeats it."""
+    d = decide("tmux-heredoc", _tmux("git commit -F - <<MSG\nx\nMSG"))
+
+    assert "git commit -F" in d.reason
+    assert "Write/Edit" in d.reason
+    # and it must not push the agent onto the undeclared transport
+    assert "Do NOT retry this on the Bash tool" in d.reason
+
+
+def test_single_line_tmux_commands_are_untouched():
+    assert decide("tmux-heredoc", _tmux("python .boot/patch.py")).allow
+    assert decide("tmux-heredoc", _tmux("git commit -F .boot/msg.txt")).allow
+
+
+def test_here_string_is_not_a_here_document():
+    """`<<<` is single-line: it cannot hang, so it must not be refused."""
+    assert decide("tmux-heredoc", _tmux("grep x <<< \"$VAR\"")).allow
+
+
+def test_the_gate_does_not_mediate_other_transports():
+    """PowerShell and wsl-exec do not wrap the way tmux-mcp does."""
+    assert decide("tmux-heredoc",
+                  {"tool_name": "PowerShell",
+                   "tool_input": {"command": "x <<EOF\ny\nEOF"}}).allow

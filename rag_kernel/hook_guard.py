@@ -74,7 +74,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.3.0"  # S206: allowlist mirrors tool_hierarchy
+HOOK_GUARD_VERSION = "1.4.0"  # S206: +tmux-heredoc (PreToolUse)
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -102,6 +102,7 @@ HOOK_GUARD_VERSION = "1.3.0"  # S206: allowlist mirrors tool_hierarchy
 GATES: tuple[str, ...] = (
     "poll", "sandbox-state", "canonical-read",  # boundary-only, S195
     "unbounded-wait",                           # boundary-only, S206
+    "tmux-heredoc",                             # boundary-only, S206
     "transport",                                # boundary-only, default-deny, S197
     "deploy-parity", "post-transport-audit",    # PostToolUse
 )
@@ -171,6 +172,7 @@ _EVENT_FOR_GATE: dict[str, str] = {
     "poll": "PreToolUse",
     "sandbox-state": "PreToolUse",
     "unbounded-wait": "PreToolUse",
+    "tmux-heredoc": "PreToolUse",
     "canonical-read": "PreToolUse",
     "transport": "PreToolUse",
     "deploy-parity": "PostToolUse",
@@ -783,10 +785,69 @@ def _safe_search(pattern: str, text: str) -> bool:
         return False
 
 
+#: The PRIMARY transport, by tool name. Deliberately NOT _SHELL_TOOLS: that one
+#: matches Bash-shaped tools, and this defect is specific to how tmux-mcp wraps
+#: what it sends.
+_TMUX_TOOLS = re.compile(r"tmux-mcp", re.I)
+
+#: A here-document opener: ``<<WORD``, ``<< "WORD"``, ``<<-WORD``. The negative
+#: lookahead spares ``<<<`` (a here-STRING), which is single-line and safe, and
+#: the required identifier start spares a numeric left-shift.
+_HEREDOC = re.compile(r"<<(?!<)-?\s*[\"']?[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _gate_tmux_heredoc(event: dict, **_: Any) -> Decision:
+    """Refuse a here-document sent through tmux-mcp. It cannot terminate.
+
+    MEASURED S206, twice, on the PRIMARY transport. tmux-mcp sends every command
+    wrapped as ``echo TMUX_MCP_START; <command>; echo TMUX_MCP_DONE``. When the
+    command ends in a heredoc, the closing delimiter therefore arrives as
+    ``DELIM; echo TMUX_MCP_DONE_...`` and never matches, so the here-document
+    never closes and the pane sits at a continuation prompt. Sending the bare
+    delimiter afterwards does NOT recover it -- that follow-up is wrapped
+    identically. The only exit found was a new window.
+
+    WHY A GATE AND NOT A NOTE. The tool's own description warns about this, and
+    the agent hit it anyway, twice, in one session. Worse, the failure RECRUITS:
+    both times the pull was to retry on the Bash tool, where heredocs do work --
+    and there a multi-line payload crosses Windows stdin in cp1252 and silently
+    corrupts every non-ASCII byte, which is how an em-dash destroyed a patch
+    earlier in the same session. So a stalled heredoc does not just waste a
+    round-trip, it pushes the agent onto the transport tool_hierarchy excludes.
+
+    DECIDABLE PREDICATE, no judgement: a tmux-mcp command containing a heredoc
+    opener. Here-strings (``<<<``) are single-line and pass untouched.
+    """
+    if not _TMUX_TOOLS.search(_tool_name(event)):
+        return Decision("tmux-heredoc", True)
+    command = str(_tool_input(event).get("command") or "")
+    if not _HEREDOC.search(command):
+        return Decision("tmux-heredoc", True)
+    return Decision(
+        "tmux-heredoc", False,
+        reason=(
+            "TMUX-HEREDOC (TMUX-HEREDOC-HANGS-THE-SHELL-S206): this command "
+            "carries a here-document, and tmux-mcp appends its own completion "
+            "echo to every line it sends -- including your delimiter -- so the "
+            "here-document can never terminate and the pane will hang at a "
+            "continuation prompt. Re-sending the delimiter does not free it.\n"
+            "  Multi-line CONTENT goes through the file tools (Write/Edit), "
+            "which tool_hierarchy already names first for file content.\n"
+            "  tmux then runs a SINGLE-LINE invocation of that file:\n"
+            "    python .boot/<script>.py        (not an inline script)\n"
+            "    git commit -F .boot/<msg>.txt   (not a heredoc message)\n"
+            "Do NOT retry this on the Bash tool: it is not a declared transport "
+            "(TRANSPORT-RULE-HAS-NO-ENFORCER-S206), and a multi-line payload "
+            "there is decoded as cp1252 and silently corrupts non-ASCII text."
+        ),
+    )
+
+
 _GATE_FUNCS = {
     "poll": _gate_poll,
     "sandbox-state": _gate_sandbox_state,
     "unbounded-wait": _gate_unbounded_wait,
+    "tmux-heredoc": _gate_tmux_heredoc,
     "canonical-read": _gate_canonical_read,
     "deploy-parity": _gate_deploy_parity,
     "transport": _gate_transport,
@@ -867,6 +928,11 @@ def selftest(*, state_dir: Optional[Path] = None) -> tuple[int, list[str]]:
     checks = [
         ("poll", {"tool_name": "mcp__tmux-mcp__get-command-result",
                   "tool_input": {"commandId": "selftest-id"}}, False),
+        ("tmux-heredoc", {"tool_name": "mcp__tmux-mcp__execute-command",
+                          "tool_input": {"command": "cat > f <<EOF\nx\nEOF"}},
+         False),
+        ("tmux-heredoc", {"tool_name": "mcp__tmux-mcp__execute-command",
+                          "tool_input": {"command": "python .boot/p.py"}}, True),
         ("unbounded-wait", {"tool_name": "Bash", "tool_input": {"command":
           'while pgrep -f "rag_kernel session-start"; do sleep 3; done'}}, False),
         ("sandbox-state", {"tool_name": "Bash",

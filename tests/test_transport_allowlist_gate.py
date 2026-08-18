@@ -280,6 +280,7 @@ def test_only_pretooluse_gates_can_refuse():
     assert refusing == {
         "poll", "sandbox-state", "canonical-read", "transport",
         "unbounded-wait",  # S206 — refuses at the boundary, so PreToolUse
+        "tmux-heredoc",    # S206 — same
     }
 
 
@@ -299,6 +300,9 @@ def test_the_layer_holds_only_boundary_gates():
         # becomes a kernel verb, so `wait-for` — the thing that would refuse it —
         # is never called. Only a boundary gate can see it at all.
         "unbounded-wait",
+        # S206. Same admission test: the heredoc is typed into a tmux tool call
+        # and never becomes a kernel verb, so no verb can refuse it.
+        "tmux-heredoc",
         "deploy-parity", "post-transport-audit",
     }
 
