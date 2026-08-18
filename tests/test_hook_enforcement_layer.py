@@ -69,13 +69,14 @@ def test_gate_names_are_stable():
         "poll", "sandbox-state", "canonical-read",
         "unbounded-wait",
         "tmux-heredoc",
+        "stop-status",
         "transport",
         "deploy-parity", "post-transport-audit",
     )
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.5.0"  # S206: +uncommitted counter
+    assert HOOK_GUARD_VERSION == "1.6.0"  # S206: +stop-status
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():
@@ -405,3 +406,58 @@ def test_unmeasurable_git_is_silent_not_reported_clean(monkeypatch):
     monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: None)
 
     assert hook_guard._uncommitted_context(Path("/wt"), Path("/wt/RAG")) == ""
+
+
+# --------------------------------------------------------------------------- #
+# AGENT-STOPS-WITHOUT-A-STATUS-S206
+# --------------------------------------------------------------------------- #
+
+def _mkproject(tmp_path):
+    (tmp_path / "RAG" / ".boot").mkdir(parents=True)
+    wt = tmp_path / "GIT WORKTREES" / "k"
+    (wt / ".git").mkdir(parents=True)
+    return tmp_path, wt
+
+
+def test_a_clean_stop_is_not_nagged(tmp_path, monkeypatch):
+    """A gate that fires on every quiet stop is a gate that gets tuned out."""
+    root, _ = _mkproject(tmp_path)
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 0)
+
+    assert decide("stop-status", {}, project_root=root).context == ""
+
+
+def test_stopping_with_a_job_in_flight_injects_the_checklist(tmp_path, monkeypatch):
+    root, _ = _mkproject(tmp_path)
+    (root / "RAG" / ".boot" / "s206_suite.txt").write_text("running...", encoding="utf-8")
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 0)
+
+    ctx = decide("stop-status", {}, project_root=root).context
+    assert "AGENT-STOPS-WITHOUT-A-STATUS-S206" in ctx
+    assert "s206_suite.txt" in ctx
+    assert "NEXT ACTION" in ctx
+    assert "never instead of it" in ctx
+
+
+def test_a_finished_job_is_not_in_flight(tmp_path, monkeypatch):
+    """The sentinel is the completion fact; a finished job must not nag."""
+    root, _ = _mkproject(tmp_path)
+    (root / "RAG" / ".boot" / "s206_suite.txt").write_text(
+        "....\nQQ_SUITE_DONE_QQ rc=0\n", encoding="utf-8")
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 0)
+
+    assert decide("stop-status", {}, project_root=root).context == ""
+
+
+def test_stopping_with_uncommitted_work_says_it_is_at_risk(tmp_path, monkeypatch):
+    root, _ = _mkproject(tmp_path)
+    monkeypatch.setattr(hook_guard, "_uncommitted_count", lambda wt: 4)
+
+    ctx = decide("stop-status", {}, project_root=root).context
+    assert "4 uncommitted change(s)" in ctx
+    assert "AT RISK" in ctx
+
+
+def test_stop_never_refuses():
+    """Stop cannot carry a permission decision; a deny here refuses nothing."""
+    assert decide("stop-status", {}).allow is True

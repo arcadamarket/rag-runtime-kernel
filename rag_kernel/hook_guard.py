@@ -75,7 +75,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.5.0"  # S206: +uncommitted-work counter
+HOOK_GUARD_VERSION = "1.6.0"  # S206: +stop-status (Stop)
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -104,6 +104,7 @@ GATES: tuple[str, ...] = (
     "poll", "sandbox-state", "canonical-read",  # boundary-only, S195
     "unbounded-wait",                           # boundary-only, S206
     "tmux-heredoc",                             # boundary-only, S206
+    "stop-status",                              # Stop, S206
     "transport",                                # boundary-only, default-deny, S197
     "deploy-parity", "post-transport-audit",    # PostToolUse
 )
@@ -174,6 +175,7 @@ _EVENT_FOR_GATE: dict[str, str] = {
     "sandbox-state": "PreToolUse",
     "unbounded-wait": "PreToolUse",
     "tmux-heredoc": "PreToolUse",
+    "stop-status": "Stop",
     "canonical-read": "PreToolUse",
     "transport": "PreToolUse",
     "deploy-parity": "PostToolUse",
@@ -911,11 +913,116 @@ def _gate_tmux_heredoc(event: dict, **_: Any) -> Decision:
     )
 
 
+#: A detached job is "in flight" while its output file exists and does NOT yet
+#: carry its completion sentinel. The convention is the project's own: every
+#: detached run appends a distinctive QQ_..._QQ token as its last line.
+_SENTINEL = re.compile(r"QQ_[A-Z0-9_]+_QQ")
+_INFLIGHT_MAX_AGE_S = 3600
+
+
+def _inflight_jobs(rag_dir: Path) -> list[str]:
+    """Output files under .boot/ that were started and never finished."""
+    out: list[str] = []
+    boot = rag_dir / ".boot"
+    try:
+        entries = sorted(boot.glob("*.txt"))
+    except OSError:
+        return out
+    now = time.time()
+    for f in entries:
+        try:
+            if now - f.stat().st_mtime > _INFLIGHT_MAX_AGE_S:
+                continue
+            tail = f.read_text(encoding="utf-8", errors="replace")[-4000:]
+        except OSError:
+            continue
+        if _SENTINEL.search(tail):
+            continue
+        if "wait-for" in f.name or f.stat().st_size == 0:
+            continue
+        out.append(f.name)
+    return out
+
+
+def _gate_stop_status(event: dict, *, project_root: Optional[Path] = None,
+                      **_: Any) -> Decision:
+    """At a turn boundary, refuse a SILENT stop while state is at risk.
+
+    AGENT-STOPS-WITHOUT-A-STATUS-S206. The operator's standing requirement is
+    that any halt tells them, without being asked: what is banked, what is in
+    flight and where its output is, what is NOT committed and therefore at risk,
+    the next action, and whether they are needed. Objections come AFTER that
+    block, never instead of it.
+
+    Measured S206: the agent stopped repeatedly with a job still running and no
+    way for the operator to know whether it was working or wedged. A report was
+    eventually produced only after the operator asked -- three times.
+
+    WHAT THIS CAN AND CANNOT DO, stated rather than implied. A hook cannot read
+    the assistant's prose, so it cannot verify that a status block was WRITTEN.
+    It can verify the two facts that make a silent stop dangerous, and both are
+    decidable: uncommitted changes in the kernel worktree, and detached jobs
+    whose sentinel has not landed. When either holds it injects the checklist at
+    the exact moment of stopping. That is a DETECTOR-WITH-DELIVERY, not a proof
+    of compliance, and it is recorded as such under GATE-OR-HOPE-PRINCIPLE.
+    """
+    root = Path(project_root) if project_root else _project_root_from_env()
+    if root is None:
+        return Decision("stop-status", True)
+    rag_dir = root / "RAG"
+    repo = None
+    wt = root / "GIT WORKTREES"
+    try:
+        for cand in sorted(wt.glob("*")):
+            if (cand / ".git").exists():
+                repo = cand
+                break
+    except OSError:
+        repo = None
+
+    n = _uncommitted_count(repo) if repo is not None else None
+    jobs = _inflight_jobs(rag_dir)
+    if not jobs and not n:
+        return Decision("stop-status", True)
+
+    bits = []
+    if n:
+        bits.append(f"{n} uncommitted change(s) in the kernel worktree — AT RISK")
+    if jobs:
+        bits.append("job(s) still in flight: " + ", ".join(jobs[:5]))
+    return Decision(
+        "stop-status", True,
+        context=(
+            "STOP-STATUS (AGENT-STOPS-WITHOUT-A-STATUS-S206): "
+            + "; ".join(bits) + ".\n"
+            "Do not stop silently. State, in this order, before anything else:\n"
+            "  1. what is BANKED (commits, by sha)\n"
+            "  2. what is IN FLIGHT and WHERE its output is\n"
+            "  3. what is NOT committed and therefore at risk\n"
+            "  4. the NEXT ACTION\n"
+            "  5. whether the OPERATOR is needed\n"
+            "Objections and caveats come AFTER that block, never instead of it."
+        ),
+    )
+
+
+def _project_root_from_env() -> Optional[Path]:
+    env = os.environ.get("RAG_KERNEL_PROJECT_ROOT")
+    if env and Path(env).is_dir():
+        return Path(env)
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "RAG").is_dir() and (parent / "GIT WORKTREES").is_dir():
+            return parent
+    return None
+
+
 _GATE_FUNCS = {
     "poll": _gate_poll,
     "sandbox-state": _gate_sandbox_state,
     "unbounded-wait": _gate_unbounded_wait,
     "tmux-heredoc": _gate_tmux_heredoc,
+    "stop-status": _gate_stop_status,
     "canonical-read": _gate_canonical_read,
     "deploy-parity": _gate_deploy_parity,
     "transport": _gate_transport,
@@ -1001,6 +1108,9 @@ def selftest(*, state_dir: Optional[Path] = None) -> tuple[int, list[str]]:
          False),
         ("tmux-heredoc", {"tool_name": "mcp__tmux-mcp__execute-command",
                           "tool_input": {"command": "python .boot/p.py"}}, True),
+        # Stop cannot refuse, so the selftest asserts the only thing that IS
+        # assertable here: the gate answers, and answers allow.
+        ("stop-status", {}, True),
         ("unbounded-wait", {"tool_name": "Bash", "tool_input": {"command":
           'while pgrep -f "rag_kernel session-start"; do sleep 3; done'}}, False),
         ("sandbox-state", {"tool_name": "Bash",

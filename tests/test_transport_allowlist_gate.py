@@ -303,6 +303,9 @@ def test_the_layer_holds_only_boundary_gates():
         # S206. Same admission test: the heredoc is typed into a tmux tool call
         # and never becomes a kernel verb, so no verb can refuse it.
         "tmux-heredoc",
+        # S206, Stop event: it cannot refuse, it delivers the status checklist at
+        # the moment of stopping. Detector-with-delivery, declared as such.
+        "stop-status",
         "deploy-parity", "post-transport-audit",
     }
 
