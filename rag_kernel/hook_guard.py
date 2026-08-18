@@ -74,7 +74,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.2.0"  # S206: +unbounded-wait (PreToolUse)
+HOOK_GUARD_VERSION = "1.3.0"  # S206: allowlist mirrors tool_hierarchy
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -140,9 +140,19 @@ DEFAULT_TRANSPORT_ALLOWLIST: tuple[str, ...] = (
     # planning / task surface, no host reach
     r"^(Task|TaskCreate|TaskUpdate|TaskList|TaskGet|TaskStop|ToolSearch)$",
     r"^(WebSearch|WebFetch)$",
-    # Bash is allowlisted here and narrowed by the sandbox-state gate, which
-    # already refuses it when it names canonical state.
-    r"^Bash$",
+    # The ATOMIC single-command fallback named by tool_hierarchy. Not a
+    # substitute for the PRIMARY: it strips &&/;/| and $(), so a compound
+    # command silently becomes a different command.
+    r"^mcp__wsl-exec__",
+    # ^Bash$ WAS HERE AND WAS REMOVED (S206, TRANSPORT-RULE-HAS-NO-ENFORCER-S206).
+    # tool_hierarchy declares exactly one shell order -- tmux-mcp (PRIMARY) >
+    # wsl-exec (ATOMIC fallback) > PowerShell (LAST RESORT) -- and the
+    # first-party Bash tool is not in it at any position. Allowing it here made
+    # the hierarchy a declaration with no enforcer, and MEASURED S206 that is
+    # not a theoretical gap: an agent that had loaded the rule and been
+    # corrected twice still reached for Bash, because the host system prompt
+    # tells every agent to prefer it. The allowlist now mirrors the hierarchy
+    # one-for-one so the two cannot disagree.
     # S206, GATE-CONTRADICTS-ITS-OWN-RULE-POWERSHELL-S206: tool_hierarchy names
     # PowerShell as the LAST RESORT and as THE recovery path when the WSL
     # transport is down. Refusing it left this deployment's single point of

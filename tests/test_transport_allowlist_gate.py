@@ -93,7 +93,8 @@ def test_an_entirely_unknown_tool_is_refused_for_being_unknown():
         "mcp__rag-kernel__rag_wait",
         "Read",
         "Edit",
-        "Bash",
+        "mcp__wsl-exec__execute_command",
+        "PowerShell",
         "Grep",
         "ToolSearch",
         "WebSearch",
@@ -176,6 +177,32 @@ def test_builtin_fallback_covers_the_sanctioned_shell():
     assert any("tmux-mcp" in p for p in DEFAULT_TRANSPORT_ALLOWLIST)
 
 
+def test_the_allowlist_mirrors_tool_hierarchy_exactly():
+    """TRANSPORT-RULE-HAS-NO-ENFORCER-S206.
+
+    tool_hierarchy declares ONE shell order: tmux-mcp (PRIMARY) > wsl-exec
+    (ATOMIC fallback) > PowerShell (LAST RESORT). The allowlist used to carry
+    ^Bash$ -- a tool that appears nowhere in that order -- and to omit
+    wsl-exec, the one the order actually names. So the declared hierarchy and
+    the enforced one disagreed, and the agent followed the one with a gate
+    behind it. Measured S206 on the agent that wrote this test: rule loaded,
+    corrected twice by the operator, complied with neither time, because the
+    host system prompt instructs every agent to prefer Bash.
+    """
+    fb = " ".join(DEFAULT_TRANSPORT_ALLOWLIST)
+    assert "tmux-mcp" in fb
+    assert "wsl-exec" in fb
+    assert "PowerShell" in fb
+    assert "Bash" not in fb, "Bash is not in tool_hierarchy at any position"
+
+
+def test_bash_is_refused_and_the_refusal_names_the_primary():
+    d = decide("transport", _ev("Bash", tool_input={"command": "ls"}))
+
+    assert d.allow is False
+    assert "mcp__tmux-mcp__" in d.reason
+
+
 # ---------------------------------------------------------------------------
 # post-compliance — the after half
 # ---------------------------------------------------------------------------
@@ -213,9 +240,14 @@ def test_post_audit_does_not_scan_tool_output(monkeypatch):
     """Substring-scanning results was cut on purpose: a gate that guesses at
     meaning from text will be wrong loudly and then be ignored."""
     d = decide("post-transport-audit",
-               _ev("Bash", tool_response="wrote RAG_MASTER.json.tmp and failed"))
+               _ev("mcp__tmux-mcp__execute-command",
+                   tool_response="wrote RAG_MASTER.json.tmp and failed"))
 
-    assert d.context == "", "Bash is declared; nothing about its OUTPUT is this gate's business"
+    assert d.context == "", (
+        "the PRIMARY transport is declared; nothing about its OUTPUT is this "
+        "gate's business. The example was Bash until S206, when the allowlist "
+        "stopped declaring it -- see TRANSPORT-RULE-HAS-NO-ENFORCER-S206."
+    )
 
 
 # ---------------------------------------------------------------------------
