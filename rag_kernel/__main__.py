@@ -5329,8 +5329,13 @@ def _close_order_prepare(
             file=sys.stderr,
         )
         return 1
-    g = subprocess.run([sys.executable, str(grand)], cwd=str(rag_dir),
-                       capture_output=True, text=True)
+    # PASS THE SESSION ID. Axis 7 judges session conduct against the rules and
+    # degrades to "no --session given, conduct cannot be judged" without it --
+    # inconclusive during the very close that knows its own id, and axis 9 then
+    # reports the inconclusive probe as a finding, so the omission did not merely
+    # lose a check, it refused the seal (GRAND-AUDIT-NOT-GIVEN-SESSION-S207).
+    g = subprocess.run([sys.executable, str(grand), "--session", str(sid)],
+                       cwd=str(rag_dir), capture_output=True, text=True)
     if g.returncode != 0:
         print(
             "ERROR: close-order GRAND AUDIT FAILED; nothing banked.\n"

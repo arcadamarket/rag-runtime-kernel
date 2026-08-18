@@ -634,7 +634,20 @@ class Grand:
                         self.add(A,name,UNK,"L1: TLC raised %s"%str(e)[:60]); continue
                     out=r.stdout+r.stderr
                     held="No error has been found" in out
-                    viol=bool(re.search(r"Error: (Invariant|Property|Deadlock)",out))
+                    # TLC states a violated invariant in TWO wordings, and this
+                    # matcher knew only one. The live tool prints "Error: The
+                    # invariant of X is equal to FALSE"; the pattern demanded
+                    # "Error: Invariant". So a naive model that DID falsify as
+                    # designed scored neither held nor viol, fell through to the
+                    # no-verdict branch, and was reported as "TLC did not complete
+                    # (rc=151)" -- rc 151 being precisely TLC's exit code for
+                    # violation-found. Axis 8 therefore failed on the outcome it
+                    # requires and could never go green
+                    # (GRAND-AUDIT-TLC-READS-EXPECTED-VIOLATION-AS-FAILURE-S207).
+                    viol=bool(re.search(
+                        r"Error: (Invariant|Property|Deadlock)\b"
+                        r"|Error: The (invariant|property) .* is equal to FALSE"
+                        r"|Error: Invariant .* is violated",out))
                     if not held and not viol:
                         # TLC produced no verdict: parse error, OOM, killed, bad config.
                         # L1 - a probe that did not COMPLETE may not produce a finding.
