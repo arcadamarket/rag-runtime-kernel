@@ -1155,6 +1155,53 @@ def build_parser() -> argparse.ArgumentParser:
     decisions_parser.add_argument("--item", type=str, default=None,
                                   help="show only rulings binding this tracked_item id")
 
+    # -- post / inbox / drain (POST-SEAL-INBOX-MISSING-S208: the letter slot) ------
+    # The seal is a one-way door. A session keeps learning for hours after sealing
+    # and, until now, had nowhere to put what it learned: `add` and `priority` are
+    # correctly refused post-seal, so four S206-review findings travelled to their
+    # successor by operator copy-paste. These three verbs are the slot. They write
+    # RAG_CONTEXT.json, which is MEASURED to accept writes after a seal, so a
+    # deposit cannot invalidate one. See rag_kernel.inbox.
+    post_parser = subparsers.add_parser(
+        "post",
+        help="Deposit a note for the NEXT session into the post-seal inbox. Allowed "
+             "specifically when your session has already sealed and can make no "
+             "canonical write. Creates no tracked item; the successor drains it.",
+    )
+    post_parser.add_argument("--from", dest="from_session", type=str, required=True,
+                             help="the session id depositing the note (usually yours)")
+    post_parser.add_argument("--title", type=str, required=True,
+                             help="one-line subject the successor triages on")
+    post_parser.add_argument("--note", type=str, required=True,
+                             help="the finding IN FULL. RETRO-CLARITY: it is read with no "
+                                  "transcript, so state what was measured and what follows.")
+    post_parser.add_argument("--dry-run", action="store_true",
+                             help="render the record without writing")
+
+    inbox_parser = subparsers.add_parser(
+        "inbox",
+        help="List post-seal inbox notes. Undrained notes BLOCK session-end.",
+    )
+    inbox_parser.add_argument("--all", action="store_true",
+                              help="include already-drained notes (default: only what is owed)")
+
+    drain_parser = subparsers.add_parser(
+        "drain",
+        help="Mark one inbox note handled: banked as a tracked item, or discarded "
+             "with a stated reason. Draining every note is a PRECONDITION of sealing.",
+    )
+    drain_parser.add_argument("note_id", type=str, help="inbox note id, e.g. INBOX-S207-001")
+    drain_parser.add_argument("--session", type=str, required=True,
+                              help="your session id, recorded as who drained it")
+    drain_parser.add_argument("--action", type=str, required=True,
+                              choices=["banked", "discarded"],
+                              help="banked: it became a tracked item. discarded: judged "
+                                   "not worth one, and the reason is recorded.")
+    drain_parser.add_argument("--ref", type=str, required=True,
+                              help="for banked: the tracked item id. for discarded: the reason. "
+                                   "Required either way — a drain with no destination is a "
+                                   "status claim with nothing behind it.")
+
     # -- register-asset / reuse-check (REUSE-REGISTRY-GUARD: baked-asset registry) --
     # Lean-RAG: the inventory lives in the sanctioned, NON-LOADED RAG_CONTEXT.json
     # `baked_assets` partition; RAG_MASTER.json carries only the concise
@@ -4378,7 +4425,8 @@ def _render_agent_frame(rag: dict, *, rag_dir: "str | None" = None) -> str:
     return "\n".join(out)
 
 
-def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None) -> str:
+def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None,
+                          rag_dir: "Path | None" = None) -> str:
     """Deterministic boot-state briefing from the RAG — every state fact the agent
     needs at boot, so it never has to open RAG_MASTER.json itself (KA-20).
 
@@ -4405,6 +4453,24 @@ def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None) -> str
     lines.append(
         f"  inference_ledger: {len(open_items)} OPEN of {len(led)} total{overdue_txt}"
     )
+    # POST-SEAL INBOX (POST-SEAL-INBOX-MISSING-S208). Rendered HERE, beside the
+    # directive, because a note deposited after a seal has no other route to a
+    # reader — and rendered IN FULL for the same reason DIRECTIVE-NO-TRUNCATE
+    # exists: a count would make the successor go looking, and a handoff that
+    # requires going looking is the courier this mechanism replaces. Silent when
+    # nothing is owed, so a clean lineage pays nothing for it.
+    try:
+        from . import inbox as _inbox                           # noqa: PLC0415
+
+        _dir = rag_dir or Path(DEFAULT_RAG).resolve().parent
+        _inbox_block = _inbox.render_boot_block(_dir)
+    except Exception as exc:                                    # noqa: BLE001
+        # A briefing that dies on an optional partition would brick the boot; say
+        # so loudly instead, because a SILENT inbox is indistinguishable from an
+        # empty one and that is the whole failure mode being fixed.
+        _inbox_block = f"  [INBOX] UNREADABLE — {type(exc).__name__}: {exc}"
+    if _inbox_block:
+        lines.append(_inbox_block)
     if isinstance(nsd, dict):
         # DIRECTIVE-NO-TRUNCATE (S184). This was clipped to 300 chars with an
         # ellipsis, which made the boot briefing the ONLY place a directive could
@@ -5736,6 +5802,39 @@ def _drive_close(
     # declaration is not permission. The declaration is cheap and honest; what is
     # no longer available is saying nothing at all.
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # INBOX-DRAIN gate (POST-SEAL-INBOX-MISSING-S208).
+    #
+    # A note in the inbox was deposited by a session that had already sealed and
+    # therefore had NO other way to reach anyone. Sealing over it loses it in
+    # exactly the manner the inbox was built to prevent, one level up. So the
+    # drain is a PRECONDITION of the seal, not a courtesy: bank each note as a
+    # tracked item, or discard it with a stated reason, then close again.
+    #
+    # Placed BEFORE the ERROR_LOG gate deliberately — an undrained note may be the
+    # very thing that should have become the ERROR_LOG entry, so asking about the
+    # entry first would invite a `--no-errors` declaration that is false.
+    # ------------------------------------------------------------------
+    try:
+        from . import inbox as _inbox                           # noqa: PLC0415
+
+        _inbox_blocker = _inbox.seal_blocker(Path(rag_path).resolve().parent)
+    except Exception as exc:                                    # noqa: BLE001
+        # Unreadable is NOT clear. A gate that cannot see its input refuses.
+        _inbox_blocker = (
+            f"INBOX-DRAIN gate — the inbox partition is unreadable "
+            f"({type(exc).__name__}: {exc}), so it cannot be shown to be drained. "
+            f"Absence of evidence is not a clean bill of health."
+        )
+    if _inbox_blocker and not getattr(report_args, "force", False):
+        print("ERROR: " + _inbox_blocker + "\n  transfer_ready NOT set "
+              "(marker SURFACE_PENDING, resumable).", file=sys.stderr)
+        _write_close_marker(
+            rag_path,
+            _build_close_marker(sid, "SURFACE_PENDING", steps, started, None),
+        )
+        return 1
+
     if not steps.get("error_log") and not getattr(report_args, "no_errors", False) \
             and not getattr(report_args, "force", False):
         print(
@@ -8409,6 +8508,62 @@ def _resolve_context_dir(rag_dir: Path) -> Path:
     return d
 
 
+def cmd_post(args: argparse.Namespace) -> int:
+    """Deposit one envelope into the post-seal inbox (POST-SEAL-INBOX-MISSING-S208)."""
+    from . import inbox as _inbox                               # noqa: PLC0415
+
+    rag_dir = Path(getattr(args, "rag", None) or DEFAULT_RAG).resolve().parent
+    try:
+        rec = _inbox.post_note(rag_dir, from_session=args.from_session,
+                               title=args.title, note=args.note,
+                               dry_run=bool(getattr(args, "dry_run", False)))
+    except _inbox.InboxError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    verb = "would post" if getattr(args, "dry_run", False) else "posted"
+    print(f"{verb} {rec.id}: {rec.title}  [from {rec.from_session}]")
+    print("  The next session sees this at session-start and CANNOT SEAL until it is "
+          "drained. That refusal is the point: it is why this is inheritance and not "
+          "a courier.")
+    return 0
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    """List inbox notes; by default only what is still owed."""
+    from . import inbox as _inbox                               # noqa: PLC0415
+
+    rag_dir = Path(getattr(args, "rag", None) or DEFAULT_RAG).resolve().parent
+    notes = _inbox.list_notes(rag_dir, undrained_only=not getattr(args, "all", False))
+    if not notes:
+        print("inbox: empty — nothing owed." if not getattr(args, "all", False)
+              else "inbox: no notes have ever been posted.")
+        return 0
+    for n in notes:
+        state = "DRAINED" if n.drained else "OWED"
+        print(f"[{state}] {n.id}  from {n.from_session}  {n.posted_at}")
+        print(f"    {n.title}")
+        if n.drained:
+            print(f"    -> {n.drained_action} by {n.drained_by}: {n.drained_ref}")
+    return 0
+
+
+def cmd_drain(args: argparse.Namespace) -> int:
+    """Mark one inbox note handled — the precondition of sealing."""
+    from . import inbox as _inbox                               # noqa: PLC0415
+
+    rag_dir = Path(getattr(args, "rag", None) or DEFAULT_RAG).resolve().parent
+    try:
+        rec = _inbox.drain_note(rag_dir, args.note_id, by_session=args.session,
+                                action=args.action, ref=args.ref)
+    except _inbox.InboxError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(f"{rec.id}: drained — {rec.drained_action} ({rec.drained_ref}) [session {rec.drained_by}]")
+    left = _inbox.undrained_count(rag_dir)
+    print(f"  inbox still owes: {left}" if left else "  inbox drained — the seal gate is clear.")
+    return 0
+
+
 def cmd_register_asset(args: argparse.Namespace) -> int:
     """Register a baked asset into the sanctioned baked_assets partition (REUSE-REGISTRY-GUARD).
 
@@ -9394,6 +9549,9 @@ def main(argv: list[str] | None = None) -> int:
         "measured": cmd_measured,
         "decide": cmd_decide,
         "decisions": cmd_decisions,
+        "post": cmd_post,
+        "inbox": cmd_inbox,
+        "drain": cmd_drain,
         "register-asset": cmd_register_asset,
         "status": cmd_status,
         "reuse-check": cmd_reuse_check,
