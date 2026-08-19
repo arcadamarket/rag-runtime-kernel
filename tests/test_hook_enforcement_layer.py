@@ -76,7 +76,7 @@ def test_gate_names_are_stable():
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.7.0"  # S206: unsealed-session check
+    assert HOOK_GUARD_VERSION == "1.8.0"  # S206-review: rag_wait covered
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():
@@ -495,3 +495,45 @@ def test_rule_45_is_delivered_by_a_refused_boot():
     from rag_kernel.__main__ import BOOT_CRITICAL_RULES
 
     assert "agent_role_boundary" in BOOT_CRITICAL_RULES
+
+
+# --------------------------------------------------------------------------- #
+# WAIT-FOR-USED-AS-A-POLL-S198 — the poll gate now covers the kernel's own wait
+# --------------------------------------------------------------------------- #
+
+def _wait(path="/x/RAG/.boot/job.txt"):
+    return {"tool_name": "mcp__rag-kernel__rag_wait", "tool_input": {"path": path}}
+
+
+def test_first_wait_on_a_file_is_allowed(tmp_path):
+    assert decide("poll", _wait(), state_dir=tmp_path, now=T0).allow
+
+
+def test_reissuing_a_wait_on_the_same_file_is_refused(tmp_path):
+    """MEASURED on S207: 34 of 64 waits returned in under a second and were
+    re-issued. Median 0.0s. Forensics scored that session 'no repeat bursts',
+    because this gate could not see the kernel's own verb."""
+    decide("poll", _wait(), state_dir=tmp_path, now=T0)
+    d = decide("poll", _wait(), state_dir=tmp_path, now=T0 + 2)
+
+    assert not d.allow
+    assert "POLL-GUARD" in d.reason
+    # The existing refusal already names the cure: the CLI wait-for, in a SECOND
+    # pane, read ONCE. No wait-specific wording was added -- an earlier attempt
+    # to inject one broke the implicit f-string concatenation, and a refusal
+    # message is not worth risking the gate that carries it.
+    assert "wait-for" in d.reason
+    assert "SECOND pane" in d.reason
+
+
+def test_a_wait_on_a_different_file_is_not_collateral_damage(tmp_path):
+    decide("poll", _wait("/x/a.txt"), state_dir=tmp_path, now=T0)
+    assert decide("poll", _wait("/x/b.txt"), state_dir=tmp_path, now=T0 + 1).allow
+
+
+def test_a_capped_wait_chain_is_untouched(tmp_path):
+    """Over MCP rag_wait is capped at ~30s, so a long job legitimately chains
+    waits. Those are far outside the cooldown and must pass."""
+    decide("poll", _wait(), state_dir=tmp_path, now=T0)
+    later = T0 + POLL_COOLDOWN_SECONDS + 1
+    assert decide("poll", _wait(), state_dir=tmp_path, now=later).allow

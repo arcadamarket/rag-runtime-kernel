@@ -75,7 +75,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.7.0"  # S206: stop-status sees an unsealed session
+HOOK_GUARD_VERSION = "1.8.0"  # S206-review: poll gate covers rag_wait
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -200,6 +200,11 @@ POLL_COOLDOWN_SECONDS = float(os.environ.get("RAG_HOOK_POLL_COOLDOWN", "25"))
 #: as Claude Code reports it; the settings.json matcher narrows first, this is
 #: the belt to that braces (a mis-scoped matcher must not silently disable a
 #: gate — it must fail to match and the gate simply allows, never crashes).
+#: The kernel's own blocking-wait surfaces. Named separately from the tmux
+#: result-reader because they are keyed differently: a command id there, the
+#: TARGET FILE here.
+_WAIT_TOOLS = re.compile(r"rag_wait|wait-for", re.I)
+
 _POLL_TOOLS = re.compile(r"get-?command-?result", re.I)
 _SHELL_TOOLS = re.compile(r"(^Bash$)|(bash$)", re.I)
 _FILE_TOOLS = re.compile(r"^(Read|Edit|Write|NotebookEdit|MultiEdit)$")
@@ -411,11 +416,27 @@ def _gate_poll(event: dict, *, state_dir: Optional[Path] = None,
     that had the rule loaded. The tell is machine-visible — two calls naming one
     command id, seconds apart — so it is checkable, so it is now checked.
     """
-    if not _POLL_TOOLS.search(_tool_name(event)):
-        return Decision("poll", True)
+    name = _tool_name(event)
     ti = _tool_input(event)
-    cmd_id = str(ti.get("commandId") or ti.get("command_id") or "").strip()
-    if not cmd_id:
+
+    # WAIT-FOR-USED-AS-A-POLL-S198, first of its three blindnesses. This gate
+    # matched only the tmux result-reader, so the kernel's OWN wait verb -- the
+    # thing the poll refusal recommends -- passed untouched and became the
+    # polling instrument. Keyed on the TARGET FILE, because the verb repeating
+    # is not the defect: over MCP rag_wait is capped by the client timeout
+    # (~30s), so a long job legitimately chains several waits and those are far
+    # outside any cooldown. The defect is a wait that returned instantly being
+    # re-issued against the same file seconds later.
+    if _WAIT_TOOLS.search(name):
+        target = str(ti.get("path") or ti.get("file") or ti.get("filename") or "").strip()
+        if not target:
+            return Decision("poll", True)
+        cmd_id = "wait:" + target
+    elif _POLL_TOOLS.search(name):
+        cmd_id = str(ti.get("commandId") or ti.get("command_id") or "").strip()
+        if not cmd_id:
+            return Decision("poll", True)
+    else:
         return Decision("poll", True)
 
     path = _state_path(state_dir)
