@@ -5146,6 +5146,17 @@ def _close_report_ns(sid: str, args: argparse.Namespace) -> argparse.Namespace:
         # FORENSICS-AS-GATE (S190): the conduct declaration, forwarded so the
         # close can tell a declared burst from an unnoticed one.
         accept_conduct=getattr(args, "accept_conduct", None),
+        # CLOSE-ESCAPE-HATCH-IS-INERT-S207. This namespace is a hand-maintained
+        # WHITELIST, and the flag was registered on the parser but never listed
+        # here -- so `_close_order_prepare` read it off report_args, got the
+        # getattr default False, and ran the close order anyway. MEASURED twice in
+        # a row in S207: a close refused by the grand audit printed "re-run with
+        # --no-auto-close-order", and the re-run with that exact flag rendered,
+        # committed a new HEAD and re-measured before refusing identically. A
+        # refusal that names an inert escape is worse than one that names none:
+        # the axis it pointed around was red by construction, so nothing an agent
+        # or the operator could type would seal the session.
+        no_auto_close_order=getattr(args, "no_auto_close_order", False),
     )
 
 
