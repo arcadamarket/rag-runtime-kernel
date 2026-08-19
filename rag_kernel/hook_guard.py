@@ -941,8 +941,29 @@ _SENTINEL = re.compile(r"QQ_[A-Z0-9_]+_QQ")
 _INFLIGHT_MAX_AGE_S = 3600
 
 
+#: A file that has not grown for this long is no longer plausibly WRITING. It may
+#: still be a live job that is merely quiet, so it is still reported -- but it is
+#: reported as unverified rather than asserted to be running. See _inflight_jobs.
+_QUIET_S = 120
+
+
 def _inflight_jobs(rag_dir: Path) -> list[str]:
-    """Output files under .boot/ that were started and never finished."""
+    """Output files under .boot/ that carry no completion sentinel.
+
+    NARROWED (S207). The predicate was "no QQ_..._QQ token" alone, which cannot
+    tell a job that is still running from one that finished without the token. It
+    fired three times on the S206 review pass and twice on S207, every time on
+    output already read and acted upon -- and a gate that cries wolf is one agents
+    learn to scroll past, which is indistinguishable from a gate never wired.
+
+    THE FIX IS TO THE CLAIM, NOT THE SENSITIVITY. Loosening the detector was the
+    tempting move and it is the wrong one: a long pytest run can sit silent for
+    minutes, so "quiet means finished" would make this gate MISS a genuinely live
+    job. A false negative on a safety gate is worse than a false alarm. So every
+    sentinel-less file is still reported; what changes is that a file quiet for
+    longer than _QUIET_S is labelled as such instead of being asserted to be in
+    flight, and the label names the remedy: append a QQ_<NAME>_DONE_QQ line.
+    """
     out: list[str] = []
     boot = rag_dir / ".boot"
     try:
@@ -952,16 +973,22 @@ def _inflight_jobs(rag_dir: Path) -> list[str]:
     now = time.time()
     for f in entries:
         try:
-            if now - f.stat().st_mtime > _INFLIGHT_MAX_AGE_S:
+            st = f.stat()
+            if now - st.st_mtime > _INFLIGHT_MAX_AGE_S:
                 continue
             tail = f.read_text(encoding="utf-8", errors="replace")[-4000:]
         except OSError:
             continue
         if _SENTINEL.search(tail):
             continue
-        if "wait-for" in f.name or f.stat().st_size == 0:
+        if "wait-for" in f.name or st.st_size == 0:
             continue
-        out.append(f.name)
+        quiet = now - st.st_mtime
+        if quiet > _QUIET_S:
+            out.append(f"{f.name} (no sentinel; quiet {int(quiet // 60)}m — "
+                       f"finished without one, or died)")
+        else:
+            out.append(f.name)
     return out
 
 
@@ -1044,7 +1071,12 @@ def _gate_stop_status(event: dict, *, project_root: Optional[Path] = None,
     if n:
         bits.append(f"{n} uncommitted change(s) in the kernel worktree — AT RISK")
     if jobs:
-        bits.append("job(s) still in flight: " + ", ".join(jobs[:5]))
+        # Wording matters here (S207): the old line asserted "still in flight" for
+        # every sentinel-less file, including ones already finished and read. An
+        # assertion the agent can see is false teaches it to discount the whole
+        # gate. This states what was actually observed and lets the entries above
+        # carry the quiet-time qualifier.
+        bits.append("job output with no completion sentinel: " + ", ".join(jobs[:5]))
     return Decision(
         "stop-status", True,
         context=(
