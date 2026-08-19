@@ -5824,7 +5824,8 @@ def _drive_close(
     try:
         from . import inbox as _inbox                           # noqa: PLC0415
 
-        _inbox_blocker = _inbox.seal_blocker(Path(rag_path).resolve().parent)
+        _inbox_blocker = _inbox.seal_blocker(Path(rag_path).resolve().parent,
+                                             sealing_session=sid)
     except Exception as exc:                                    # noqa: BLE001
         # Unreadable is NOT clear. A gate that cannot see its input refuses.
         _inbox_blocker = (

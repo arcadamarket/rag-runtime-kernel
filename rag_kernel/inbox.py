@@ -300,9 +300,21 @@ def render_boot_block(rag_dir: Path | str, *, width: int = 96) -> str:
     return "\n".join(lines)
 
 
-def seal_blocker(rag_dir: Path | str) -> Optional[str]:
-    """The refusal text for ``session-end``, or None when the inbox is drained."""
-    owed = list_notes(rag_dir, undrained_only=True)
+def seal_blocker(rag_dir: Path | str, *, sealing_session: Optional[str] = None) -> Optional[str]:
+    """The refusal text for ``session-end``, or None when nothing INHERITED is owed.
+
+    ``sealing_session`` is excluded from the check, and that exclusion is the
+    difference between a gate and a trap. FOUND BY USING IT, not by testing it:
+    the first live deposit was a note S208 wrote FOR ITS SUCCESSOR while still
+    open, and the gate promptly refused S208's own seal — a session cannot be
+    required to drain its own farewell letter, because draining it means banking
+    or discarding it, and if it were bankable the session would have banked it
+    instead of posting. In the intended flow the question never arises: a note is
+    deposited AFTER the seal, so it can only ever block the NEXT session. The
+    parameter makes that intent explicit rather than accidental.
+    """
+    owed = [n for n in list_notes(rag_dir, undrained_only=True)
+            if not sealing_session or n.from_session != sealing_session]
     if not owed:
         return None
     ids = ", ".join(n.id for n in owed)

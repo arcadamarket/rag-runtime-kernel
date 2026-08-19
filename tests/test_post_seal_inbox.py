@@ -44,6 +44,19 @@ def test_seal_is_blocked_while_undrained(tmp_path) -> None:
     assert "drain" in blocker, "the refusal must name the remedy, not just the problem"
 
 
+def test_a_session_does_not_block_on_its_own_farewell_note(tmp_path) -> None:
+    """FOUND BY USING IT: the gate must not trap the session that wrote the note.
+
+    A session leaving a letter for its successor cannot be required to drain it —
+    draining means banking or discarding, and if it were bankable the session
+    would have banked it instead of posting. Other sessions' notes still block.
+    """
+    inbox.post_note(tmp_path, from_session="S208", title="for my successor", note="n")
+    assert inbox.seal_blocker(tmp_path, sealing_session="S208") is None
+    assert inbox.seal_blocker(tmp_path, sealing_session="S209") is not None
+    assert inbox.seal_blocker(tmp_path) is not None, "no session named: block on everything"
+
+
 def test_drain_clears_the_blocker(tmp_path) -> None:
     inbox.post_note(tmp_path, from_session="S207", title="t", note="n")
     inbox.drain_note(tmp_path, "INBOX-S207-001", by_session="S208",
