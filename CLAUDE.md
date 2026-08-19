@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=331784d9ded4d2d6...
+> state_hash: stored=bd27b925865d0de2... computed=1bd17f12370dcc08...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -55,9 +55,9 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 
 | Fact | Value |
 |---|---|
-| git HEAD | 590807c |
+| git HEAD | bf5b6d5 |
 | runtime | see current_status |
-| test gate | 2877  (session S207 @ 6db885b) |
+| test gate | 2881  (session S207 @ bf5b6d5) |
 | written_by_session | S206 |
 | active items | 127 |
 | P1 | 36 |
@@ -84,7 +84,6 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `GC-WOULD-DELETE-LIVE-TESTS-S202`
 - `GRAND-AUDIT-NOT-IN-THE-CLOSE-S206`
 - `GRAND-AUDIT-SKIPPED-ON-RESUMED-CLOSE-S207`
-- `GRAND-AUDIT-TLC-READS-EXPECTED-VIOLATION-AS-FAILURE-S207`
 - `INFERENCE-LEDGER-NO-LIFECYCLE`
 - `LEAN-RAG-INVERTED-LOADED-STORE-S204`
 - `MEASUREMENT-PROVENANCE-S201`
@@ -101,6 +100,7 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `TRANSPORT-RULE-HAS-NO-ENFORCER-S206`
+- `TWO-LIVE-SESSIONS-ONE-RAG-S207`
 - `UNBOUNDED-WAIT-GATE-S206`
 - `UNCOMMITTED-WORK-HAS-NO-GATE-S206`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
