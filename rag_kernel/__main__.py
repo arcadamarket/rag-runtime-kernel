@@ -1177,6 +1177,8 @@ def build_parser() -> argparse.ArgumentParser:
                                   "transcript, so state what was measured and what follows.")
     post_parser.add_argument("--dry-run", action="store_true",
                              help="render the record without writing")
+    post_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                             help="Path to RAG_MASTER.json (its parent holds RAG_CONTEXT.json)")
 
     inbox_parser = subparsers.add_parser(
         "inbox",
@@ -1184,6 +1186,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inbox_parser.add_argument("--all", action="store_true",
                               help="include already-drained notes (default: only what is owed)")
+    inbox_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                              help="Path to RAG_MASTER.json (its parent holds RAG_CONTEXT.json)")
 
     drain_parser = subparsers.add_parser(
         "drain",
@@ -1197,6 +1201,8 @@ def build_parser() -> argparse.ArgumentParser:
                               choices=["banked", "discarded"],
                               help="banked: it became a tracked item. discarded: judged "
                                    "not worth one, and the reason is recorded.")
+    drain_parser.add_argument("--rag", type=Path, default=_default_rag_path(),
+                              help="Path to RAG_MASTER.json (its parent holds RAG_CONTEXT.json)")
     drain_parser.add_argument("--ref", type=str, required=True,
                               help="for banked: the tracked item id. for discarded: the reason. "
                                    "Required either way — a drain with no destination is a "
@@ -4462,7 +4468,7 @@ def _render_boot_briefing(rag: dict, *, current_sid: "str | None" = None,
     try:
         from . import inbox as _inbox                           # noqa: PLC0415
 
-        _dir = rag_dir or Path(DEFAULT_RAG).resolve().parent
+        _dir = rag_dir or _default_rag_path().resolve().parent
         _inbox_block = _inbox.render_boot_block(_dir)
     except Exception as exc:                                    # noqa: BLE001
         # A briefing that dies on an optional partition would brick the boot; say
@@ -8512,7 +8518,7 @@ def cmd_post(args: argparse.Namespace) -> int:
     """Deposit one envelope into the post-seal inbox (POST-SEAL-INBOX-MISSING-S208)."""
     from . import inbox as _inbox                               # noqa: PLC0415
 
-    rag_dir = Path(getattr(args, "rag", None) or DEFAULT_RAG).resolve().parent
+    rag_dir = Path(getattr(args, "rag", None) or _default_rag_path()).resolve().parent
     try:
         rec = _inbox.post_note(rag_dir, from_session=args.from_session,
                                title=args.title, note=args.note,
@@ -8532,7 +8538,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     """List inbox notes; by default only what is still owed."""
     from . import inbox as _inbox                               # noqa: PLC0415
 
-    rag_dir = Path(getattr(args, "rag", None) or DEFAULT_RAG).resolve().parent
+    rag_dir = Path(getattr(args, "rag", None) or _default_rag_path()).resolve().parent
     notes = _inbox.list_notes(rag_dir, undrained_only=not getattr(args, "all", False))
     if not notes:
         print("inbox: empty — nothing owed." if not getattr(args, "all", False)
@@ -8551,7 +8557,7 @@ def cmd_drain(args: argparse.Namespace) -> int:
     """Mark one inbox note handled — the precondition of sealing."""
     from . import inbox as _inbox                               # noqa: PLC0415
 
-    rag_dir = Path(getattr(args, "rag", None) or DEFAULT_RAG).resolve().parent
+    rag_dir = Path(getattr(args, "rag", None) or _default_rag_path()).resolve().parent
     try:
         rec = _inbox.drain_note(rag_dir, args.note_id, by_session=args.session,
                                 action=args.action, ref=args.ref)

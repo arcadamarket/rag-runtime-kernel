@@ -118,3 +118,48 @@ def test_drained_notes_leave_the_boot_block(tmp_path) -> None:
 def test_dry_run_writes_nothing(tmp_path) -> None:
     inbox.post_note(tmp_path, from_session="S207", title="t", note="n", dry_run=True)
     assert inbox.undrained_count(tmp_path) == 0
+
+
+# --------------------------------------------------------------------------- #
+# CLI WIRING — the half the tests above cannot see.
+#
+# MEASURED, on myself, in the session that wrote this file: the twelve tests
+# above passed while `python -m rag_kernel post` crashed with NameError on a
+# constant that does not exist. They call the module DIRECTLY and therefore
+# proved the LOGIC while the WIRING was broken — the exact distinction
+# test_gate_wiring_parity was written for one level down, reproduced by its own
+# author one level up. A verb reachable from no command line is a verb nobody
+# has. These tests go through the dispatcher.
+# --------------------------------------------------------------------------- #
+def _cli(tmp_path, *argv: str) -> int:
+    from rag_kernel.__main__ import main                        # noqa: PLC0415
+
+    rag = tmp_path / "RAG_MASTER.json"
+    if not rag.exists():
+        rag.write_text("{}", encoding="utf-8")
+    return main([*argv, "--rag", str(rag)])
+
+
+def test_cli_post_inbox_drain_round_trip(tmp_path, capsys) -> None:
+    assert _cli(tmp_path, "post", "--from", "S207",
+                "--title", "wiring", "--note", "reaches the dispatcher") == 0
+    assert inbox.undrained_count(tmp_path) == 1
+
+    assert _cli(tmp_path, "inbox") == 0
+    assert "INBOX-S207-001" in capsys.readouterr().out
+
+    assert _cli(tmp_path, "drain", "INBOX-S207-001", "--session", "S208",
+                "--action", "banked", "--ref", "ITEM-1") == 0
+    assert inbox.undrained_count(tmp_path) == 0
+
+
+def test_cli_drain_rejects_a_missing_ref(tmp_path) -> None:
+    """argparse must demand --ref; a drain with no destination proves nothing."""
+    _cli(tmp_path, "post", "--from", "S207", "--title", "t", "--note", "n")
+    with pytest.raises(SystemExit):
+        _cli(tmp_path, "drain", "INBOX-S207-001", "--session", "S208",
+             "--action", "banked")
+
+
+def test_cli_post_returns_nonzero_on_bad_input(tmp_path) -> None:
+    assert _cli(tmp_path, "post", "--from", "S207", "--title", "t", "--note", "   ") == 1
