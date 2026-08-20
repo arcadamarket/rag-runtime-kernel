@@ -14,6 +14,20 @@ recorded and never gates is a comment.
 
 Both gates are REFUSE-BY-DEFAULT with a named repair, and both fail OPEN when the
 marker cannot be read: a guard that cannot read state must not become an outage.
+
+**SEALED-SESSION-CAN-STILL-WRITE-S208 (generalised S209).** The double-seal guard
+refused one verb out of four when it was measured against real traffic: a sealed
+S206-review session wrote all through S207 using ``register-asset``, ``render
+--apply``, ``bootmap --refresh`` and ``update-rule``. Two holes, both closed here
+and both pinned below:
+
+* a write that named **no** session returned ``None`` — omitting ``--session`` was
+  a way through, and the measured offender omitted it;
+* ``render`` and ``bootmap`` are dual-mode, so a flat verb set could not guard the
+  writing half without also banning the read.
+
+``register-asset`` moved the other way, deliberately: it is now permitted after a
+seal because the post-seal inbox is built on that permission.
 """
 
 from __future__ import annotations
@@ -23,7 +37,11 @@ import json
 
 import pytest
 
-from rag_kernel.__main__ import _SEAL_GUARDED_VERBS, _refuse_mutation_after_seal
+from rag_kernel.__main__ import (
+    _SEAL_GUARDED_VERBS,
+    _SEAL_GUARDED_WHEN_FLAG,
+    _refuse_mutation_after_seal,
+)
 
 
 def _rag(tmp_path, *, sealed_session=None, transfer_ready=True, marker=True):
@@ -82,8 +100,30 @@ class TestDoubleSealGuard:
         rag = _rag(tmp_path, marker=False)
         assert _refuse_mutation_after_seal("add", _ns(rag, "S187")) is None
 
-    def test_missing_session_arg_does_not_block(self, tmp_path):
+    def test_a_write_naming_no_session_is_refused(self, tmp_path, capsys):
+        """SEALED-SESSION-CAN-STILL-WRITE-S208 — the hole the S207 traffic used.
+
+        This assertion is the INVERSE of the one it replaces. Until S209 an
+        unnamed write returned ``None``, which made omitting ``--session`` a way
+        through the guard rather than a reason to stop: an anonymous write cannot
+        be distinguished from a write by the sealed session, and the measured
+        offender was anonymous. The refusal must name the escape, since every
+        guarded verb now accepts ``--session``.
+        """
         rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal("add", argparse.Namespace(rag=rag)) == 1
+        err = capsys.readouterr().err
+        assert "--session" in err, "the refusal must name the legal escape"
+        assert "S187" in err, "the refusal must name the session holding the seal"
+
+    def test_an_empty_session_string_is_treated_as_unnamed(self, tmp_path):
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal("add", _ns(rag, "")) == 1
+        assert _refuse_mutation_after_seal("add", _ns(rag, "   ")) == 1
+
+    def test_an_unnamed_write_is_free_while_no_seal_stands(self, tmp_path):
+        """The refusal is bound to the seal, not to the missing flag."""
+        rag = _rag(tmp_path, sealed_session="S187", transfer_ready=False)
         assert _refuse_mutation_after_seal("add", argparse.Namespace(rag=rag)) is None
 
     def test_unreadable_rag_fails_open(self, tmp_path):
@@ -96,6 +136,76 @@ class TestDoubleSealGuard:
         assert _refuse_mutation_after_seal(
             "add", _ns(tmp_path / "nope.json", "S187")
         ) is None
+
+
+class TestTheS207PostSealTraffic:
+    """The four verbs a sealed session actually ran, measured, not imagined.
+
+    S207 logged ``register-asset``, ``render --apply``, ``bootmap --refresh`` and
+    ``update-rule`` from a session that was already sealed. One was refused. This
+    class pins the verdict this guard now returns for each of the four.
+    """
+
+    def _ns(self, rag, session=None, **flags):
+        return argparse.Namespace(rag=rag, session=session, **flags)
+
+    def test_render_apply_is_refused(self, tmp_path):
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal(
+            "render", self._ns(rag, "S187", apply=True)
+        ) == 1
+
+    def test_a_read_only_render_stays_free_after_the_seal(self, tmp_path):
+        """Guarding the verb would have banned inspecting a sealed session."""
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal(
+            "render", self._ns(rag, "S187", apply=False)
+        ) is None
+
+    def test_bootmap_refresh_is_refused(self, tmp_path):
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal(
+            "bootmap", self._ns(rag, "S187", refresh=True)
+        ) == 1
+
+    def test_a_read_only_bootmap_stays_free_after_the_seal(self, tmp_path):
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal(
+            "bootmap", self._ns(rag, "S187", refresh=False)
+        ) is None
+
+    def test_a_dual_mode_write_naming_no_session_is_refused(self, tmp_path):
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal(
+            "render", self._ns(rag, None, apply=True)
+        ) == 1
+
+    def test_the_refusal_names_the_writing_flag(self, tmp_path, capsys):
+        rag = _rag(tmp_path, sealed_session="S187")
+        _refuse_mutation_after_seal("bootmap", self._ns(rag, "S187", refresh=True))
+        assert "bootmap --refresh" in capsys.readouterr().err
+
+    def test_update_rule_is_still_refused(self, tmp_path):
+        """The one of the four that was already caught must stay caught."""
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal("update-rule", _ns(rag, "S187")) == 1
+
+    def test_register_asset_is_permitted_after_the_seal(self, tmp_path):
+        """DELIBERATE EXCEPTION, measured not assumed.
+
+        ``register-asset`` writes RAG_CONTEXT.json, not the canonical RAG, and the
+        post-seal inbox depends on that permission: a sealed session must still be
+        able to leave its successor a note. Guarding it would close the one channel
+        that carries state across the boundary this guard defends.
+        """
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert "register-asset" not in _SEAL_GUARDED_VERBS
+        assert _refuse_mutation_after_seal("register-asset", _ns(rag, "S187")) is None
+
+    def test_post_is_permitted_after_the_seal(self, tmp_path):
+        """The other half of the inbox channel."""
+        rag = _rag(tmp_path, sealed_session="S187")
+        assert _refuse_mutation_after_seal("post", _ns(rag, "S187")) is None
 
 
 class TestGuardedVerbSet:
@@ -118,6 +228,44 @@ class TestGuardedVerbSet:
         """session-resume must stay reachable — it is the named repair."""
         for verb in ("session-resume", "session-start", "session-end", "doctor"):
             assert verb not in _SEAL_GUARDED_VERBS
+
+    def test_every_guarded_verb_can_name_its_session(self):
+        """The refusal must always have a legal escape — this is what makes it a
+        gate rather than an outage.
+
+        An unnamed write is now refused, so a guarded verb whose parser has no
+        ``--session`` would be permanently unusable for the whole of a successor
+        session. That is not a judgement call anyone should have to remember at
+        review time: adding a verb to the guarded set without the flag fails here.
+        ``render`` and ``ingest`` gained ``--session`` in S209 because this
+        assertion caught them.
+        """
+        from rag_kernel.__main__ import build_parser
+
+        actions = build_parser()._subparsers._group_actions[0].choices
+        for verb in sorted(_SEAL_GUARDED_VERBS | set(_SEAL_GUARDED_WHEN_FLAG)):
+            sub = actions.get(verb)
+            assert sub is not None, f"{verb} is guarded but is not a real verb"
+            flags = {opt for act in sub._actions for opt in act.option_strings}
+            assert "--session" in flags, (
+                f"`{verb}` is refused when it names no session, so its parser "
+                f"must accept --session or the verb is unusable after a seal"
+            )
+
+    def test_dual_mode_verbs_declare_a_real_writing_flag(self):
+        """The flag that turns a read into a write must exist on the parser."""
+        from rag_kernel.__main__ import build_parser
+
+        actions = build_parser()._subparsers._group_actions[0].choices
+        for verb, flag in _SEAL_GUARDED_WHEN_FLAG.items():
+            sub = actions.get(verb)
+            assert sub is not None, verb
+            dests = {act.dest for act in sub._actions}
+            assert flag in dests, f"`{verb}` has no --{flag} to guard"
+
+    def test_dual_mode_verbs_are_not_also_in_the_flat_set(self):
+        """Listing both would ban the read half by the back door."""
+        assert not (_SEAL_GUARDED_VERBS & set(_SEAL_GUARDED_WHEN_FLAG))
 
 
 class TestCloseTestGateStaleBlocks:

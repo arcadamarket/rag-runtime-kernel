@@ -634,6 +634,15 @@ def build_parser() -> argparse.ArgumentParser:
             "into the RAG atomically (else dry-run/print only)."
         ),
     )
+    render_parser.add_argument(
+        "--session", type=str, default=None,
+        help=(
+            "Session id making the write. Read-only renders ignore it; under "
+            "`--apply` it is what CLOSE-DOUBLE-SEAL compares against the sealed "
+            "session, so a post-seal `render --apply` must name its session "
+            "(SEALED-SESSION-CAN-STILL-WRITE-S208)."
+        ),
+    )
     render_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON instead of text")
 
     # -- report (REPORT-VERB S136: deterministic 7-section canonical status render) --
@@ -1090,6 +1099,11 @@ def build_parser() -> argparse.ArgumentParser:
                                help="directory holding RAG_CONTEXT.json (default: the RAG dir)")
     ingest_parser.add_argument("--limit", type=int, default=0,
                                help="cap the rendered create-list (Rule 17; 0 = all)")
+    ingest_parser.add_argument("--session", type=str, default=None,
+                               help=("Session id making the write — what "
+                                     "CLOSE-DOUBLE-SEAL compares against the "
+                                     "sealed session "
+                                     "(SEALED-SESSION-CAN-STILL-WRITE-S208)."))
     ingest_parser.add_argument("--json", dest="as_json", action="store_true",
                                help="output the plan as JSON")
 
@@ -6129,15 +6143,42 @@ def _drive_close(
 # makes the close resumable again.
 #
 # Read-only verbs are untouched: inspecting a sealed session must always be free.
+#
+# GENERALISED S209 (SEALED-SESSION-CAN-STILL-WRITE-S208, the WRITE half of
+# TWO-LIVE-SESSIONS-ONE-RAG-S207). The guard above closed only the case it was
+# written for. S207 measured the rest: a sealed S206-review session kept writing
+# all through S207 with `register-asset`, `render --apply`, `bootmap --refresh`
+# and `update-rule`, and exactly ONE of those four was refused. Two holes let the
+# other three through, and both are closed here:
+#
+#   1. THE VERB SET WAS FLAT. `render` and `bootmap` are dual-mode — read-only by
+#      default, canonical writers under `--apply` / `--refresh` — so neither could
+#      be listed here without also banning the read. _SEAL_GUARDED_WHEN_FLAG
+#      guards the WRITING MODE of such a verb and leaves the read free.
+#   2. THE GUARD NEEDED A --session TO COMPARE. `if not session: return None` made
+#      omitting the flag a way through, and the measured offender omitted it. A
+#      write that names no session cannot be told apart from a write by the sealed
+#      session, so it is now refused rather than assumed innocent. Every verb
+#      guarded here accepts `--session`; `render` and `ingest` gained the flag in
+#      S209 for exactly this reason, so the refusal always has a legal escape.
+#
+# DELIBERATE EXCEPTION, measured not assumed: `register-asset` is NOT guarded. It
+# writes RAG_CONTEXT.json rather than the canonical RAG, and the post-seal inbox
+# (POST-SEAL-INBOX-MISSING-S208) is built on that permission — a sealed session
+# must still be able to hand its successor a note.
 
 #: Verbs that write canonical state and are therefore refused after a seal.
 _SEAL_GUARDED_VERBS = frozenset({
     "add", "un-add", "resolve", "start", "defer", "reopen", "discard", "supersede",
     "note", "cite", "priority", "add-rule", "update-rule", "refresh-current-status",
-    "prune-current-status", "meta", "register-asset", "decide", "ingest",
+    "prune-current-status", "meta", "decide", "ingest",
     "checkpoint", "migrate", "transplant", "birth-adopt", "dedup-sessions",
     "errlog-migrate",
 })
+
+#: Dual-mode verbs: read-only by default, canonical writers under this flag.
+#: Guarded ONLY when the flag is set, so the read half stays free after a seal.
+_SEAL_GUARDED_WHEN_FLAG = {"render": "apply", "bootmap": "refresh"}
 
 
 def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
@@ -6148,10 +6189,11 @@ def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
     the marker: a guard that cannot read state must not become an outage, and every
     downstream verb still has its own guards.
     """
-    if command not in _SEAL_GUARDED_VERBS:
-        return None
-    session = getattr(args, "session", None)
-    if not session:
+    flag = _SEAL_GUARDED_WHEN_FLAG.get(command)
+    if flag is not None:
+        if not getattr(args, flag, False):
+            return None
+    elif command not in _SEAL_GUARDED_VERBS:
         return None
     rag = getattr(args, "rag", None)
     if rag is None:
@@ -6165,18 +6207,42 @@ def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
         return None
     if not marker.get("transfer_ready", False):
         return None
-    if str(marker.get("session_id") or marker.get("session") or "") != str(session):
+    sealed = str(marker.get("session_id") or marker.get("session") or "")
+    raw = getattr(args, "session", None)
+    session = str(raw).strip() if raw is not None else ""
+    if session and session != sealed:
         return None
 
+    sealed_at = (
+        marker.get("completed_utc") or marker.get("ended_utc") or "earlier"
+    )
+    invoked = f"`{command} --{flag}`" if flag else f"`{command}`"
+    if session:
+        why = (
+            f"session {sealed} is already sealed COMPLETE (transfer_ready=true, "
+            f"sealed {sealed_at}) and this write names that same session"
+        )
+        repair = (
+            "  repair: run the next session (`session-start`) and bank it there, "
+            "or re-open this close with `session-resume` if the seal was premature."
+        )
+    else:
+        why = (
+            f"session {sealed} is sealed COMPLETE (transfer_ready=true, sealed "
+            f"{sealed_at}) and this write names NO session, so it cannot be told "
+            f"apart from a write by the sealed session itself"
+        )
+        repair = (
+            f"  repair: name the session making this write — add `--session <your "
+            f"session id>`, which must not be {sealed} — or re-open this close "
+            f"with `session-resume` if the seal was premature."
+        )
     print(
-        f"ERROR: CLOSE-DOUBLE-SEAL guard — session {session} is already sealed "
-        f"COMPLETE (transfer_ready=true, sealed "
-        f"{marker.get('completed_utc') or marker.get('ended_utc') or 'earlier'}). "
-        f"Refusing `{command}`: a write after the seal makes the sealed report and "
-        f"the sealed boot-map describe a state that no longer exists — the S187 "
-        f"double-close defect.\n"
-        f"  repair: run the next session (`session-start`) and bank it there, or "
-        f"re-open this close with `session-resume` if the seal was premature.",
+        f"ERROR: CLOSE-DOUBLE-SEAL guard — {why}. Refusing {invoked}: a write "
+        f"after the seal makes the sealed report and the sealed boot-map describe "
+        f"a state that no longer exists — the S187 double-close defect, measured "
+        f"again across the whole of S207 as SEALED-SESSION-CAN-STILL-WRITE-S208.\n"
+        f"{repair}",
         file=sys.stderr,
     )
     return 1
