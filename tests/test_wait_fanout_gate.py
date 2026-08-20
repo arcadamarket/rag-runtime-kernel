@@ -183,6 +183,88 @@ class TestTheRecordingHalf:
                       state_dir=tmp_path, now=NOW + 1).allow is False
 
 
+class TestAWaitCarriedByAShell:
+    """WAIT-CARRIED-BY-A-SHELL-S209 — right predicate, wrong field.
+
+    Measured over the entire S209 transcript: 59 blocking waits reported a
+    duration and NOT ONE arrived under a matching tool name. Every one rode
+    inside ``mcp__wsl-exec__execute_command`` or ``mcp__tmux-mcp__execute-command``
+    as ``rag_kernel wait-for <file> --timeout N``, because the CLI is exactly what
+    the no-polling rule tells an agent to use over MCP. So the fan-out gate,
+    built and wired in that same session, could not have seen a single one of the
+    calls it exists to refuse. That is the S198 blindness one layer out.
+    """
+
+    def _shell(self, path: str, response: str | None = None,
+               tool: str = "mcp__wsl-exec__execute_command") -> dict:
+        event: dict = {
+            "tool_name": tool,
+            "tool_input": {
+                "command": f"/mnt/c/Python314/python.exe -m rag_kernel wait-for "
+                           f"{path} --timeout 55 --contains QQ_DONE_QQ --emit 20",
+                "working_dir": "/mnt/c/x/RAG",
+            },
+        }
+        if response is not None:
+            event["tool_response"] = response
+        return event
+
+    def test_a_shell_carried_wait_is_recorded(self, tmp_path):
+        for i in range(WAIT_FANOUT_LIMIT):
+            decide("wait-duration",
+                   self._shell(f".boot/f{i}.txt",
+                               "wait-for: FOUND after 0.0s (1 polls)"),
+                   state_dir=tmp_path, now=NOW)
+        assert decide("poll", self._shell(".boot/next.txt"),
+                      state_dir=tmp_path, now=NOW + 1).allow is False
+
+    def test_it_works_through_the_tmux_transport_too(self, tmp_path):
+        for i in range(WAIT_FANOUT_LIMIT):
+            decide("wait-duration",
+                   self._shell(f".boot/g{i}.txt",
+                               "wait-for: FOUND after 0.0s (1 polls)",
+                               tool="mcp__tmux-mcp__execute-command"),
+                   state_dir=tmp_path, now=NOW)
+        assert decide("poll", self._shell(".boot/next.txt"),
+                      state_dir=tmp_path, now=NOW + 1).allow is False
+
+    def test_the_target_is_read_out_of_the_command(self, tmp_path):
+        from rag_kernel.hook_guard import _wait_invocation
+
+        is_wait, target = _wait_invocation(
+            "mcp__wsl-exec__execute_command",
+            self._shell(".boot/s209_suite.txt")["tool_input"])
+        assert is_wait is True
+        assert target == ".boot/s209_suite.txt"
+
+    def test_merely_naming_the_verb_is_not_a_wait(self, tmp_path):
+        """A refusal must not fire on prose — GATE-FALSE-POSITIVE-ON-PROSE-S201.
+
+        Grepping for the string, or committing a message about it, performs no
+        wait and must stay invisible to this gate.
+        """
+        from rag_kernel.hook_guard import _wait_invocation
+
+        for command in (
+            'grep -rn "wait-for" rag_kernel/',
+            'git commit -m "fix the wait-for gate"',
+            'echo "use wait-for instead of polling"',
+        ):
+            is_wait, _ = _wait_invocation(
+                "mcp__tmux-mcp__execute-command", {"command": command})
+            assert is_wait is False, command
+
+    def test_a_real_invocation_inside_a_longer_command_is_a_wait(self, tmp_path):
+        from rag_kernel.hook_guard import _wait_invocation
+
+        is_wait, target = _wait_invocation(
+            "mcp__tmux-mcp__execute-command",
+            {"command": "cd /mnt/c/x/RAG && python -m rag_kernel wait-for "
+                        ".boot/j.txt --timeout 60 --contains QQ_X_QQ"})
+        assert is_wait is True
+        assert target == ".boot/j.txt"
+
+
 class TestTheGateIsDeclared:
     def test_it_is_in_the_gate_list(self):
         assert "wait-duration" in hook_guard.GATES

@@ -1,0 +1,155 @@
+"""Two gates S209 built from measured S207/S208 conduct.
+
+**TWO-LIVE-SESSIONS-ONE-RAG-S207, the BOOT half.** S207 measured two sessions
+running against one canonical store and one worktree for a whole day, neither
+able to see the other, and nothing refused. The WRITE half closed in S209
+(SEALED-SESSION-CAN-STILL-WRITE-S208): a sealed session can no longer write.
+This is the other end — a boot that lands beside a session still emitting
+governed calls is refused, and the refusal NAMES the holding id, because an
+agent that cannot name the blocker cannot act on it (Rule 43).
+
+The discriminator is RECENCY, not sealing, which is what separates this from
+CLOSE-SEAL-ENFORCE: a crashed predecessor goes quiet, a live contemporary does
+not.
+
+**STOP-GATE-NOISE-AND-UNSENTINELABLE-S208.** Two independent defects in the Stop
+gate, both measured at the S208 close: it flagged a file the KERNEL writes, which
+no agent can append a sentinel to, and it re-fired nine consecutive times on an
+unchanged set after the agent had already given the full status block.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+import pytest
+
+from rag_kernel import hook_guard
+from rag_kernel.__main__ import _CONTEMPORARY_WINDOW_S, _contemporary_live_session
+
+
+def _log(rag_dir: Path, sid: str, *, ended: bool = False, age_s: float = 0.0):
+    p = rag_dir / f"session_log_{sid}.jsonl"
+    rows = [{"event": "session_start", "session": sid}]
+    if ended:
+        rows.append({"event": "session_end", "session": sid})
+    p.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    if age_s:
+        old = time.time() - age_s
+        import os
+        os.utime(p, (old, old))
+    return p
+
+
+class TestTheContemporarySessionGate:
+    def test_a_live_other_session_is_detected_and_named(self, tmp_path):
+        _log(tmp_path, "S207")
+        found = _contemporary_live_session(tmp_path, "S208")
+        assert found is not None
+        assert found[0] == "S207", "the refusal must be able to name the holder"
+
+    def test_our_own_log_is_not_a_contemporary(self, tmp_path):
+        """Phase 2 of the boot re-runs session-start with the SAME id."""
+        _log(tmp_path, "S209")
+        assert _contemporary_live_session(tmp_path, "S209") is None
+
+    def test_a_sealed_session_is_not_a_contemporary(self, tmp_path):
+        _log(tmp_path, "S207", ended=True)
+        assert _contemporary_live_session(tmp_path, "S208") is None
+
+    def test_a_quiet_log_is_a_predecessor_not_a_contemporary(self, tmp_path):
+        """The other gate's business. A crashed session goes quiet; this one
+        must not seize CLOSE-SEAL-ENFORCE's job and refuse for the wrong reason."""
+        _log(tmp_path, "S207", age_s=_CONTEMPORARY_WINDOW_S + 600)
+        assert _contemporary_live_session(tmp_path, "S208") is None
+
+    def test_an_empty_directory_refuses_nothing(self, tmp_path):
+        assert _contemporary_live_session(tmp_path, "S208") is None
+
+    def test_an_unsealed_predecessor_belongs_to_the_other_gate(self, tmp_path):
+        """PRECEDENCE. Right after a crash both predicates hold: the predecessor
+        is unsealed AND its log is recent. A ``session_close`` marker naming the
+        id is positive evidence that the session STOPPED and recorded stopping,
+        which is CLOSE-SEAL-ENFORCE's case and has its own repair. Two refusals
+        racing to speak about one situation is how an agent learns to ignore both.
+        """
+        _log(tmp_path, "S207")
+        assert _contemporary_live_session(tmp_path, "S208") is not None
+        assert _contemporary_live_session(
+            tmp_path, "S208", marker_session="S207") is None
+
+    def test_the_nearest_contemporary_is_the_one_named(self, tmp_path):
+        _log(tmp_path, "S205", age_s=1200)
+        _log(tmp_path, "S207", age_s=10)
+        found = _contemporary_live_session(tmp_path, "S208")
+        assert found is not None and found[0] == "S207"
+
+
+class TestTheStopGateStopsRepeatingItself:
+    def _rag(self, tmp_path: Path) -> Path:
+        rag = tmp_path / "RAG"
+        (rag / ".boot").mkdir(parents=True)
+        return rag
+
+    def _fire(self, root: Path, state_dir: Path, now: float):
+        return hook_guard.decide("stop-status", {}, project_root=root,
+                                 state_dir=state_dir, now=now)
+
+    def test_an_unchanged_set_is_not_reported_twice(self, tmp_path):
+        rag = self._rag(tmp_path)
+        (rag / ".boot" / "job.txt").write_text("output, no sentinel\n",
+                                               encoding="utf-8")
+        state = tmp_path / "state"
+        first = self._fire(tmp_path, state, 1000.0)
+        second = self._fire(tmp_path, state, 1001.0)
+        assert first.context, "the first firing must carry the checklist"
+        assert not second.context, (
+            "an unchanged repeat is noise; S208 got nine of them on one file"
+        )
+
+    def test_a_changed_set_reports_again_in_full(self, tmp_path):
+        rag = self._rag(tmp_path)
+        (rag / ".boot" / "job.txt").write_text("a\n", encoding="utf-8")
+        state = tmp_path / "state"
+        assert self._fire(tmp_path, state, 1000.0).context
+        assert not self._fire(tmp_path, state, 1001.0).context
+        (rag / ".boot" / "second.txt").write_text("b\n", encoding="utf-8")
+        third = self._fire(tmp_path, state, 1002.0)
+        assert third.context, "a new job file is new information"
+        assert "second.txt" in third.context
+
+    def test_suppression_never_hides_a_clean_state(self, tmp_path):
+        """Nothing flagged still means nothing said — for the original reason."""
+        self._rag(tmp_path)
+        got = self._fire(tmp_path, tmp_path / "state", 1000.0)
+        assert got.allow is True and not got.context
+
+
+class TestKernelAuthoredFilesAreNotFlagged:
+    def test_the_close_commit_message_is_excluded(self, tmp_path):
+        """It is a git commit MESSAGE passed to `git commit -F`.
+
+        The tempting repair — have the kernel append its own sentinel — would put
+        a QQ token into the project's permanent history. Exclusion is the right
+        half of this fix, and the reason is why it is written down.
+        """
+        boot = tmp_path / ".boot"
+        boot.mkdir()
+        (boot / "close_commit_S208.txt").write_text(
+            "S208: close-order commit (1 path(s))\n", encoding="utf-8")
+        assert hook_guard._inflight_jobs(tmp_path) == []
+
+    def test_an_agent_authored_file_is_still_flagged(self, tmp_path):
+        boot = tmp_path / ".boot"
+        boot.mkdir()
+        (boot / "s209_probe.txt").write_text("no sentinel here\n", encoding="utf-8")
+        assert hook_guard._inflight_jobs(tmp_path) == ["s209_probe.txt"]
+
+    def test_a_sentinelled_file_is_never_flagged(self, tmp_path):
+        boot = tmp_path / ".boot"
+        boot.mkdir()
+        (boot / "s209_done.txt").write_text("out\nQQ_S209_DONE_QQ rc=0\n",
+                                            encoding="utf-8")
+        assert hook_guard._inflight_jobs(tmp_path) == []

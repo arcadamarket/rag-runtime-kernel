@@ -83,7 +83,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.9.0"  # S209: wait-duration + the fan-out refusal
+HOOK_GUARD_VERSION = "1.10.0"  # S209: waits carried by a shell are seen too
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -264,6 +264,37 @@ _WAIT_ELAPSED = re.compile(r"\bafter\s+([0-9]+(?:\.[0-9]+)?)\s*s\b", re.I)
 #: result-reader because they are keyed differently: a command id there, the
 #: TARGET FILE here.
 _WAIT_TOOLS = re.compile(r"rag_wait|wait-for", re.I)
+
+# WAIT-CARRIED-BY-A-SHELL-S209. The tool NAME is not where a wait announces
+# itself. Measured over the whole S209 transcript: 59 blocking waits reported a
+# duration and NONE of them arrived under a matching tool name -- every one rode
+# inside `mcp__wsl-exec__execute_command` or `mcp__tmux-mcp__execute-command`
+# with `rag_kernel wait-for ...` in the command string, because the CLI is what
+# the no-polling rule tells the agent to use over MCP. A gate keyed on the name
+# therefore saw zero of the traffic it was built to refuse, which is the S198
+# blindness one layer out: right predicate, wrong field.
+#
+# Tighter than the tool-name match on purpose: this decides a REFUSAL, so it
+# requires an actual invocation (`rag_kernel wait-for`, `rag_wait`) rather than
+# the words appearing anywhere -- a grep for "wait-for" is not a wait.
+_WAIT_IN_COMMAND = re.compile(r"rag_kernel\s+wait-for\b|\brag_wait\b", re.I)
+_WAIT_TARGET_IN_COMMAND = re.compile(r"wait-for\s+(\S+)", re.I)
+
+
+def _wait_invocation(name: str, tool_input: dict) -> "tuple[bool, str]":
+    """Is this call a blocking wait, and on what target? -> ``(is_wait, target)``.
+
+    Checks the tool name first, then the TEXT of the call, so a wait carried by
+    a generic shell tool is seen. Returning the target as well keeps the two
+    callers from re-deriving it differently.
+    """
+    if _WAIT_TOOLS.search(name or ""):
+        return True, _wait_target(tool_input)
+    for value in (tool_input or {}).values():
+        if isinstance(value, str) and _WAIT_IN_COMMAND.search(value):
+            m = _WAIT_TARGET_IN_COMMAND.search(value)
+            return True, (m.group(1).strip("'\"") if m else "")
+    return False, ""
 
 _POLL_TOOLS = re.compile(r"get-?command-?result", re.I)
 _SHELL_TOOLS = re.compile(r"(^Bash$)|(bash$)", re.I)
@@ -578,7 +609,8 @@ def _gate_wait_duration(event: dict, *, state_dir: Optional[Path] = None,
     state its elapsed time must not be charged as instant: the gate is allowed to
     miss a violation, and is not allowed to invent one.
     """
-    if not _WAIT_TOOLS.search(_tool_name(event)):
+    is_wait, target = _wait_invocation(_tool_name(event), _tool_input(event))
+    if not is_wait:
         return Decision("wait-duration", True)
     elapsed = _wait_elapsed_seconds(event)
     if elapsed is None or elapsed >= WAIT_INSTANT_SECONDS:
@@ -587,7 +619,7 @@ def _gate_wait_duration(event: dict, *, state_dir: Optional[Path] = None,
     path = _state_path(state_dir)
     state = _prune(_load_state(path), now)
     stamps = _instant_returns(state, now)
-    stamps.append([now, _wait_target(_tool_input(event))])
+    stamps.append([now, target])
     stamps = stamps[-50:]
     state[_WAIT_RETURNS_KEY] = {"last": now, "count": len(stamps), "stamps": stamps}
     _save_state(path, state)
@@ -631,13 +663,13 @@ def _gate_poll(event: dict, *, state_dir: Optional[Path] = None,
     # (~30s), so a long job legitimately chains several waits and those are far
     # outside any cooldown. The defect is a wait that returned instantly being
     # re-issued against the same file seconds later.
-    if _WAIT_TOOLS.search(name):
+    is_wait, target = _wait_invocation(name, ti)
+    if is_wait:
         # POLL-GATE-BLIND-TO-WAIT-FANOUT-S208. Checked BEFORE the per-target
         # cooldown, because the whole point is that the target does not repeat.
         fanout = _refuse_wait_fanout(state_dir=state_dir, now=now)
         if fanout is not None:
             return fanout
-        target = _wait_target(ti)
         if not target:
             return Decision("poll", True)
         cmd_id = "wait:" + target
@@ -1150,6 +1182,24 @@ def _gate_tmux_heredoc(event: dict, **_: Any) -> Decision:
 _SENTINEL = re.compile(r"QQ_[A-Z0-9_]+_QQ")
 _INFLIGHT_MAX_AGE_S = 3600
 
+# STOP-GATE-NOISE-AND-UNSENTINELABLE-S208, half one. The sentinel convention is
+# satisfiable only by the AGENT, who owns the command line that produces a file.
+# Files the KERNEL writes are unreachable by it: `close_commit_S208.txt` is
+# authored by session-end inside the close order, so no agent can append to it,
+# and the gate pointed at it until the one-hour cutoff on every close.
+#
+# The obvious repair -- have the kernel append its own sentinel -- is WRONG for
+# this file specifically, and the reason is worth keeping: it is a git commit
+# MESSAGE, passed to `git commit -F`, so a QQ token would land in the project's
+# history forever. Exclusion is the correct half of the fix here.
+_KERNEL_AUTHORED = re.compile(r"^(close_commit_S\d+|session_start_S\d+)\.txt$")
+
+# Half two: the gate keyed on the PRESENCE of a flagged set and never asked
+# whether it had CHANGED. It fired nine consecutive times on one finished file
+# after the agent had already given the full status block. An unchanged repeat is
+# not a safety signal, it is noise, and noise is how a gate stops being read.
+_STOP_LAST_KEY = "__stop_status_last__"
+
 
 #: A file that has not grown for this long is no longer plausibly WRITING. It may
 #: still be a live job that is merely quiet, so it is still reported -- but it is
@@ -1193,6 +1243,8 @@ def _inflight_jobs(rag_dir: Path) -> list[str]:
             continue
         if "wait-for" in f.name or st.st_size == 0:
             continue
+        if _KERNEL_AUTHORED.match(f.name):
+            continue
         quiet = now - st.st_mtime
         if quiet > _QUIET_S:
             out.append(f"{f.name} (no sentinel; quiet {int(quiet // 60)}m — "
@@ -1230,6 +1282,7 @@ def _unsealed_session(rag_dir: Path) -> Optional[str]:
 
 
 def _gate_stop_status(event: dict, *, project_root: Optional[Path] = None,
+                      state_dir: Optional[Path] = None, now: float = 0.0,
                       **_: Any) -> Decision:
     """At a turn boundary, refuse a SILENT stop while state is at risk.
 
@@ -1287,6 +1340,24 @@ def _gate_stop_status(event: dict, *, project_root: Optional[Path] = None,
         # gate. This states what was actually observed and lets the entries above
         # carry the quiet-time qualifier.
         bits.append("job output with no completion sentinel: " + ", ".join(jobs[:5]))
+
+    # UNCHANGED-REPEAT SUPPRESSION (STOP-GATE-NOISE-AND-UNSENTINELABLE-S208).
+    # Keyed on the FLAGGED SET, not on time: if nothing has changed since the
+    # last firing, the agent has already been told and told the operator. The
+    # moment anything moves -- a new job file, a different commit count, a seal
+    # appearing or vanishing -- the block returns in full. Silence here is not a
+    # weaker gate; it is the same gate declining to say a thing twice.
+    fingerprint = "|".join(sorted(bits))
+    path = _state_path(state_dir)
+    state = _prune(_load_state(path), now)
+    prior = state.get(_STOP_LAST_KEY)
+    repeated = isinstance(prior, dict) and prior.get("fingerprint") == fingerprint
+    state[_STOP_LAST_KEY] = {"last": now, "fingerprint": fingerprint,
+                             "count": int((prior or {}).get("count", 0)) + 1}
+    _save_state(path, state)
+    if repeated:
+        return Decision("stop-status", True)
+
     return Decision(
         "stop-status", True,
         context=(

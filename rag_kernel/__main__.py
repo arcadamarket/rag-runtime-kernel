@@ -4793,6 +4793,72 @@ def cmd_session_start(args: argparse.Namespace) -> int:
         _tee.close()
 
 
+#: A session log appended to within this many seconds belongs to a session that
+#: is still being conducted RIGHT NOW, not to a predecessor that ended badly.
+_CONTEMPORARY_WINDOW_S = 1800
+
+
+def _contemporary_live_session(rag_dir: Path, new_sid: str,
+                               marker_session: "str | None" = None):
+    """Another session writing to this same store, right now. -> ``(sid, age_s)``.
+
+    TWO-LIVE-SESSIONS-ONE-RAG-S207, the BOOT half. S207 measured two sessions
+    running against one canonical store and one worktree for a whole day, neither
+    able to see the other, and nothing refused: the sealed next_session_directive
+    ordered work that the other session had already done, and both committed to
+    the same tree. The WRITE half is closed (SEALED-SESSION-CAN-STILL-WRITE-S208,
+    S209) — a sealed session can no longer write. This closes the other end.
+
+    THIS IS NOT CLOSE-SEAL-ENFORCE, and the difference is the whole point. That
+    guard refuses a boot standing on an UNSEALED PREDECESSOR: a session that
+    stopped without closing. This refuses a boot standing beside a LIVE
+    CONTEMPORARY: a session still emitting governed calls. The discriminator is
+    RECENCY, which is why it is measured from the log's mtime rather than from
+    any marker — a crashed predecessor goes quiet, a live contemporary does not.
+
+    No new state is needed, exactly as the item said: the session log is written
+    on every governed call, so its mtime already answers "is anyone else here".
+
+    PRECEDENCE, and it had to be decided rather than assumed. Immediately after a
+    crash BOTH predicates hold: the predecessor is unsealed AND its log is recent.
+    ``marker_session`` breaks the tie. A ``session_close`` marker naming that id
+    is positive evidence that the session STOPPED and left a record of stopping,
+    which is CLOSE-SEAL-ENFORCE's case and has its own named repair
+    (``session-resume``). A live contemporary leaves no such marker. So a session
+    the marker already accounts for is skipped here and refused there — one
+    situation, one gate, one repair, instead of two refusals racing to speak.
+    """
+    from rag_kernel.session_logger import LOG_FILE_EXT, LOG_FILE_PREFIX
+
+    now = time.time()
+    best = None
+    try:
+        logs = sorted(Path(rag_dir).glob(f"{LOG_FILE_PREFIX}*{LOG_FILE_EXT}"))
+    except OSError:
+        return None
+    for log in logs:
+        other = log.name[len(LOG_FILE_PREFIX):-len(LOG_FILE_EXT)]
+        if not other or other == str(new_sid):
+            continue
+        if marker_session and other == str(marker_session):
+            continue
+        try:
+            age = now - log.stat().st_mtime
+        except OSError:
+            continue
+        if age > _CONTEMPORARY_WINDOW_S:
+            continue
+        try:
+            tail = log.read_text(encoding="utf-8", errors="replace")[-8000:]
+        except OSError:
+            continue
+        if '"session_end"' in tail:      # it closed; not a live contemporary
+            continue
+        if best is None or age < best[1]:
+            best = (other, age)
+    return best
+
+
 def _session_start_phase1(
     args: argparse.Namespace, rag_path: Path, rag_dir: Path, sid: str
 ) -> int:
@@ -4872,6 +4938,50 @@ def _session_start_phase1(
             "WARNING: starting despite a failed carry-forward gate (--force).",
             file=sys.stderr,
         )
+
+    # 1b. CONTEMPORARY-SESSION GATE (TWO-LIVE-SESSIONS-ONE-RAG-S207, boot half).
+    #
+    # AFTER the carry-forward gate, deliberately, and the ordering is the whole
+    # distinction. That gate owns the UNSEALED PREDECESSOR: a session that
+    # stopped without closing, which it already names and already repairs with
+    # `session-resume`. Placed first, this check stole that case — right after a
+    # crash both predicates hold, because an unsealed predecessor's log is also
+    # recent — and two refusals racing to describe one situation is how an agent
+    # learns to read neither. Running second makes it strictly ADDITIVE: it can
+    # only refuse what the existing gate lets through, which is exactly the
+    # parallel contemporary nobody was catching.
+    _marker = _frame_rag.get("session_close") if isinstance(_frame_rag, dict) else None
+    _marker_sid = None
+    if isinstance(_marker, dict):
+        _marker_sid = _marker.get("session_id") or _marker.get("session")
+    _live = _contemporary_live_session(rag_dir, sid, marker_session=_marker_sid)
+    if _live and not getattr(args, "force", False):
+        _other, _age = _live
+        print(
+            f"ERROR: TWO-LIVE-SESSIONS-ONE-RAG — session {_other} is LIVE: its "
+            f"log {rag_dir}/session_log_{_other}.jsonl was written "
+            f"{int(_age // 60)}m{int(_age % 60)}s ago and carries no session_end. "
+            f"Refusing to open {sid} against a store another session is still "
+            f"mutating.\n"
+            f"  This is NOT the unsealed-predecessor gate, which passed just "
+            f"above: {_other} has not stopped, it is running beside you. Two "
+            f"sessions on one store cannot see each other, and S207 measured a "
+            f"full day of exactly that — duplicated work, a sealed directive "
+            f"ordering what the other session had already done, and both "
+            f"committing to one worktree.\n"
+            f"  repair, in order of preference: (1) finish or close {_other} — "
+            f"`python -m rag_kernel session-end {_other} ...` in ITS window; "
+            f"(2) if {_other} is genuinely dead, wait "
+            f"{int(_CONTEMPORARY_WINDOW_S // 60)}m for its log to go quiet; "
+            f"(3) `--force` ONLY on explicit operator direction, knowing the "
+            f"other session will not see anything you write.",
+            file=sys.stderr,
+        )
+        _print_cold_boot_rules(
+            rag_path, sid,
+            reason=f"contemporary live session {_other} holds this store",
+        )
+        return 1
 
     # 2. gc dry-run (report-before-delete) + domain boot-map (ROOT-FILE-MANIFEST
     #    S168): the same root walk feeds the deterministic map, diffed against the

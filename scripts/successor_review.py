@@ -21,6 +21,18 @@ ran by hand, and each maps to a defect that was measured, not imagined:
                    trap CLAUDE.md section 5 names.
   polling          a wait that returns in milliseconds did not wait (S198: 39 of
                    65). Hand-rolled sleep loops (S206).
+  wait fan-out     THE AXIS THIS TOOL DID NOT HAVE, added S209 after it handed a
+                   session 7/7 PASS while 31 of that session's 56 waits returned
+                   instantly. The polling axis above counts
+                   `get-command-result` reads and is blind by construction to a
+                   fan-out of one-shot waits, because none of them repeats a
+                   target and none of them is that tool. This axis replays the
+                   hook gate's OWN predicate over the transcript: it imports
+                   WAIT_INSTANT_SECONDS, WAIT_FANOUT_LIMIT and the window from
+                   rag_kernel.hook_guard rather than restating them, so a
+                   reviewer that disagrees with the gate is impossible by
+                   construction (the rule-versus-rule shape
+                   scripts/rule_conflict_census.py exists to catch).
   canon writes     writes before READY, or after a seal.
   silence          long stretch with no operator-facing report (retro_clarity).
 
@@ -74,6 +86,97 @@ TRANSCRIPTS = _transcripts()
 HOST_SCRATCH = re.compile(r"Temp[\/]claude[\/]|/tmp/", re.I)
 HANDROLLED = re.compile(r"\b(while|until)\b[^\n]*?\bdo\b[^\n]*?\bsleep\b", re.I | re.S)
 
+# WAIT FAN-OUT (S209). A wait is not identified by the tool that carried it. The
+# S209 traffic went through `mcp__wsl-exec__execute_command` and
+# `mcp__tmux-mcp__execute-command` with `rag_kernel wait-for ...` in the command
+# string, so any matcher keyed on the tool NAME sees none of it. Match the tool
+# name OR the text of the call, and take the durations from the RESULT, which is
+# where the wait verb prints its own elapsed time.
+WAIT_CALL = re.compile(r"rag_wait|wait[-_]for", re.I)
+
+if str(RAG) not in sys.path:
+    sys.path.insert(0, str(RAG))
+try:
+    from rag_kernel.hook_guard import (  # noqa: E402
+        WAIT_FANOUT_LIMIT,
+        WAIT_FANOUT_WINDOW_SECONDS,
+        WAIT_INSTANT_SECONDS,
+        _WAIT_ELAPSED,
+    )
+    _THRESHOLDS_FROM_GATE = True
+except Exception:  # noqa: BLE001 — an unreadable gate is a finding, not a crash
+    WAIT_INSTANT_SECONDS = 1.0
+    WAIT_FANOUT_LIMIT = 4
+    WAIT_FANOUT_WINDOW_SECONDS = 250.0
+    _WAIT_ELAPSED = re.compile(r"\bafter\s+([0-9]+(?:\.[0-9]+)?)\s*s\b", re.I)
+    _THRESHOLDS_FROM_GATE = False
+
+
+def _is_wait_call(name: str, payload: dict) -> bool:
+    if WAIT_CALL.search(name or ""):
+        return True
+    for value in (payload or {}).values():
+        if isinstance(value, str) and WAIT_CALL.search(value):
+            return True
+    return False
+
+
+def _elapsed_from_result(content) -> "float | None":
+    """Seconds a wait actually blocked, read out of its own output."""
+    if isinstance(content, list):
+        text = " ".join(
+            str(part.get("text", "")) if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    else:
+        text = str(content or "")
+    m = _WAIT_ELAPSED.search(text)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _median(values: "list[float]") -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def _refusable_bursts(stamps: "list[datetime]") -> int:
+    """How many times the LIVE gate would have refused, replaying its predicate.
+
+    Same semantics as hook_guard: instant returns accumulate inside the window,
+    the limit-th one refuses the NEXT wait, and the refusal clears the window --
+    one refusal per burst. Restating the numbers here would create a second
+    source of truth; they are imported above precisely so this cannot drift.
+    """
+    window: "list[datetime]" = []
+    bursts = 0
+    for when in sorted(s for s in stamps if s is not None):
+        window = [w for w in window
+                  if (when - w).total_seconds() <= WAIT_FANOUT_WINDOW_SECONDS]
+        window.append(when)
+        if len(window) >= WAIT_FANOUT_LIMIT:
+            bursts += 1
+            window = []
+    return bursts
+
+
+def _commit_utc(ref: str):
+    r = subprocess.run(["git", "log", "-1", "--format=%cI", ref], cwd=str(WT),
+                       capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        return datetime.fromisoformat(r.stdout.strip()).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
 
 def _pick(arg: str | None) -> Path:
     if arg:
@@ -109,7 +212,7 @@ def _ts(rec: dict):
         return None
 
 
-def review(path: Path, full: bool = False) -> int:
+def review(path: Path, full: bool = False, split: "str | None" = None) -> int:
     # MEASUREMENT WINDOW (S206). This scored the WHOLE transcript, so a habit
     # the agent CORRECTED mid-session went on convicting it until the session
     # ended: there was no way to demonstrate a fix, only to inherit the
@@ -124,6 +227,10 @@ def review(path: Path, full: bool = False) -> int:
     tools: Counter[str] = Counter()
     cmds: list[str] = []
     writes: list[str] = []
+    #: tool_use_id -> timestamp, for the wait calls awaiting their result
+    pending_waits: dict = {}
+    #: (timestamp, elapsed_seconds) for every wait whose result stated a duration
+    waits: list = []
     for line in path.open(encoding="utf-8", errors="replace"):
         try:
             d = json.loads(line)
@@ -131,19 +238,36 @@ def review(path: Path, full: bool = False) -> int:
             continue
         when = _ts(d)
         seen_any_ts = seen_any_ts or when is not None
-        if cutoff is not None and when is not None and when < cutoff:
-            continue
+        windowed_out = (cutoff is not None and when is not None and when < cutoff)
         m = d.get("message") or {}
         cont = m.get("content")
         for c in cont if isinstance(cont, list) else []:
-            if not isinstance(c, dict) or c.get("type") != "tool_use":
+            if not isinstance(c, dict):
+                continue
+            # Results are paired OUTSIDE the scoring window too: a wait issued
+            # just before the cutoff still answers after it, and dropping the
+            # pair would silently under-count rather than exclude.
+            if c.get("type") == "tool_result":
+                started = pending_waits.pop(c.get("tool_use_id"), None)
+                if started is not None:
+                    elapsed = _elapsed_from_result(c.get("content"))
+                    if elapsed is not None:
+                        waits.append((started, elapsed))
+                continue
+            if c.get("type") != "tool_use":
+                continue
+            i = c.get("input") or {}
+            if _is_wait_call(str(c.get("name") or ""), i):
+                pending_waits[c.get("id")] = when
+            if windowed_out:
                 continue
             tools[c.get("name", "?")] += 1
-            i = c.get("input") or {}
             if i.get("command"):
                 cmds.append(str(i["command"]))
             if c.get("name") in ("Write", "Edit", "NotebookEdit"):
                 writes.append(str(i.get("file_path", "")))
+    if cutoff is not None:
+        waits = [(w, e) for w, e in waits if w is None or w >= cutoff]
 
     findings: list[tuple[str, str, str]] = []
 
@@ -214,6 +338,46 @@ def review(path: Path, full: bool = False) -> int:
             bad.append(n)
     chk("deploy parity", not bad, f"{len(bad)} divergence(s)" if bad else "identical")
 
+    # 8. wait fan-out — the axis this tool lacked while it handed out 7/7 PASS.
+    if not _THRESHOLDS_FROM_GATE:
+        chk("wait fan-out", False,
+            "hook_guard thresholds unreadable — this axis cannot be measured, "
+            "and an unmeasured axis is not a pass (AUDIT_PROTOCOL L2)")
+    elif not waits:
+        chk("wait fan-out", True, "no blocking wait reported its elapsed time")
+    else:
+        durations = [e for _, e in waits]
+        instants = [w for w, e in waits if e < WAIT_INSTANT_SECONDS]
+        bursts = _refusable_bursts([w for w in instants if w is not None])
+        share = 100.0 * len(instants) / len(durations)
+        detail = (f"{len(instants)}/{len(durations)} wait(s) returned under "
+                  f"{WAIT_INSTANT_SECONDS:g}s ({share:.0f}%), median "
+                  f"{_median(durations):.2f}s")
+        chk("wait fan-out", bursts == 0,
+            f"{detail} — {bursts} burst(s) the live gate would refuse"
+            if bursts else f"{detail} — no burst reaches the gate's limit")
+
+    split_text = None
+    if split:
+        at = _commit_utc(split)
+        if at is None:
+            split_text = (f"  WAIT FAN-OUT SPLIT: no commit {split!r} in the "
+                          f"worktree; nothing split.")
+        else:
+            def _half(rows):
+                d = [e for _, e in rows]
+                inst = [w for w, e in rows if e < WAIT_INSTANT_SECONDS]
+                pct = (100.0 * len(inst) / len(d)) if d else 0.0
+                return (f"{len(inst)}/{len(d)} instant ({pct:.0f}%), median "
+                        f"{_median(d):.2f}s, "
+                        f"{_refusable_bursts([w for w in inst if w])} refusable burst(s)")
+            before = [(w, e) for w, e in waits if w is not None and w < at]
+            after = [(w, e) for w, e in waits if w is not None and w >= at]
+            split_text = (
+                f"  WAIT FAN-OUT SPLIT at {split} ({at:%Y-%m-%d %H:%M} UTC)\n"
+                f"    before: {_half(before)}\n"
+                f"    after : {_half(after)}")
+
     if cutoff is None:
         window = "whole session" + ("" if full else " (no commit to window from)")
     elif not seen_any_ts:
@@ -225,12 +389,37 @@ def review(path: Path, full: bool = False) -> int:
           f"{len(writes)} writes | scored over: {window}\n")
     for verdict, name, detail in findings:
         print(f"  [{verdict}] {name:<{width}}  {detail}")
+    if split_text:
+        print()
+        print(split_text)
     fails = sum(1 for v, _, _ in findings if v == "FAIL")
     print(f"\nREVIEW {'PASS' if not fails else 'FAIL'} ({fails} finding(s))")
     return 1 if fails else 0
 
 
+def _split_arg(argv: "list[str]") -> "str | None":
+    for i, a in enumerate(argv):
+        if a == "--split" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--split="):
+            return a.split("=", 1)[1]
+    return None
+
+
 if __name__ == "__main__":
-    _args = [a for a in sys.argv[1:] if a != "--full"]
-    raise SystemExit(review(_pick(_args[0] if _args else None),
+    _split = _split_arg(sys.argv[1:])
+    _skip = {"--full", "--split"}
+    _args = []
+    _drop_next = False
+    for _a in sys.argv[1:]:
+        if _drop_next:
+            _drop_next = False
+            continue
+        if _a == "--split":
+            _drop_next = True
+            continue
+        if _a in _skip or _a.startswith("--split="):
+            continue
+        _args.append(_a)
+    raise SystemExit(review(_pick(_args[0] if _args else None), split=_split,
                             full="--full" in sys.argv))

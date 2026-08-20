@@ -84,7 +84,7 @@ def test_gate_names_are_stable():
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.9.0"  # S209: wait fan-out refused
+    assert HOOK_GUARD_VERSION == "1.10.0"  # S209: shell-carried waits seen
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():
