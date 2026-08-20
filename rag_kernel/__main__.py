@@ -5520,10 +5520,22 @@ def _drive_close(
     # Step 0/4 — THE ORDER ITSELF (SEAL-ORDER-IN-AGENT-HANDS-S205). Render,
     # commit, then measure, performed by the kernel so no agent can order it
     # wrongly. Runs before anything is banked; a failure here aborts clean.
-    if not steps.get("checkpoint"):
-        _rc0 = _close_order_prepare(rag_path, rag_dir, sid, report_args)
-        if _rc0:
-            return _rc0
+    #
+    # GRAND-AUDIT-SKIPPED-ON-RESUMED-CLOSE-S207. This block was guarded by
+    # `if not steps.get("checkpoint")`, so a RESUMED close skipped the whole
+    # order — render, commit, measure AND the grand audit — exactly when the tree
+    # is most likely to have moved, because a resume happens after something went
+    # wrong. S206 built the grand audit into the close to end six sessions of
+    # sealing without it, and then sealed ITSELF on a resumed close where this
+    # never ran. The guard bought nothing: every step below is idempotent by
+    # construction — rendering a derived document twice produces the same bytes,
+    # a clean worktree is not committed again, a re-measurement at an unmoved
+    # HEAD is the same measurement, and an audit is read-only. So the condition
+    # is gone rather than special-cased, because a second code path through a
+    # ritual is how the first one stops being the ritual.
+    _rc0 = _close_order_prepare(rag_path, rag_dir, sid, report_args)
+    if _rc0:
+        return _rc0
 
     # Step 1/4 — checkpoint (+ idempotent ERROR_LOG fold).
     if not steps.get("checkpoint"):
@@ -5973,6 +5985,7 @@ def _drive_close(
     # ------------------------------------------------------------------
     _accept_conduct = getattr(report_args, "accept_conduct", None)
     _conduct: "list[str]" = []
+    _conduct_warnings: "list[str]" = []
     _conduct_measured = False
     try:
         from rag_kernel import session_forensics as _sf
@@ -5984,11 +5997,22 @@ def _drive_close(
             print(_sf.render_text(_f))
             print("")
             _conduct = _sf.conduct_findings(_f)
+            _conduct_warnings = _sf.conduct_warnings(_f)
             _conduct_measured = True
         else:
             _conduct = [f"session log absent ({_log.name}) — conduct not measurable"]
     except Exception as _sf_exc:  # noqa: BLE001 — a probe that failed is not a pass
         _conduct = [f"forensics could not run: {_sf_exc}"]
+
+    # FORENSICS-GATE-MEASURES-WALL-CLOCK-S207. Reported in full, never blocking:
+    # elapsed silence is a fact about the operator's clock, not about how the
+    # agent conducted itself, and a gate whose only key is a human declaration is
+    # manual rescue wearing a gate's clothes.
+    if _conduct_warnings:
+        print("[4/4] Conduct WARNINGS (reported, not blocking — nobody in this "
+              "session could have made these numbers smaller):")
+        for _w in _conduct_warnings:
+            print(f"  - {_w}")
 
     if _conduct and not _accept_conduct:
         print(
@@ -6015,7 +6039,7 @@ def _drive_close(
         print(f"  reason: {_accept_conduct}")
     else:
         print("[4/4] Conduct gate: clean — no bursts, no undeclared failures, "
-              "gaps within allowance.")
+              "no double seal, no post-seal mutation.")
 
     # ------------------------------------------------------------------
     # SEAL-INTERVAL-RECHECK (S192, E-123) — the LAST thing before the seal.

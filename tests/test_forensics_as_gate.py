@@ -78,12 +78,48 @@ class TestConductFindings:
     def test_gaps_within_the_allowance_pass(self):
         log = [_rec(i, i * (sf.GAP_SECONDS + 60), "items") for i in range(sf.GAP_ALLOWANCE + 1)]
         # GAP_ALLOWANCE gaps between GAP_ALLOWANCE+1 records: at the limit, not over.
-        assert not any("silent gaps" in f for f in sf.conduct_findings(sf.analyze_log(log)))
+        assert not any("silent gaps" in f for f in sf.conduct_warnings(sf.analyze_log(log)))
 
-    def test_excess_silent_gaps_are_a_finding(self):
-        log = [_rec(i, i * (sf.GAP_SECONDS + 60), "items") for i in range(sf.GAP_ALLOWANCE + 3)]
-        found = sf.conduct_findings(sf.analyze_log(log))
+
+class TestSilenceIsWarnedNotCharged:
+    """FORENSICS-GATE-MEASURES-WALL-CLOCK-S207 — the who-can-act split.
+
+    S207 measured this while sealing S206: the gate refused on 7 gaps totalling
+    1412m and 89 percent un-governed silence, and the two largest — 12h41 and
+    9h39 of a 26h21 session — were the operator asleep. The agent cannot shorten
+    wall-clock time it did not spend, so the only exit was a human typing
+    ``--accept-conduct``: manual rescue, which Rule 45 exists to abolish.
+
+    The numbers are unchanged and still rendered. What changed is which list they
+    land in, and therefore whether a seal stops for them.
+    """
+
+    def _silent(self):
+        return [_rec(i, i * (sf.GAP_SECONDS + 60), "items")
+                for i in range(sf.GAP_ALLOWANCE + 3)]
+
+    def test_excess_silent_gaps_are_a_warning(self):
+        found = sf.conduct_warnings(sf.analyze_log(self._silent()))
         assert any("silent gaps" in f for f in found), found
+
+    def test_excess_silent_gaps_no_longer_block_the_seal(self):
+        assert sf.conduct_findings(sf.analyze_log(self._silent())) == []
+
+    def test_the_share_axis_is_a_warning_too(self):
+        log = [_rec(0, 0, "items"), _rec(1, sf.GAP_SECONDS * 20, "items")]
+        f = sf.analyze_log(log)
+        if f.wall_seconds and f.gap_share > sf.GAP_SHARE_MAX:
+            assert any("un-governed silence" in w for w in sf.conduct_warnings(f))
+            assert not any("un-governed silence" in c for c in sf.conduct_findings(f))
+
+    def test_what_the_agent_actually_did_still_blocks(self):
+        """The split is by WHO CAN ACT, not by how bad the number looks."""
+        log = self._silent() + [_rec(90, 10, "audit") for _ in range(sf.BURST_MIN_REPEATS)]
+        found = sf.conduct_findings(sf.analyze_log(log))
+        assert any("repeat burst" in f for f in found), found
+
+    def test_a_clean_session_warns_about_nothing(self):
+        assert sf.conduct_warnings(sf.analyze_log(_clean_log())) == []
 
     def test_a_double_seal_is_a_finding(self):
         log = _clean_log() + [

@@ -666,11 +666,12 @@ def _gate_poll(event: dict, *, state_dir: Optional[Path] = None,
                     f"{cmd_id} {elapsed:.0f}s ago; this is attempt {count + 1}. "
                     f"Polling a running command is refused, not discouraged. "
                     f"Use the blocking read instead — run, in a SECOND pane: "
-                    f"`python3 -m rag_kernel wait-for <sentinel file> --timeout N "
+                    f"`python -m rag_kernel wait-for <sentinel file> --timeout N "
                     f"--contains DONE --emit 20`. It blocks server-side and "
                     f"returns the tail in ONE round-trip. If you have no sentinel "
                     f"file, relaunch the job as "
-                    f"`... > /tmp/job.txt 2>&1; echo DONE >> /tmp/job.txt`."
+                    f"`... > .boot/job.txt 2>&1; echo QQ_JOB_DONE_QQ >> "
+                    f".boot/job.txt`."
                 ),
             )
     state[cmd_id] = {"last": now, "count": int((prior or {}).get("count", 0)) + 1}

@@ -66,6 +66,7 @@ __all__ = [
     "GAP_ALLOWANCE",
     "GAP_SHARE_MAX",
     "conduct_findings",
+    "conduct_warnings",
 ]
 
 
@@ -151,16 +152,6 @@ def conduct_findings(f: "SessionForensics") -> list[str]:
             "%d failed governed call(s), %.0fs of wall time, undeclared: %s"
             % (len(f.failures), f.failure_seconds, detail)
         )
-    if len(f.gaps) > GAP_ALLOWANCE:
-        out.append(
-            "%d silent gaps over %dm (allowance %d) totalling %.0fm"
-            % (len(f.gaps), GAP_SECONDS // 60, GAP_ALLOWANCE, f.gap_seconds / 60.0)
-        )
-    if f.wall_seconds and f.gap_share > GAP_SHARE_MAX:
-        out.append(
-            "%.0f%% of the session was un-governed silence (max %.0f%%)"
-            % (f.gap_share * 100.0, GAP_SHARE_MAX * 100.0)
-        )
     if f.double_sealed:
         out.append("%d session-end events in one log (double seal)" % len(f.session_ends))
     if f.mutations_after_first_end:
@@ -170,6 +161,38 @@ def conduct_findings(f: "SessionForensics") -> list[str]:
                 len(f.mutations_after_first_end),
                 ", ".join(f.mutations_after_first_end[:5]),
             )
+        )
+    return out
+
+
+def conduct_warnings(f: "SessionForensics") -> list[str]:
+    """Conduct facts that are REPORTED and never block a seal.
+
+    FORENSICS-GATE-MEASURES-WALL-CLOCK-S207. The silence axes were blocking, and
+    they measure the wrong actor. S207 sealed S206 against 7 gaps totalling 1412m
+    and 89% un-governed silence; the two largest gaps — 12h41 and 9h39 of a 26h21
+    session — were the OPERATOR asleep. The agent cannot shorten wall-clock time
+    it did not spend, so the only exit was ``--accept-conduct``: a human typing a
+    declaration to clear a number no one could have made smaller. That is manual
+    rescue, which Rule 45 exists to abolish.
+
+    THE SPLIT IS BY WHO CAN ACT, not by how bad the number looks. A repeat burst,
+    an undeclared failed call, a double seal and a post-seal mutation are all
+    things the AGENT did and could have not done — they stay blocking. Elapsed
+    silence is a fact about the wall clock, so it is reported here, in full, with
+    the same numbers as before: still visible, still recorded in the marker, no
+    longer a gate whose only key is a human.
+    """
+    out: list[str] = []
+    if len(f.gaps) > GAP_ALLOWANCE:
+        out.append(
+            "%d silent gaps over %dm (allowance %d) totalling %.0fm"
+            % (len(f.gaps), GAP_SECONDS // 60, GAP_ALLOWANCE, f.gap_seconds / 60.0)
+        )
+    if f.wall_seconds and f.gap_share > GAP_SHARE_MAX:
+        out.append(
+            "%.0f%% of the session was un-governed silence (max %.0f%%)"
+            % (f.gap_share * 100.0, GAP_SHARE_MAX * 100.0)
         )
     return out
 

@@ -268,6 +268,71 @@ class TestGuardedVerbSet:
         assert not (_SEAL_GUARDED_VERBS & set(_SEAL_GUARDED_WHEN_FLAG))
 
 
+class TestTheCloseOrderRunsOnAResume:
+    """GRAND-AUDIT-SKIPPED-ON-RESUMED-CLOSE-S207.
+
+    Step 0 of the close — render, commit, measure, grand audit — sat behind
+    ``if not steps.get("checkpoint")``, so a RESUMED close skipped all four. S206
+    put the grand audit into the close to end six sessions of sealing without it,
+    then sealed itself on a resumed close where Step 0 never ran. A resume is the
+    case that needs the guards MOST: it happens after something already went
+    wrong, so the tree is more likely to have moved, not less.
+
+    This is a structural assertion on purpose. The behavioural path runs a test
+    suite and a full audit in subprocesses, so a test that drove it would measure
+    the fixture rather than the ritual; what actually failed was a CONDITION in
+    the source, and that is what is pinned. If Step 0 ever becomes conditional
+    again, this is red before the next resume seals blind.
+    """
+
+    def _step0_block(self) -> str:
+        """The CODE between the Step 0 marker and the call — comments stripped.
+
+        Stripping them is not cosmetic. The first version of this test read the
+        raw source and went red on the comment that EXPLAINS the removed
+        condition: a predicate that fires on prose describing the defect is
+        GATE-FALSE-POSITIVE-ON-PROSE-S201 in miniature, and the repair is the
+        same one that item asks for — look at operands, not at text.
+        """
+        import inspect
+
+        from rag_kernel import __main__ as m
+
+        src = inspect.getsource(m._drive_close)
+        assert "Step 0/4" in src, "the close order step has been renamed"
+        after = src.split("Step 0/4", 1)[1]
+        block = after.split("_close_order_prepare(", 1)[0]
+        return "\n".join(line.split("#", 1)[0] for line in block.splitlines())
+
+    def test_step_0_is_not_conditional_on_the_checkpoint_step(self):
+        block = self._step0_block()
+        assert "steps.get(\"checkpoint\")" not in block, (
+            "Step 0 is guarded by the checkpoint step again — a resumed close "
+            "would skip render, commit, measure and the grand audit"
+        )
+        assert "steps[\"checkpoint\"]" not in block
+
+    def test_the_close_order_still_declares_its_own_skip(self):
+        """The only legal skip stays the declared one, and it is per-close."""
+        import inspect
+
+        from rag_kernel import __main__ as m
+
+        src = inspect.getsource(m._close_order_prepare)
+        assert "no_auto_close_order" in src
+
+    def test_the_grand_audit_is_inside_the_close_order(self):
+        import inspect
+
+        from rag_kernel import __main__ as m
+
+        src = inspect.getsource(m._close_order_prepare)
+        assert "grand_audit.py" in src, (
+            "the grand audit must live inside the step every close runs, not "
+            "beside it — GRAND-AUDIT-NOT-IN-THE-CLOSE-S206"
+        )
+
+
 class TestCloseTestGateStaleBlocks:
     """CLOSE-TESTGATE-STALE-BLOCKS (S191, E-115).
 
