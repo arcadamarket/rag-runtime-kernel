@@ -307,6 +307,12 @@ def test_the_layer_holds_only_boundary_gates():
         # the moment of stopping. Detector-with-delivery, declared as such.
         "stop-status",
         "deploy-parity", "post-transport-audit",
+        # S209. The growth answers the same question. How long a blocking wait
+        # ACTUALLY blocked exists only in the tool RESPONSE — the kernel verb
+        # that did the waiting has already exited by the time its own elapsed
+        # time matters, and no verb is called at all on the next wait, which is
+        # the one that has to be refused. POLL-GATE-BLIND-TO-WAIT-FANOUT-S208.
+        "wait-duration",
     }
 
 

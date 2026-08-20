@@ -309,6 +309,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected git HEAD for the freshness check (default: auto-detect)",
     )
     sstart_parser.add_argument("--no-gc", action="store_true", help="Skip the gc dry-run scan.")
+    # WHITELIST-FORWARDER-CLASS-S209. `_session_start_phase1` has read
+    # `getattr(args, "no_auto_reconcile", False)` since S184 to decide whether the
+    # carry-forward gate may repair DERIVED state — and no argument has ever
+    # supplied that name, so the escape hatch could not be reached and the repair
+    # was unconditional. Nothing crashed: a dropped field became a plausible
+    # value, which is the whole shape of the class. Measured by
+    # scripts/forwarder_census.py, which found this among 161 defaulted reads.
+    sstart_parser.add_argument(
+        "--no-auto-reconcile", action="store_true",
+        help="Do NOT let the carry-forward gate repair DERIVED state (boot-map "
+             "baseline, legacy render arrays, current_status snapshot). The gate "
+             "then refuses on those failures instead of fixing them and naming "
+             "the repair — use it when you want to SEE the inherited drift.",
+    )
     sstart_parser.add_argument(
         "--force", action="store_true",
         help="Open the session even if the carry-forward gate fails (UNSAFE).",

@@ -65,6 +65,13 @@ def test_gate_names_are_stable():
     # session-start refuse this?" question below, which is the admission test for
     # this layer — the loop is typed into the Bash tool and never reaches a kernel
     # verb, so `wait-for` cannot refuse what it never sees.
+    # S209 added `wait-duration` (POLL-GATE-BLIND-TO-WAIT-FANOUT-S208): the poll
+    # gate could only see a wait REPEATING against one file, and the measured
+    # traffic never repeated — 66 waits on 66 different files, 45% of them
+    # instant, gate fired zero times. Duration is the invariant that survives
+    # both shapes, and only PostToolUse can see it, so the refusal is split
+    # across two events. It passes the admission test for this layer: the elapsed
+    # time exists only in a tool RESPONSE, which no kernel verb ever sees.
     assert GATES == (
         "poll", "sandbox-state", "canonical-read",
         "unbounded-wait",
@@ -72,11 +79,12 @@ def test_gate_names_are_stable():
         "stop-status",
         "transport",
         "deploy-parity", "post-transport-audit",
+        "wait-duration",
     )
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.8.0"  # S206-review: rag_wait covered
+    assert HOOK_GUARD_VERSION == "1.9.0"  # S209: wait fan-out refused
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():

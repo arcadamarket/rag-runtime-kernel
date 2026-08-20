@@ -28,6 +28,12 @@ logged defect:
                       deployed-vs-committed drift AT THE EDIT, not at the seal.
                       Non-blocking by design: the edit is legitimate; the
                       silence afterwards is what costs.
+  ``wait-duration``   PostToolUse on a blocking wait — reads the elapsed time out
+                      of the wait's OWN output and records the ones that returned
+                      instantly. The recording half of the fan-out refusal that
+                      ``poll`` then makes at PreToolUse; neither event can see
+                      enough on its own.        Retires POLL-GATE-BLIND-TO-WAIT-
+                      FANOUT-S208 / WAIT-FOR-USED-AS-A-POLL-S198.
 
 GATE-OR-HOPE-PRINCIPLE, stated honestly for this module. The three PreToolUse
 gates are machine-gated: decidable predicates over the hook payload, no judgement
@@ -55,7 +61,9 @@ verdict, so the policy is unit-testable without a live agent.
   "capability": "process_enforcement",
   "description": "Claude Code PreToolUse/PostToolUse hook decision engine: refuses polling of a running tmux command, sandbox-shell access to canonical state, and direct read/hand-edit of RAG_MASTER.json; reports deploy-parity drift at the moment of the edit (HOOK-ENFORCEMENT-LAYER, S195)",
   "exports": ["GATES", "Decision", "decide", "run_gate", "selftest",
-              "CANONICAL_FILES", "POLL_COOLDOWN_SECONDS", "HOOK_GUARD_VERSION"],
+              "CANONICAL_FILES", "POLL_COOLDOWN_SECONDS", "HOOK_GUARD_VERSION",
+              "WAIT_INSTANT_SECONDS", "WAIT_FANOUT_LIMIT",
+              "WAIT_FANOUT_WINDOW_SECONDS"],
   "use_when": "Wiring or testing the .claude/settings.json enforcement layer, or asking whether a process rule is gated or merely hoped",
   "never_bypass": true
 }
@@ -75,7 +83,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.8.0"  # S206-review: poll gate covers rag_wait
+HOOK_GUARD_VERSION = "1.9.0"  # S209: wait-duration + the fan-out refusal
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -107,6 +115,7 @@ GATES: tuple[str, ...] = (
     "stop-status",                              # Stop, S206
     "transport",                                # boundary-only, default-deny, S197
     "deploy-parity", "post-transport-audit",    # PostToolUse
+    "wait-duration",                            # PostToolUse, S209
 )
 
 #: TRANSPORT-ALLOWLIST (E-133, S197) — the inversion that the other four gates
@@ -180,6 +189,7 @@ _EVENT_FOR_GATE: dict[str, str] = {
     "transport": "PreToolUse",
     "deploy-parity": "PostToolUse",
     "post-transport-audit": "PostToolUse",
+    "wait-duration": "PostToolUse",
 }
 
 #: Files that ARE the canonical state. Naming one of these from a sandbox shell
@@ -195,6 +205,56 @@ CANONICAL_FILES: frozenset[str] = frozenset({
 #: One check after a single long wait is the sanctioned pattern and stays legal;
 #: the second check twenty seconds later is the thing that cost E-128.
 POLL_COOLDOWN_SECONDS = float(os.environ.get("RAG_HOOK_POLL_COOLDOWN", "25"))
+
+# ---------------------------------------------------------------------------
+# POLL-GATE-BLIND-TO-WAIT-FANOUT-S208 — the second blindness of the wait guard
+# ---------------------------------------------------------------------------
+#
+# The S198 fix keyed the wait half of the poll gate on the TARGET FILE, for a
+# good reason: over MCP a wait is capped by the client timeout, so one long job
+# legitimately chains several waits and repetition alone is not the defect.
+#
+# It is also exactly why the gate never fired. Measured on the S207 final turn:
+# 66 of 113 tool calls were waits, 45% of them returned in under a second, and
+# the gate fired ZERO times — because every wait named a DIFFERENT file, so
+# nothing ever repeated. Same-target hammering was closed; fan-out was wide open.
+#
+# The invariant that survives both shapes is not repetition, it is DURATION. A
+# blocking wait that returns in half a millisecond did not block: the sentinel
+# was already in the file before the call was made, so the call bought a round
+# trip and no information. That is a poll wearing the anti-polling verb, and it
+# is measurable — the wait verb prints its own elapsed time in its own output.
+#
+# So the gate is split across two events, which is what the S208 note prescribed:
+#   PostToolUse `wait-duration` sees ``tool_response`` and RECORDS instant returns;
+#   PreToolUse  `poll` REFUSES the next wait once enough of them pile up,
+#   regardless of which files they named.
+#
+# ONE REFUSAL PER BURST, deliberately: the refusal clears the window, so a
+# genuinely long wait issued right after it proceeds. A gate that bricks the
+# session it protects gets switched off by the first person it inconveniences.
+
+#: A wait that returned in under this many seconds did not wait.
+WAIT_INSTANT_SECONDS = float(os.environ.get("RAG_HOOK_WAIT_INSTANT", "1.0"))
+
+#: How many instant returns inside the window make a fan-out rather than luck.
+WAIT_FANOUT_LIMIT = int(os.environ.get("RAG_HOOK_WAIT_FANOUT", "4"))
+
+#: Seconds the fan-out is counted over. Bound to the prune horizon on purpose —
+#: `_prune` drops window entries older than ten cooldowns, so a wider window here
+#: would be documented but not real.
+WAIT_FANOUT_WINDOW_SECONDS = float(
+    os.environ.get("RAG_HOOK_WAIT_WINDOW", str(POLL_COOLDOWN_SECONDS * 10))
+)
+
+#: Reserved key in the poll-window state file. Not a command id, so it can never
+#: collide with one: every real key is `wait:<path>` or a tmux command id.
+_WAIT_RETURNS_KEY = "__wait_instant_returns__"
+
+#: The wait verb prints its own elapsed time: `wait-for: FOUND after 0.0s (1 polls)`.
+#: Reading the duration out of the RESPONSE rather than timing the hook keeps the
+#: measurement inside the thing being measured and works over any transport.
+_WAIT_ELAPSED = re.compile(r"\bafter\s+([0-9]+(?:\.[0-9]+)?)\s*s\b", re.I)
 
 #: Tool names each gate mediates. Matched case-sensitively against ``tool_name``
 #: as Claude Code reports it; the settings.json matcher narrows first, this is
@@ -404,9 +464,153 @@ def _prune(state: dict, now: float) -> dict:
             if isinstance(v, dict) and float(v.get("last", 0)) >= horizon}
 
 
+def _wait_target(tool_input: dict) -> str:
+    """The file a wait call names, however the transport spells the argument."""
+    for key in ("path", "file", "filename", "sentinel", "target"):
+        value = tool_input.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _response_text(event: dict) -> str:
+    """``tool_response`` as text, whatever shape the client wrapped it in."""
+    resp = event.get("tool_response")
+    if isinstance(resp, str):
+        return resp
+    if isinstance(resp, dict):
+        for key in ("output", "stdout", "text", "content", "result"):
+            value = resp.get(key)
+            if isinstance(value, str):
+                return value
+        return json.dumps(resp)
+    if isinstance(resp, list):
+        return " ".join(str(part) for part in resp)
+    return "" if resp is None else str(resp)
+
+
+def _wait_elapsed_seconds(event: dict) -> Optional[float]:
+    """How long a wait ACTUALLY blocked, read out of its own output. -> ``None``
+    when the response says nothing about it, which is never treated as instant:
+    an unmeasured wait must not be charged as a violation."""
+    match = _WAIT_ELAPSED.search(_response_text(event))
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _instant_returns(state: dict, now: float) -> list:
+    """The recorded instant returns still inside the fan-out window."""
+    entry = state.get(_WAIT_RETURNS_KEY)
+    if not isinstance(entry, dict):
+        return []
+    kept = []
+    for stamp in entry.get("stamps") or []:
+        if not isinstance(stamp, (list, tuple)) or len(stamp) != 2:
+            continue
+        try:
+            when = float(stamp[0])
+        except (TypeError, ValueError):
+            continue
+        if now - when <= WAIT_FANOUT_WINDOW_SECONDS:
+            kept.append([when, str(stamp[1])])
+    return kept
+
+
 # ---------------------------------------------------------------------------
 # gates
 # ---------------------------------------------------------------------------
+
+def _refuse_wait_fanout(*, state_dir: Optional[Path],
+                        now: float) -> Optional[Decision]:
+    """Refuse the next wait when enough recent ones returned instantly.
+
+    POLL-GATE-BLIND-TO-WAIT-FANOUT-S208. Returns ``None`` when the call may
+    proceed. The window is CLEARED on refusal — one refusal per burst — so the
+    very next wait, which may be a genuinely long one, is not collateral damage.
+    """
+    path = _state_path(state_dir)
+    state = _prune(_load_state(path), now)
+    stamps = _instant_returns(state, now)
+    if len(stamps) < WAIT_FANOUT_LIMIT:
+        return None
+    targets = {t for _, t in stamps if t}
+    state.pop(_WAIT_RETURNS_KEY, None)
+    _save_state(path, state)
+    return Decision(
+        "poll", False,
+        reason=(
+            f"POLL-GUARD FAN-OUT (POLL-GATE-BLIND-TO-WAIT-FANOUT-S208, "
+            f"WAIT-FOR-USED-AS-A-POLL-S198): your last {len(stamps)} blocking "
+            f"waits returned in under {WAIT_INSTANT_SECONDS:g}s each, across "
+            f"{len(targets)} different file(s), inside the last "
+            f"{WAIT_FANOUT_WINDOW_SECONDS:g}s. A wait that returns instantly did "
+            f"not wait: the sentinel was already in the file before you called, "
+            f"so the call bought a round-trip and no information. That is "
+            f"polling wearing the anti-polling verb — and it passed the old "
+            f"guard precisely because each wait named a DIFFERENT file, so "
+            f"nothing ever repeated.\n"
+            f"  REPAIR 1, the shape that cannot fan out: launch and wait in ONE "
+            f"call with `python -m rag_kernel run` (see `run --help`) — it "
+            f"returns DONE/FAILED/TIMEOUT/DIED plus a bounded tail, and there is "
+            f"deliberately no intermediate handle to poll.\n"
+            f"  REPAIR 2, when the job has already finished: READ the output "
+            f"file. Do not wait for a sentinel you have already been told about.\n"
+            f"  This refusal cleared the window: the next wait is allowed, so a "
+            f"genuinely long wait is not blocked by this."
+        ),
+    )
+
+
+def _gate_wait_duration(event: dict, *, state_dir: Optional[Path] = None,
+                        now: float = 0.0, **_: Any) -> Decision:
+    """PostToolUse: record how long each blocking wait ACTUALLY blocked.
+
+    The recording half of POLL-GATE-BLIND-TO-WAIT-FANOUT-S208. It never refuses —
+    by the time a PostToolUse hook runs the round-trip has already been spent —
+    it writes the one fact PreToolUse cannot observe on its own, and warns as the
+    count approaches the limit so the refusal is never a surprise.
+
+    An unmeasured wait is recorded as nothing at all. A response that does not
+    state its elapsed time must not be charged as instant: the gate is allowed to
+    miss a violation, and is not allowed to invent one.
+    """
+    if not _WAIT_TOOLS.search(_tool_name(event)):
+        return Decision("wait-duration", True)
+    elapsed = _wait_elapsed_seconds(event)
+    if elapsed is None or elapsed >= WAIT_INSTANT_SECONDS:
+        return Decision("wait-duration", True)
+
+    path = _state_path(state_dir)
+    state = _prune(_load_state(path), now)
+    stamps = _instant_returns(state, now)
+    stamps.append([now, _wait_target(_tool_input(event))])
+    stamps = stamps[-50:]
+    state[_WAIT_RETURNS_KEY] = {"last": now, "count": len(stamps), "stamps": stamps}
+    _save_state(path, state)
+
+    if len(stamps) < WAIT_FANOUT_LIMIT - 1:
+        return Decision("wait-duration", True)
+    remaining = WAIT_FANOUT_LIMIT - len(stamps)
+    if remaining > 0:
+        tail = (f"{remaining} more and the next wait is REFUSED "
+                f"(POLL-GATE-BLIND-TO-WAIT-FANOUT-S208).")
+    else:
+        tail = ("the next wait is REFUSED "
+                "(POLL-GATE-BLIND-TO-WAIT-FANOUT-S208).")
+    return Decision(
+        "wait-duration", True,
+        context=(
+            f"WAIT-FAN-OUT: that wait returned after {elapsed:g}s — it did not "
+            f"wait, the sentinel was already there. {len(stamps)} such instant "
+            f"returns in the last {WAIT_FANOUT_WINDOW_SECONDS:g}s; {tail} "
+            f"Launch and wait in ONE call instead: `python -m rag_kernel run`."
+        ),
+    )
+
 
 def _gate_poll(event: dict, *, state_dir: Optional[Path] = None,
                now: float = 0.0, **_: Any) -> Decision:
@@ -428,7 +632,12 @@ def _gate_poll(event: dict, *, state_dir: Optional[Path] = None,
     # outside any cooldown. The defect is a wait that returned instantly being
     # re-issued against the same file seconds later.
     if _WAIT_TOOLS.search(name):
-        target = str(ti.get("path") or ti.get("file") or ti.get("filename") or "").strip()
+        # POLL-GATE-BLIND-TO-WAIT-FANOUT-S208. Checked BEFORE the per-target
+        # cooldown, because the whole point is that the target does not repeat.
+        fanout = _refuse_wait_fanout(state_dir=state_dir, now=now)
+        if fanout is not None:
+            return fanout
+        target = _wait_target(ti)
         if not target:
             return Decision("poll", True)
         cmd_id = "wait:" + target
@@ -1114,6 +1323,7 @@ _GATE_FUNCS = {
     "deploy-parity": _gate_deploy_parity,
     "transport": _gate_transport,
     "post-transport-audit": _gate_post_transport_audit,
+    "wait-duration": _gate_wait_duration,
 }
 
 
@@ -1227,12 +1437,32 @@ def selftest(*, state_dir: Optional[Path] = None) -> tuple[int, list[str]]:
                                   "tool_response": "ok"}, True),
         ("deploy-parity", {"tool_name": "Edit",
                            "tool_input": {"file_path": "/x/rag_kernel/api.py"}}, True),
+        # POLL-GATE-BLIND-TO-WAIT-FANOUT-S208. Every primed wait below names a
+        # DIFFERENT file, which is exactly the traffic that walked through the
+        # S198 guard untouched. If this probe ever reads `allow`, the fan-out
+        # hole is open again.
+        ("poll", {"tool_name": "mcp__rag-kernel__rag_wait",
+                  "tool_input": {"path": "/x/fanout-next.txt"}}, False),
+        # A wait that actually blocked is recorded as nothing and refuses nothing.
+        ("wait-duration", {"tool_name": "mcp__rag-kernel__rag_wait",
+                           "tool_input": {"path": "/x/slow.txt"},
+                           "tool_response":
+                               "wait-for: FOUND after 41.7s (167 polls)"}, True),
     ]
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         sd = Path(state_dir) if state_dir else Path(td)
         # prime the poll window so the poll check exercises the REFUSAL path
         decide("poll", checks[0][1], state_dir=sd, now=now)
+        # prime the fan-out window: WAIT_FANOUT_LIMIT instant returns, each on a
+        # different file, recorded through the PostToolUse gate exactly as a live
+        # session would record them.
+        for i in range(WAIT_FANOUT_LIMIT):
+            decide("wait-duration",
+                   {"tool_name": "mcp__rag-kernel__rag_wait",
+                    "tool_input": {"path": f"/x/fanout-{i}.txt"},
+                    "tool_response": "wait-for: FOUND after 0.0s (1 polls)"},
+                   state_dir=sd, now=now)
         for gate, event, want_allow in checks:
             got = decide(gate, event, state_dir=sd, now=now + 1)
             ok = got.allow is want_allow
