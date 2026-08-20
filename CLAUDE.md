@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=3ddd1afc1c930ca4...
+> state_hash: stored=bd27b925865d0de2... computed=22345f98272e03ea...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -26,7 +26,7 @@ DEPLOYED INTERPRETER (declared in toolchain/toolchain.json): `C:\Python314\pytho
 `python3` on this host is the Microsoft Store alias and exits
 non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 
-- **session_start_protocol** — HARD RULE -- GC-FIRST CARRY-FORWARD RITUAL. At the very start of EVERY session (after session-zero), BEFORE any substantive work, in order: (0) BOOT-GUARD-FIRST-ACTION (KA-20, HARD) -- the governed `session-start` command is the VERY FIRST action of the session, before any other tool call, file read, or state claim to the operator. NEVER read the canonical RAG directly, on any transport and a banned sandbox least of all, to LOAD or REPORT boot state: `session-start` renders a deterministic BOOT-STATE BRIEFING (inference-ledger OPEN count + overdue flag, next_session_directive, backlog counts) that is COMPLETE for briefing the operator, so a direct read is an E-071-class tool_hierarchy violation and not merely redundant. (1) CARRY-FORWARD GATE, fail-loud -- refuse to start on an incoherent or unsealed inheritance and name the recovery verb. (2) GC DRY-RUN. (3) RULE DIGEST + OPERATING FRAME rendered into working context. HARDENED (S181): (a) ATTESTATION IS TWO-PHASE -- the session is not READY, and the logger is not opened, until `--attest <token>` is re-run and the token matches the LIVE operating_protocol digest; this makes rule-loading checkable instead of claimed. (b) AUTO-SID-DERIVE -- session-start DERIVES the next session id from meta.written_by_session WITHOUT writing it, identically in both handshake phases; the increment is persisted later, at checkpoint/session-end. …[truncated — full text renders at session-start]
+- **session_start_protocol** — HARD RULE -- GC-FIRST CARRY-FORWARD RITUAL. At the very start of EVERY session (after session-zero), BEFORE any substantive work, in order: (0) BOOT-GUARD-FIRST-ACTION (KA-20, HARD; wording corrected S209 by BOOT-GUARD-FIRST-ACTION-IS-UNPERFORMABLE-S209) -- the governed `session-start` command is the FIRST GOVERNED ACTION of the session: before any file read, any kernel verb, and any state claim to the operator. It is NOT literally the first tool call, and it cannot be -- bringing up the transport it runs on necessarily precedes it (loading the tool schema, then finding the tmux session, window and pane). The literal wording stood until S209 and was satisfied by nobody: session-start was the sixth call for S209 and the same shape for S208, and both then reported "first action of the session", a claim stronger than the fact, which is the precise class this project exists to catch. A HARD rule whose predicate no actor can satisfy does not produce compliance, it produces inaccurate reporting. TRANSPORT SETUP IS NOT WORK and is permitted before the boot: loading tool schemas, listing tmux sessions/windows/panes. EVERYTHING ELSE IS NOT: no file read, no git command, no test, no kernel verb, no statement about state. NEVER read the canonical RAG directly, on any transport and a banned sandbox least of all, to LOAD or REPORT boot state: `session-start` renders a deterministic …[truncated — full text renders at session-start]
 - **session_start_shell_rule** — HARD RULE: the FIRST shell/git/test action of every session goes through tmux-mcp (NOT wsl-exec, NEVER the Cowork sandbox); wsl-exec is the ATOMIC single-command fallback only. The session-start ritual (carry-forward gate + GC dry-run + rule-digest attestation) is mechanized in `rag_kernel session-start`. Rationale/history on-demand: ERROR_LOG E-042 / ENV-NORM.
 - **tool_hierarchy** — {'file_read_write_list': 'File tools (primary for file CONTENT read/write) > tmux-mcp (real WSL shell for listing/scan) > wsl-exec (atomic). Cowork sandbox bash PERMANENTLY BANNED.', 'file_copy_move_git_shell': "tmux-mcp (PRIMARY -- real interactive WSL bash; runs &&, ;, |, $(), 2>&1 VERBATIM with NO operator mangling and NO orphan '1' file) > wsl-exec (FALLBACK -- ATOMIC single commands ONLY; it strips &&/;/|/$(), mangles 2>&1 into an orphan file named '1', and collapses ../.. into //) > PowerShell (LAST RESORT -- Windows-host ops, or when the WSL transport is down). Desktop Commander EXCLUDED. Cowork sandbox bash PERMANENTLY BANNED. Full WHY/proof (S64): RAG_CONTEXT[leaned_rules].tool_hierarchy.", 'pytest_and_testing': 'tmux-mcp (PRIMARY) running PYTHONPATH=. /home/pakhol/.local/bin/pytest tests/ from the worktree in a real WSL bash; wsl-exec with working_dir is the ATOMIC-command fallback. SANDBOX PERMANENTLY BANNED (stale .pyc, truncation, read-only mount). If BOTH WSL transports fail, ASK USER -- never fall back to sandbox.'}
 - **tool_contract** — ALLOWED: read/list/write within declared roots, compute checksum, append WAL, rotate backup. DISALLOWED: write outside roots, overwrite source files, mutate without validation, bypass checksum, load COLD at boot without a trigger. HARDENED (S181, from E-090(b) and the guarded-verb migration): (1) EVERY CANONICAL WRITE GOES THROUGH A GOVERNED VERB -- add / un-add / add-rule / update-rule / note / priority / start / resolve / defer / reopen / discard / supersede / checkpoint. Hand-editing RAG_MASTER.json is outside the contract even when the intended edit is correct, because the atomicity, WAL append, checksum and .bak rotation are PRECONDITIONS of the write, not follow-ups to it. (2) THE INVERSE IS ALSO A VERB -- a pristine mis-add is reversed with `un-add`, never by hand: in S180 adding the first item of a new kind retroactively activated a coverage invariant across 67 legacy entries and took the audit from 0 findings to 64, and only the guarded inverse returned canonical state to exactly zero net change. (3) KIND IS A COUPLING SURFACE -- introducing the FIRST item of a previously unused kind can activate dormant invariants, so a new kind is a schema decision, not a labelling choice. DECIDABLE PREDICATE: after every write the audit reports 0 findings and HOT is byte-identical to .bak; if it is not, the write is reverted through the guarded inverse rather than patched forward.
@@ -55,13 +55,13 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 
 | Fact | Value |
 |---|---|
-| git HEAD | 7ab8492 |
+| git HEAD | 373c12b |
 | runtime | see current_status |
-| test gate | 2895  (session S207 @ 7ab8492) |
-| written_by_session | S207 |
-| active items | 130 |
-| P1 | 38 |
-| baked assets | 141 |
+| test gate | 2991  (session S209 @ 373c12b) |
+| written_by_session | S208 |
+| active items | 120 |
+| P1 | 20 |
+| baked assets | 144 |
 | posix shell | /bin/bash |
 | tmux transport | /usr/bin/tmux |
 | TLC jar | /mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/toolchain/tla2tools.jar |
@@ -71,43 +71,25 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `AGENT-STOPS-WITHOUT-A-STATUS-S206`
 - `COLD-BOOT-HAS-NO-RULES-S205`
 - `CONTEXT-COMPACTION-FORBIDDEN-BUT-UNGATED-S203`
-- `E-116`
 - `E-117`
-- `E-128`
 - `E-132`
-- `E-134`
-- `FORENSICS-GATE-MEASURES-WALL-CLOCK-S207`
-- `GATE-CONTRADICTS-ITS-OWN-RULE-POWERSHELL-S206`
 - `GATE-FALSE-POSITIVE-ON-PROSE-S201`
-- `GATE-OR-HOPE-PRINCIPLE`
 - `GC-IS-INVERTED-S202`
 - `GC-WOULD-DELETE-LIVE-TESTS-S202`
-- `GRAND-AUDIT-NOT-IN-THE-CLOSE-S206`
-- `GRAND-AUDIT-SKIPPED-ON-RESUMED-CLOSE-S207`
-- `INFERENCE-LEDGER-NO-LIFECYCLE`
 - `LEAN-RAG-INVERTED-LOADED-STORE-S204`
 - `MEASUREMENT-PROVENANCE-S201`
 - `OPERATOR-ONE-NUMBER`
-- `PLAN-FEASIBILITY-GATE`
 - `POLICY-LIVES-IN-CODE-NOT-IN-THE-RAG-S204`
-- `POLL-GATE-BLIND-TO-WAIT-FANOUT-S208`
 - `PROBE-DEFINES-ITS-OWN-PROTOCOL-S201`
 - `RENDERER-PINS-THE-RUNNING-INTERPRETER-S206`
 - `RESOLVE-EVIDENCE-GATE-NOT-ENFORCED-S202`
 - `RULE-ORPHANS-31-OF-57-S203`
-- `SCRATCH-OUTSIDE-ROOT-S205`
-- `SEAL-NOT-INVALIDATED-BY-LATER-WRITES-S201`
-- `SEAL-ORDER-IN-AGENT-HANDS-S205`
-- `SEALED-SESSION-CAN-STILL-WRITE-S208`
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
 - `TRANSPORT-RULE-HAS-NO-ENFORCER-S206`
-- `TWO-LIVE-SESSIONS-ONE-RAG-S207`
-- `UNBOUNDED-WAIT-GATE-S206`
-- `UNCOMMITTED-WORK-HAS-NO-GATE-S206`
 - `WAIT-FOR-USED-AS-A-POLL-S198`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 38, 'P2': 46, 'P3': 32, 'P4': 9, 'P5': 4, 'unprioritized': 1}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 20, 'P2': 53, 'P3': 34, 'P4': 9, 'P5': 4}.
 
 ## 5. TRAPS (from operating_protocol)
 
