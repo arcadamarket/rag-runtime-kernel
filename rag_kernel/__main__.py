@@ -6588,6 +6588,16 @@ def cmd_acceptance(args: argparse.Namespace) -> int:
     drift); this verb is the edge that makes it reachable, and callable from a
     close or a CI job the same way every other governed check is.
     """
+    # ACCEPTANCE-VERB-NEVER-RAN-S209. `subprocess` is imported per-function all
+    # through this module and this one was missed, so BOTH the run below and the
+    # except clause raised NameError and the verb could not execute once, ever.
+    # The suite was green over it because every test of acceptance imported
+    # cmd_acceptance or the script directly and none went through main(argv) --
+    # TESTS-BYPASS-THE-CLI-S208 exactly, and `acceptance` was one of the 19 verbs
+    # the S209 CLI census listed as unreached. Found in the field, not here: the
+    # _MY U.S. IMM PROJ clone hit it and reported it as E-IMM-033.
+    import subprocess
+
     script = Path(args.script) if args.script else (args.rag.resolve().parent
                                                     / "scripts" / "acceptance_check.py")
     if not script.exists():

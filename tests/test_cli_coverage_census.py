@@ -28,8 +28,12 @@ REPO = Path(__file__).resolve().parent.parent
 
 #: Verbs with no test that reaches them through the entry point, measured S209.
 #: THIS LIST MAY ONLY SHRINK. Adding to it is how a gate becomes a formality.
+#: ``acceptance`` left this list in S209 — not by decree but because the field
+#: found the verb was DEAD (NameError on every invocation, see
+#: tests/test_acceptance_verb_cli.py) and a real entry-point test now covers it.
+#: That is the only way an entry may leave: a test, never a decision.
 CLI_UNTESTED_BASELINE = {
-    "acceptance", "adopt-preflight", "birth-adopt", "bootmap", "cite",
+    "adopt-preflight", "birth-adopt", "bootmap", "cite",
     "decide", "decisions", "deployment", "drain", "errlog-migrate",
     "forensics", "hook-guard", "inbox", "ingest", "migrate", "post",
     "push-check", "status", "tests",
