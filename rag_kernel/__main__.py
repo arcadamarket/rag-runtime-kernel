@@ -6380,9 +6380,20 @@ def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
             f"session {sealed} is already sealed COMPLETE (transfer_ready=true, "
             f"sealed {sealed_at}) and this write names that same session"
         )
+        # SEAL-REFUSAL-NAMED-AN-UNPERFORMABLE-REPAIR-S209. This line used to end
+        # "or re-open this close with `session-resume` if the seal was premature".
+        # It cannot: cmd_session_resume returns 0 with "No incomplete close to
+        # resume — last close is COMPLETE (transfer_ready=true)" for exactly this
+        # marker. The refusal named a repair that refuses. A gate whose repair
+        # does not work teaches the reader to stop reading the repair (Rule 43).
         repair = (
-            "  repair: run the next session (`session-start`) and bank it there, "
-            "or re-open this close with `session-resume` if the seal was premature."
+            "  repair: this seal is FINAL — `session-resume` only finishes an "
+            "INTERRUPTED close and returns a no-op on a COMPLETE one. Either bank "
+            "this in the NEXT session (`session-start`, then the verb there), or "
+            "hand it to the successor from here with "
+            "`rag_kernel post --from <this-session> --title ... --note ...`, "
+            "which is the one channel a sealed session still has and which the "
+            "next boot cannot seal without draining."
         )
     else:
         why = (
@@ -6392,8 +6403,10 @@ def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
         )
         repair = (
             f"  repair: name the session making this write — add `--session <your "
-            f"session id>`, which must not be {sealed} — or re-open this close "
-            f"with `session-resume` if the seal was premature."
+            f"session id>`, which must not be {sealed}. If you ARE {sealed}, the "
+            f"seal is FINAL: `session-resume` is a no-op on a COMPLETE close, so "
+            f"bank it in the next session or hand it over with `rag_kernel post "
+            f"--from {sealed} --title ... --note ...`."
         )
     print(
         f"ERROR: CLOSE-DOUBLE-SEAL guard — {why}. Refusing {invoked}: a write "

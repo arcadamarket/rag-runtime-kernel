@@ -69,7 +69,43 @@ class TestDoubleSealGuard:
         assert _refuse_mutation_after_seal("add", _ns(rag, "S187")) == 1
         err = capsys.readouterr().err
         assert "CLOSE-DOUBLE-SEAL" in err
-        assert "session-resume" in err, "a refusal must name its repair"
+        assert "rag_kernel post" in err, "a refusal must name its repair"
+
+    def test_the_named_repair_is_one_that_actually_works(self, tmp_path, capsys):
+        """SEAL-REFUSAL-NAMED-AN-UNPERFORMABLE-REPAIR-S209.
+
+        The refusal used to say "re-open this close with `session-resume` if the
+        seal was premature". It cannot: ``cmd_session_resume`` returns 0 with
+        "No incomplete close to resume — last close is COMPLETE" for precisely
+        this marker. A gate that names a repair which refuses teaches the reader
+        to stop reading repairs, which is the whole value of naming one.
+
+        Measured S209 by following its own advice on a real COMPLETE seal and
+        getting the no-op.
+        """
+        rag = _rag(tmp_path, sealed_session="S187")
+        _refuse_mutation_after_seal("add", _ns(rag, "S187"))
+        err = capsys.readouterr().err
+        assert "seal is FINAL" in err
+        assert "no-op on a COMPLETE" in err or "COMPLETE one" in err, err
+        assert "re-open this close with `session-resume`" not in err
+
+    def test_session_resume_really_is_a_no_op_on_a_complete_close(self, tmp_path,
+                                                                  capsys):
+        """Pins the FACT the message now states, so the two cannot drift apart."""
+        import argparse as _a
+
+        from rag_kernel.__main__ import cmd_session_resume
+
+        rag = _rag(tmp_path, sealed_session="S187", transfer_ready=True)
+        rc = cmd_session_resume(_a.Namespace(
+            rag=rag, session=None, summary=None, tasks=None, status=None,
+            strict=False, git_head=None, error_log_entry=None, error_log_id=None,
+            error_log_path=None, report_rendered=False, docs_root=None,
+            no_reconcile=False, no_errors=True, accept_conduct=None,
+            no_auto_close_order=True))
+        assert rc == 0
+        assert "No incomplete close to resume" in capsys.readouterr().out
 
     def test_every_guarded_verb_is_refused(self, tmp_path):
         rag = _rag(tmp_path, sealed_session="S187")
