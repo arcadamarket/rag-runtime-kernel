@@ -1034,7 +1034,24 @@ def rag_ledger(rag):
 
 def main():
     ap=argparse.ArgumentParser(description="GRAND AUDIT - full compliance due diligence, one command.")
-    ap.add_argument("--root",default="/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)")
+    # AUDIT-ROOT-HARDCODED-TO-ONE-DEPLOYMENT-S209. This default was the absolute
+    # path of the deployment that authored the auditor. Every clone that adopted
+    # this release therefore audited SOMEBODY ELSE'S project whenever the close
+    # invoked it without --root -- which is exactly what _close_order_prepare
+    # does. Measured: the _MY U.S. IMM PROJ deployment ran its mandatory close
+    # audit on 2026-08-25 and its report reads `root=GitHub Project (RAG Runtime
+    # Kernel)`, having scanned that project's RAG_MASTER.json, RAG_CONTEXT.json,
+    # BOOTMAP_MANIFEST.json and toolchain/, and having run the `gc` verb three
+    # times inside it, appending three records to a SEALED session's log.
+    #
+    # The root is now DERIVED from where this file actually sits: the auditor
+    # lives at <root>/<rag-dir>/scripts/grand_audit.py, so two levels up from its
+    # own directory is the project root, for any deployment and any rag-dir name
+    # (`RAG` here, `_RAG` in that clone). A tool that must be told where it is
+    # will eventually be told wrong; one that can see where it is cannot.
+    ap.add_argument("--root",default=None,
+                    help="project root to audit (default: derived from this "
+                         "script's own location, never a baked-in path)")
     ap.add_argument("--session",help="session id whose conduct axis 7 judges (via forensics)")
     ap.add_argument("--fast",action="store_true",help="skip TLC; axis 8 becomes UNKNOWN, verdict cannot be GREEN")
     ap.add_argument("--out",help="also write the report to this path")
@@ -1045,6 +1062,34 @@ def main():
     ap.add_argument("--only",default=None,
                     help="comma-separated axis numbers to run, e.g. --only 1 (boot gate)")
     a=ap.parse_args()
+    # AUDIT-ROOT-HARDCODED-TO-ONE-DEPLOYMENT-S209 -- see --root above. Derived
+    # from this file's own location so the auditor audits the deployment it was
+    # deployed into: <root>/<rag-dir>/scripts/grand_audit.py.
+    if not a.root:
+        # STRUCTURE, NOT ARITHMETIC. Counting directory levels was the first
+        # S209 attempt and it was wrong within a minute: run from the git
+        # worktree the same count yields `<root>/GIT WORKTREES`, because the
+        # worktree nests one level differently from a deployment. So the root is
+        # identified by the thing that DEFINES a deployment -- a RAG_MASTER.json
+        # beside the scripts dir -- and every fallback stays inside the tree the
+        # caller is standing in. Whatever else is uncertain, auditing a stranger
+        # is now impossible.
+        def _root_of(d):
+            # A SOURCE CHECKOUT IS ITS OWN ROOT; A DEPLOYED RAG DIR IS NOT. Both
+            # hold a RAG_MASTER.json, so the store alone cannot tell them apart.
+            # The kernel repo also carries tests/; a deployment never does.
+            # Without this the checkout reported `root=GIT WORKTREES` -- the
+            # container of the repo rather than the repo. Wrong, though never
+            # dangerous: both are inside the same project.
+            return d if os.path.isdir(os.path.join(d,"tests")) else os.path.dirname(d)
+        _ragdir=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _cwd=os.path.abspath(os.getcwd())
+        if os.path.isfile(os.path.join(_ragdir,"RAG_MASTER.json")):
+            a.root=_root_of(_ragdir)                 # deployed: <root>/<rag>/scripts
+        elif os.path.isfile(os.path.join(_cwd,"RAG_MASTER.json")):
+            a.root=_root_of(_cwd)                    # invoked from a store dir
+        else:
+            a.root=_cwd                              # unknown layout: audit where we stand
     # FORENSICS-CALLER-ATTRIBUTION (S191, E-111). Every kernel invocation this
     # auditor makes is a MACHINE call and inherits this stamp, so axis 7 stops
     # charging the auditor's own gc/audit probes to the agent it is judging.

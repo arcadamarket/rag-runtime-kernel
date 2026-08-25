@@ -1,5 +1,8 @@
 import os,re,sys,json,time,subprocess,collections
-ROOT="/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)"
+# AUDIT-ROOT-HARDCODED-TO-ONE-DEPLOYMENT-S209: derived from this file's own
+# location (<root>/<rag-dir>/scripts/), never a baked absolute path.
+ROOT=os.environ.get("RAG_KERNEL_PROJECT_ROOT") or os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RAGD=os.path.join(ROOT,"RAG"); WT=os.path.join(ROOT,"GIT WORKTREES","rag-runtime-kernel")
 SKIPDIR=(".git","__pycache__","node_modules",".pytest_cache",".venv","states")
 TEXT=(".md",".py",".json",".jsonl",".txt",".sh",".ps1",".yml",".yaml",".cfg",".tla",".html",".toml",".ini",".out")

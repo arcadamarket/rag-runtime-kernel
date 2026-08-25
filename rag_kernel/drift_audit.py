@@ -782,8 +782,8 @@ def host_scratch_slugs(root: Path | str) -> list[str]:
 
     THE SECOND HALF OF THE S206 PROVENANCE BUG, and it is why this returns a list
     instead of a string. The harness always slugs the WINDOWS path
-    (``C--Users-pakhol-…``). The kernel usually runs under WSL, where the same
-    project root is ``/mnt/c/Users/pakhol/…`` and slugs to ``-mnt-c-Users-…``.
+    (``C--Users-user-…``). The kernel usually runs under WSL, where the same
+    project root is ``/mnt/c/Users/user/…`` and slugs to ``-mnt-c-Users-…``.
     Those two strings never match, so a gate keyed on the native slug alone is
     blind on the exact host it was written for — measured S206, 22 real files and
     0 findings, twice, with every unit test green because each one injected its

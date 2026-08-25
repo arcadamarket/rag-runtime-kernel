@@ -5555,7 +5555,17 @@ def _close_order_prepare(
     # inconclusive during the very close that knows its own id, and axis 9 then
     # reports the inconclusive probe as a finding, so the omission did not merely
     # lose a check, it refused the seal (GRAND-AUDIT-NOT-GIVEN-SESSION-S207).
-    g = subprocess.run([sys.executable, str(grand), "--session", str(sid)],
+    # PASS THE ROOT. AUDIT-ROOT-HARDCODED-TO-ONE-DEPLOYMENT-S209: this call used
+    # to give the auditor only --session, leaving the root to the script's own
+    # default -- and that default was one deployment's absolute path, baked in.
+    # Every clone that adopted the release therefore audited THAT project from
+    # its own close. The auditor now derives a sane default, but the caller is
+    # the one that actually knows, and a caller that knows and stays silent is
+    # how a default gets to be wrong for a year. cwd was already correct here,
+    # which is the sharpest part of the lesson: the right value was in this
+    # frame the whole time and simply was not passed.
+    g = subprocess.run([sys.executable, str(grand), "--session", str(sid),
+                        "--root", str(Path(rag_dir).resolve().parent)],
                        cwd=str(rag_dir), capture_output=True, text=True)
     if g.returncode != 0:
         print(

@@ -19,7 +19,12 @@ Exit 0 only if every deployment passes every check.
 """
 import json, os, subprocess, sys
 
-KERNEL_RAGDIR = "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG"
+# AUDIT-ROOT-HARDCODED-TO-ONE-DEPLOYMENT-S209. Derived, not baked: this file
+# lives at <root>/<rag-dir>/scripts/, so its grandparent IS the kernel RAG dir on
+# whatever host and under whatever rag-dir name the deployment uses. A baked
+# absolute path made this tool silently describe one machine's kernel while
+# claiming to check the fleet.
+KERNEL_RAGDIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAILURES: list[str] = []
 
 
