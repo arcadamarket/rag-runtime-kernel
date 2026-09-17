@@ -143,20 +143,22 @@ class TestTheAuditorLocatesItself:
 
     @staticmethod
     def _derive(script: Path, cwd: Path) -> Path:
-        """The derivation as grand_audit performs it — structure, not arithmetic."""
+        """The derivation as grand_audit performs it — structure, not arithmetic.
+
+        S211: this used to REIMPLEMENT ``root_of`` inline, which is the
+        self-certifying shape SELF-CERTIFYING-EVIDENCE-GATE-S201 names — the copy
+        stayed green while the original was wrong for a whole class of
+        deployment. It now calls the shipped function.
+        """
         import os
 
-        def root_of(d: str) -> Path:
-            # a source checkout is its own root; a deployed store dir is not
-            return Path(d) if os.path.isdir(os.path.join(d, "tests")) \
-                else Path(os.path.dirname(d))
-
+        root_of = _grand_audit_module()._root_of
         ragdir = os.path.dirname(os.path.dirname(os.path.abspath(str(script))))
         cwd_s = os.path.abspath(str(cwd))
         if os.path.isfile(os.path.join(ragdir, "RAG_MASTER.json")):
-            return root_of(ragdir)
+            return Path(root_of(ragdir))
         if os.path.isfile(os.path.join(cwd_s, "RAG_MASTER.json")):
-            return root_of(cwd_s)
+            return Path(root_of(cwd_s))
         return Path(cwd_s)
 
     @pytest.mark.parametrize("rag_dir_name", ["RAG", "_RAG", "RAG_KERNEL"])
@@ -211,4 +213,264 @@ class TestTheAuditorLocatesItself:
         assert '"--root"' in head, (
             "_close_order_prepare must pass --root to the auditor; relying on "
             "the script's default is what sent a clone into another project"
+        )
+
+
+def _grand_audit_module():
+    """Import the real auditor, so these tests measure IT and not a copy of it.
+
+    The class above derives the root with a REIMPLEMENTATION of grand_audit's
+    logic. That is a self-certifying shape (SELF-CERTIFYING-EVIDENCE-GATE-S201):
+    the copy can stay green while the original rots. The store-dir tests below
+    import the shipped function instead.
+    """
+    import importlib.util
+
+    path = REPO / "scripts" / "grand_audit.py"
+    spec = importlib.util.spec_from_file_location("grand_audit_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)          # main() is behind a __main__ guard
+    return mod
+
+
+class TestTheAuditorResolvesTheStoreDirName:
+    """AUDIT-STORE-DIR-NAME-HARDCODED-S211 — the half S209 did not finish.
+
+    S209 made the ROOT derivable for "any deployment and any rag-dir name (`RAG`
+    here, `_RAG` in that clone)" — and the constructor then threw it away on the
+    next line with ``os.path.join(root, "RAG")``. Passing ``--root`` therefore
+    only ever worked for deployments that spell the store ``RAG``, and passing
+    ``--root`` is exactly what the mandatory close does.
+
+    MEASURED: the ``_MY U.S. IMM PROJ`` clone spells its store ``_RAG`` and
+    patched this line locally on 2026-08-25, leaving a comment asking for this
+    release — "RETIRE when a release resolves the store dir instead of assuming
+    its name". Its copy of the auditor has been AHEAD of upstream since, which
+    also means the S210 cutover advice ("the cutover is a FILE COPY of
+    scripts/grand_audit.py") would have overwritten that patch and re-broken the
+    deployment it was meant to fix. A fix that lives in one clone is a fix the
+    fleet does not have.
+    """
+
+    @staticmethod
+    def _deployment(tmp_path, store_name):
+        rag = tmp_path / "proj" / store_name
+        (rag / "scripts").mkdir(parents=True)
+        (rag / "RAG_MASTER.json").write_text("{}", encoding="utf-8")
+        return tmp_path / "proj", rag
+
+    @pytest.mark.parametrize("store", ["RAG", "_RAG", "RAG_KERNEL", "store"])
+    def test_any_store_name_resolves(self, tmp_path, store):
+        root, rag = self._deployment(tmp_path, store)
+        got = _grand_audit_module()._store_dir(str(root))
+        assert Path(got) == rag, (
+            f"a deployment spelling its store {store!r} must be audited at its "
+            f"own store, not at <root>/RAG"
+        )
+
+    def test_a_source_checkout_is_its_own_store(self, tmp_path):
+        """The kernel repo holds RAG_MASTER.json at its top level."""
+        wt = tmp_path / "proj" / "GIT WORKTREES" / "repo"
+        (wt / "scripts").mkdir(parents=True)
+        (wt / "RAG_MASTER.json").write_text("{}", encoding="utf-8")
+        got = _grand_audit_module()._store_dir(str(wt))
+        assert Path(got) == wt
+
+    def test_the_conventional_name_wins_when_two_stores_exist(self, tmp_path):
+        """A stray copy must not silently outrank the real store."""
+        root = tmp_path / "proj"
+        for name in ("RAG", "_RAG", "aaa_decoy"):
+            d = root / name
+            d.mkdir(parents=True)
+            (d / "RAG_MASTER.json").write_text("{}", encoding="utf-8")
+        got = _grand_audit_module()._store_dir(str(root))
+        assert Path(got) == root / "RAG"
+
+    def test_an_empty_root_still_names_a_concrete_path(self, tmp_path):
+        """The fallback exists so a failure says WHERE it looked, not ''."""
+        root = tmp_path / "proj"
+        root.mkdir()
+        got = _grand_audit_module()._store_dir(str(root))
+        assert Path(got) == root / "RAG"
+
+    def test_the_constructor_no_longer_assumes_the_name(self):
+        text = (REPO / "scripts" / "grand_audit.py").read_text(
+            encoding="utf-8", errors="replace")
+        assert 'self.ragd=_store_dir(root)' in text.replace(" ", ""), (
+            "Grand.__init__ must RESOLVE the store dir; assuming os.path.join("
+            "root, 'RAG') is the defect this class exists for"
+        )
+
+    def test_the_real_deployment_of_this_repo_resolves(self):
+        """Not a fixture: the store this very checkout ships beside."""
+        mod = _grand_audit_module()
+        got = Path(mod._store_dir(str(REPO)))
+        assert (got / "RAG_MASTER.json").is_file(), got
+
+
+class TestADeploymentThatMirrorsTestsIsStillADeployment:
+    """AUDIT-ROOT-READS-A-MIRRORED-DEPLOYMENT-AS-A-CHECKOUT-S211.
+
+    S209 discriminated a source checkout from a deployed store on ``tests/``:
+    "the kernel repo also carries tests/; a deployment never does". This project
+    then instructed the opposite. E-IMM-020 settled that "a deployment is runtime
+    + tests + formal + EVERY pinned spec version", after 31 tests failed in the
+    _MY U.S. IMM PROJ clone on missing artifacts — so that clone mirrored
+    ``tests/`` into its store exactly as told, and the auditor started reading its
+    store as a checkout.
+
+    THE MEASURED CONSEQUENCE, 2026-09-17, running that clone's own boot gate:
+
+        GRAND AUDIT   root=_RAG   session=-
+        [????] toolchain manifest  L1: rag_kernel.toolchain not importable
+        RESULT: 0 PASS  0 FAIL  1 UNKNOWN   VERDICT: NOT GREEN
+
+    against ``15 PASS / GREEN`` for a deployment whose store happens not to carry
+    tests/. The root resolved to the STORE, the store dir under that root did not
+    exist, and every probe running with ``cwd=ragd`` failed. The close's grand
+    audit is MANDATORY, so that deployment's close could not pass at all — which
+    is GRAND-AUDIT-IN-CLOSE-CANNOT-PASS-S209 arriving by a second road.
+    """
+
+    @staticmethod
+    def _clone(tmp_path, store_name="_RAG", *, mirror_tests=True, lived=True):
+        root = tmp_path / "IMM CASE"
+        store = root / store_name
+        (store / "scripts").mkdir(parents=True)
+        (store / "RAG_MASTER.json").write_text("{}", encoding="utf-8")
+        if mirror_tests:
+            (store / "tests").mkdir()
+        if lived:
+            (store / "session_log_S21.jsonl").write_text("", encoding="utf-8")
+            (store / "AUDIT_CANONICAL_REPORT_S21.md").write_text("", encoding="utf-8")
+        return root, store
+
+    def test_the_clone_resolves_to_its_project_root_not_its_store(self, tmp_path):
+        root, store = self._clone(tmp_path)
+        got = Path(_grand_audit_module()._root_of(str(store)))
+        assert got == root, (
+            "a deployment that mirrored tests/ as instructed must still resolve "
+            "to its PROJECT root; resolving to the store is what made its "
+            "mandatory close audit unpassable"
+        )
+
+    def test_and_then_the_store_dir_still_resolves_under_it(self, tmp_path):
+        """The two halves compose: right root, right store, any store name."""
+        root, store = self._clone(tmp_path)
+        got = Path(_grand_audit_module()._store_dir(str(root)))
+        assert got == store
+
+    def test_a_checkout_under_git_worktrees_is_still_its_own_root(self, tmp_path):
+        wt = tmp_path / "proj" / "GIT WORKTREES" / "rag-runtime-kernel"
+        (wt / "tests").mkdir(parents=True)
+        (wt / "RAG_MASTER.json").write_text("{}", encoding="utf-8")
+        assert Path(_grand_audit_module()._root_of(str(wt))) == wt
+
+    def test_a_store_that_never_ran_still_resolves_to_its_root(self, tmp_path):
+        """A freshly deployed clone has no logs yet and must not be misread."""
+        root, store = self._clone(tmp_path, mirror_tests=False, lived=False)
+        assert Path(_grand_audit_module()._root_of(str(store))) == root
+
+    def test_the_live_store_predicate_does_not_rest_on_the_boot_map(self):
+        """BOOTMAP_MANIFEST.json separates nothing — the worktree carries one."""
+        import inspect
+
+        src = inspect.getsource(_grand_audit_module()._live_store)
+        assert "BOOTMAP_MANIFEST" not in src.split('"""')[2], (
+            "the predicate must not key on an artifact both shapes carry"
+        )
+
+    def test_this_repos_own_worktree_and_store_both_resolve_correctly(self):
+        """Measured against the two real trees on this machine, not fixtures."""
+        mod = _grand_audit_module()
+        assert Path(mod._root_of(str(REPO))) == REPO, (
+            "the kernel checkout is its own root"
+        )
+        store = Path(mod._store_dir(str(REPO.parent.parent)))
+        assert Path(mod._root_of(str(store))) == REPO.parent.parent
+
+
+class TestTheAuditorDoesNotAssumeTwoTrees:
+    """AUDIT-ASSUMES-A-TWO-TREE-DEPLOYMENT-S211.
+
+    Axis 1 probed ``<root>/GIT WORKTREES/rag-runtime-kernel/{tests,formal}`` and
+    nothing else — the layout of the project that wrote the auditor. That is one
+    valid shape, not the only one.
+
+    MEASURED in the _MY U.S. IMM PROJ clone on 2026-09-17: its store ``_RAG`` is
+    at once the store, the git repository, and the holder of ``tests/`` and
+    ``formal/`` (51 files), while ``GIT WORKTREES/rag-runtime-kernel/`` holds
+    exactly one file — a rendered CLAUDE.md — and is not a repository. The audit
+    reported ``tree formal/`` and ``tree tests/`` as FAILURES against a
+    deployment that has both, and aimed the TLC probe at a directory that does
+    not exist, which surfaced as a truncated ``[Errno 2]`` instead of a finding.
+    """
+
+    @staticmethod
+    def _two_tree(tmp_path):
+        root = tmp_path / "proj"
+        wt = root / "GIT WORKTREES" / "rag-runtime-kernel"
+        for d in ("tests", "formal", "rag_kernel"):
+            (wt / d).mkdir(parents=True)
+        store = root / "RAG"
+        store.mkdir()
+        return root, wt, store
+
+    @staticmethod
+    def _single_tree(tmp_path):
+        """The IMM shape: everything in the store, a decoy worktree beside it."""
+        root = tmp_path / "IMM CASE"
+        store = root / "_RAG"
+        for d in ("tests", "formal", "rag_kernel"):
+            (store / d).mkdir(parents=True)
+        wt = root / "GIT WORKTREES" / "rag-runtime-kernel"
+        wt.mkdir(parents=True)
+        (wt / "CLAUDE.md").write_text("# rendered\n", encoding="utf-8")
+        return root, wt, store
+
+    def test_a_two_tree_deployment_still_uses_its_worktree(self, tmp_path):
+        _, wt, store = self._two_tree(tmp_path)
+        got = _grand_audit_module()._kernel_tree(str(wt), str(store))
+        assert Path(got) == wt
+
+    def test_a_single_tree_deployment_uses_its_store(self, tmp_path):
+        _, wt, store = self._single_tree(tmp_path)
+        got = _grand_audit_module()._kernel_tree(str(wt), str(store))
+        assert Path(got) == store, (
+            "a deployment holding tests/ and formal/ in its store must not be "
+            "reported as missing them"
+        )
+
+    def test_a_decoy_worktree_does_not_win_on_existence_alone(self, tmp_path):
+        """The IMM worktree EXISTS; it just holds nothing. Existence is not fitness."""
+        _, wt, store = self._single_tree(tmp_path)
+        assert wt.is_dir()
+        assert Path(_grand_audit_module()._kernel_tree(str(wt), str(store))) != wt
+
+    def test_neither_tree_falls_back_to_the_conventional_place(self, tmp_path):
+        """A genuine absence must still name where it looked."""
+        root = tmp_path / "proj"
+        wt = root / "GIT WORKTREES" / "rag-runtime-kernel"
+        store = root / "RAG"
+        wt.mkdir(parents=True)
+        store.mkdir()
+        got = _grand_audit_module()._kernel_tree(str(wt), str(store))
+        assert Path(got) == wt
+
+    def test_axis_one_probes_the_resolved_tree_not_the_worktree(self):
+        """Pins the call sites, so a new probe cannot quietly re-assume."""
+        text = (REPO / "scripts" / "grand_audit.py").read_text(
+            encoding="utf-8", errors="replace")
+        flat = text.replace(" ", "")
+        assert 'self.have(A,"treeformal/",os.path.join(self.ktree,"formal")' in flat
+        assert 'self.have(A,"treetests/",os.path.join(self.ktree,"tests")' in flat
+        assert 'fd=os.path.join(self.ktree,"formal")' in flat, \
+            "axis 8 must model-check the formal/ this deployment actually has"
+
+    def test_a_missing_formal_dir_is_a_finding_not_an_exception(self):
+        text = (REPO / "scripts" / "grand_audit.py").read_text(
+            encoding="utf-8", errors="replace")
+        assert "nothing to model-check" in text, (
+            "pointing a probe at a missing directory produced a truncated "
+            "[Errno 2]; it must ask first and report a sentence"
         )

@@ -62,11 +62,155 @@ def _py(cmd):
         cmd=_JAVA_TOKEN.sub(lambda _:'"%s"'%_MEASURED_JAVA[0], cmd)
     return cmd
 
+def _live_store(d):
+    """Has this directory been RUN as a governed store, rather than merely built?
+
+    The evidence is operational and cannot be faked by a checkout: a store that a
+    session has ever closed in carries ``session_log_S*.jsonl`` and
+    ``AUDIT_CANONICAL_REPORT_S*.md``. Measured across all three real shapes on
+    this machine -- the kernel worktree has NEITHER, the two deployments have
+    BOTH. ``BOOTMAP_MANIFEST.json`` is deliberately NOT part of the predicate:
+    the worktree carries one too, so it separates nothing.
+    """
+    try:
+        for name in os.listdir(d):
+            if (name.startswith("session_log_S") and name.endswith(".jsonl")) or \
+               (name.startswith("AUDIT_CANONICAL_REPORT_S") and name.endswith(".md")):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _root_of(d):
+    """Project root for a directory that holds a ``RAG_MASTER.json``.
+
+    A SOURCE CHECKOUT IS ITS OWN ROOT; A DEPLOYED STORE DIR IS NOT. Both hold a
+    RAG_MASTER.json, so the store file alone cannot tell them apart.
+
+    S209 discriminated on ``tests/``, reasoning "the kernel repo also carries
+    tests/; a deployment never does". MEASURED FALSE, and by this project's own
+    instructions: E-IMM-020 settled that "a deployment is runtime + tests +
+    formal + EVERY pinned spec version", so the _MY U.S. IMM PROJ clone mirrors
+    ``tests/`` into its store exactly as told. Its store was therefore read as a
+    source checkout, its root resolved to the STORE (``root=_RAG`` in its own
+    audit header), the store dir under that root did not exist, and every probe
+    that runs with ``cwd=ragd`` failed -- axis 1 came back UNKNOWN, the verdict
+    NOT GREEN, and the close's MANDATORY grand audit could never pass there.
+    Measured 2026-09-17: 0 PASS / 0 FAIL / 1 UNKNOWN against 15 PASS / GREEN for
+    a deployment whose store happens not to carry tests/.
+
+    The order below is evidence-first: what the directory has DONE outranks what
+    it merely contains.
+    """
+    if os.path.basename(os.path.dirname(os.path.abspath(d)))=="GIT WORKTREES":
+        return d                       # this project's checkout layout, explicit
+    if _live_store(d):
+        return os.path.dirname(d)      # a deployment, whatever else it mirrors
+    if os.path.isdir(os.path.join(d,"tests")):
+        return d                       # a checkout laid out somewhere else
+    return os.path.dirname(d)
+
+
+def _store_dir(root):
+    """The governed store directory under ``root``, RESOLVED and never assumed.
+
+    AUDIT-STORE-DIR-NAME-HARDCODED-S211, the half of
+    AUDIT-ROOT-HARDCODED-TO-ONE-DEPLOYMENT-S209 that S209 did not finish. S209
+    made the ROOT derivable from this file's own location, for any deployment and
+    any store name -- and then the constructor threw that away on the next line
+    with ``os.path.join(root, "RAG")``. So ``--root`` worked only for deployments
+    that happen to spell the store ``RAG``, and the close passes ``--root``
+    explicitly, which is the path every sibling actually takes.
+
+    MEASURED, not supposed: the _MY U.S. IMM PROJ deployment spells its store
+    ``_RAG``. On 2026-08-25 it patched this very line locally -- nine lines, with
+    a comment asking for exactly this release: "RETIRE when a release resolves the
+    store dir instead of assuming its name." Its copy of this file has been AHEAD
+    of upstream ever since, which also means the cutover advice carried forward
+    from S210 -- "the cutover is a FILE COPY of scripts/grand_audit.py" -- would
+    have OVERWRITTEN that patch and re-broken the deployment it was meant to fix.
+    A fix that lives in one clone is a fix the fleet does not have.
+
+    RESOLUTION ORDER, all of it inside ``root``:
+      1. ``root`` itself, when it holds the store -- a source checkout is its own
+         store dir and has no child named after one.
+      2. a conventionally named child (``RAG``, then ``_RAG``) holding a
+         ``RAG_MASTER.json``.
+      3. the directory this auditor is DEPLOYED in (``<store>/scripts/``), when
+         that lies under ``root`` -- this catches a store with an unconventional
+         name, because the auditor can see where it lives.
+      4. any other immediate child holding a ``RAG_MASTER.json``.
+      5. ``<root>/RAG`` -- the historical assumption, kept ONLY so a failure names
+         a concrete path instead of an empty string.
+
+    WHY 2 OUTRANKS 3, which is the one ordering question here and it was settled
+    by a failing test rather than by taste: running the WORKTREE copy against the
+    project root, rule 3 would answer "the worktree", because that is where this
+    file lives and it does carry a RAG_MASTER.json. But the worktree's store is a
+    source artifact and the project's LIVE store is ``RAG/``. Auditing the
+    checkout's copy while the deployment runs from another is the same class of
+    mistake as auditing a stranger.
+    """
+    if os.path.isfile(os.path.join(root,"RAG_MASTER.json")):
+        return root
+    try:
+        kids=sorted(os.listdir(root))
+    except OSError:
+        kids=[]
+    for d in [n for n in ("RAG","_RAG") if n in kids]:
+        c=os.path.join(root,d)
+        if os.path.isdir(c) and os.path.isfile(os.path.join(c,"RAG_MASTER.json")):
+            return c
+    here=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        inside=os.path.commonpath([os.path.abspath(root),here])==os.path.abspath(root)
+    except ValueError:                      # different drives on Windows
+        inside=False
+    if inside and os.path.isfile(os.path.join(here,"RAG_MASTER.json")):
+        return here
+    for d in [k for k in kids if k not in ("RAG","_RAG")]:
+        c=os.path.join(root,d)
+        if os.path.isdir(c) and os.path.isfile(os.path.join(c,"RAG_MASTER.json")):
+            return c
+    return os.path.join(root,"RAG")
+
+
+def _kernel_tree(wt,ragd):
+    """Where ``tests/`` and ``formal/`` ACTUALLY live in this deployment.
+
+    AUDIT-ASSUMES-A-TWO-TREE-DEPLOYMENT-S211. Axis 1 probed
+    ``<root>/GIT WORKTREES/rag-runtime-kernel/{tests,formal}`` and nothing else,
+    because that is the layout of the project that wrote the auditor: a store dir
+    that is not a repo, beside a git worktree that is.
+
+    That is ONE valid shape, not the only one. MEASURED in the _MY U.S. IMM PROJ
+    clone: its store ``_RAG`` is simultaneously the store, the git repository and
+    the holder of ``tests/`` and ``formal/`` (51 files) -- a single-tree
+    deployment -- while ``GIT WORKTREES/rag-runtime-kernel/`` there holds exactly
+    one file, a rendered CLAUDE.md, and is not a repository at all. So the
+    auditor reported ``tree formal/`` and ``tree tests/`` as FAILURES against a
+    deployment that has both, and pointed the TLC probe at a directory that does
+    not exist, which surfaced as ``[Errno 2]`` rather than as a finding.
+
+    A layout assumption stated in one place is a policy; the same assumption
+    spread across three probes is a trap. Resolved once, here: the worktree when
+    it really carries the trees, the store when it does, and the worktree
+    otherwise so a genuine absence still names the conventional location.
+    """
+    for cand in (wt,ragd):
+        if os.path.isdir(os.path.join(cand,"tests")) and \
+           os.path.isdir(os.path.join(cand,"formal")):
+            return cand
+    return wt
+
+
 class Grand:
     def __init__(self,root,session=None,fast=False):
         self.root=root; self.session=session; self.fast=fast
-        self.ragd=os.path.join(root,"RAG")
+        self.ragd=_store_dir(root)
         self.wt=os.path.join(root,"GIT WORKTREES","rag-runtime-kernel")
+        self.ktree=_kernel_tree(self.wt,self.ragd)
         self.rows=[]; self.t0=time.time(); self.jar=None; self.items={}
         self._tc=None
         # Measure the toolchain up front, not inside axis 1: `--only 8` must get
@@ -145,11 +289,23 @@ class Grand:
         for f in ("RAG_MASTER.json","RAG_CONTEXT.json","BOOTMAP_MANIFEST.json","ERROR_LOG.md"):
             self.have(A,"store %s"%f,os.path.join(self.ragd,f))
         self.have(A,"tree worktree",self.wt,isdir=True)
-        self.have(A,"tree formal/",os.path.join(self.wt,"formal"),isdir=True)
-        self.have(A,"tree tests/",os.path.join(self.wt,"tests"),isdir=True)
+        # AUDIT-ASSUMES-A-TWO-TREE-DEPLOYMENT-S211 — see _kernel_tree. These two
+        # probe where the trees ACTUALLY are, so a single-tree deployment is not
+        # reported as missing what it has.
+        self.have(A,"tree formal/",os.path.join(self.ktree,"formal"),isdir=True)
+        self.have(A,"tree tests/",os.path.join(self.ktree,"tests"),isdir=True)
         self.sh(A,"kernel CLI responds","python3 -m rag_kernel --help",timeout=180)
         javap=(tc["tools"].get("java") or {}).get("path")
-        if self.jar and javap:
+        _formal=os.path.join(self.ktree,"formal")
+        if self.jar and javap and not os.path.isdir(_formal):
+            # A MISSING DIRECTORY IS A FINDING, NOT AN EXCEPTION. Pointed at a
+            # path that does not exist, subprocess raised and the probe reported
+            # "L1: probe raised [Errno 2] No such file or directory: '/mnt/c/...
+            # /TODA" -- truncated mid-path, naming no cause and no repair. Ask
+            # first, so the answer is a sentence the reader can act on.
+            self.add(A,"TLC really executes a spec",UNK,
+                     "L1: no formal/ at %s -> nothing to model-check"%_formal)
+        elif self.jar and javap:
             # S201: was a bare `java`, which is not on PATH on this host even
             # with a JDK installed (winget puts it under Program Files and does
             # not touch PATH until a new shell). Use the measured path.
@@ -157,7 +313,7 @@ class Grand:
                     '"%s" -jar "%s" -config IntentFidelityGate.cfg IntentFidelityGate.tla'
                     %(javap,self.jar),
                     ok_if=lambda rc,out:"No error has been found" in out,timeout=300,
-                    cwd=os.path.join(self.wt,"formal"))
+                    cwd=_formal)
         else:
             self.add(A,"TLC really executes a spec",UNK,"L1: no jar -> cannot demonstrate")
 
@@ -173,8 +329,11 @@ class Grand:
                 ok_if=lambda rc,out:"stale: 0" in out,timeout=600)
         self.sh(A,"doctor preflight clean","python3 -m rag_kernel doctor --path .. --rag \"%s\""%R,
                 ok_if=lambda rc,out:"preflight clean" in out,timeout=600)
+        # AUDIT-ASSUMES-A-TWO-TREE-DEPLOYMENT-S211: in a single-tree deployment
+        # the git repository IS the store, so ask git where the kernel actually
+        # lives rather than where this project happens to keep it.
         self.sh(A,"published worktree clean","git status --porcelain",
-                ok_if=lambda rc,out:(rc==0 and out.strip()==""),timeout=180,cwd=self.wt)
+                ok_if=lambda rc,out:(rc==0 and out.strip()==""),timeout=180,cwd=self.ktree)
         self.add(A,"HOT==BAK byte parity",*self._parity())
 
     #: Stores written through the HOT contract (atomic_write_json mirror_bak=True).
@@ -229,7 +388,7 @@ class Grand:
                 for v in o: walk(v)
         walk(rag)
         fp=re.compile(r"[A-Za-z0-9_./-]+\.(md|py|json|jsonl|tla|cfg|ps1|sh|txt)")
-        bases=(self.root,self.ragd,self.wt)
+        bases=(self.root,self.ragd,self.wt,self.ktree)
         res=[v for v in self.items.values() if v.get("status")=="RESOLVED"]
         noev=[];dead=[]
         for v in res:
@@ -548,7 +707,7 @@ class Grand:
 
     # ================= AXIS 8: FORMAL VERIFICATION
     def axis_formal(self):
-        A="8-FORMAL"; fd=os.path.join(self.wt,"formal")
+        A="8-FORMAL"; fd=os.path.join(self.ktree,"formal")   # S211: layout-neutral
         if not self.jar:
             return self.add(A,"TLC suite",UNK,"L1/L2: no tla2tools.jar -> formal layer UNVERIFIED, not passed")
         if self.fast:
@@ -699,12 +858,12 @@ class Grand:
     # session_forensics passed all three while being unable to block anything.
     def axis_wiring(self):
         A="10-WIRING"
-        kd=os.path.join(self.wt,"rag_kernel")
+        kd=os.path.join(self.ktree,"rag_kernel")     # S211: layout-neutral
         if not os.path.isdir(kd):
             return self.add(A,"kernel package present",FAIL,kd)
         mods=[fn[:-3] for fn in sorted(os.listdir(kd)) if fn.endswith(".py") and not fn.startswith("__")]
         srcs={}
-        for base,dirs,fns in os.walk(self.wt):
+        for base,dirs,fns in os.walk(self.ktree):
             if "__pycache__" in base or os.sep+".git" in base: continue
             for fn in fns:
                 if fn.endswith(".py"):
@@ -895,7 +1054,7 @@ class Grand:
     # of that. forensics passed all three while being unable to block anything.
     def axis_wiring(self):
         A="10-WIRING"
-        kd=os.path.join(self.wt,"rag_kernel")
+        kd=os.path.join(self.ktree,"rag_kernel")     # S211: layout-neutral
         if not os.path.isdir(kd):
             return self.add(A,"kernel package present",FAIL,kd)
         mods={}
@@ -903,7 +1062,7 @@ class Grand:
             if fn.endswith(".py") and not fn.startswith("__"):
                 mods[fn[:-3]]=open(os.path.join(kd,fn),encoding="utf-8",errors="replace").read()
         allsrc={}
-        for base,dirs,fns in os.walk(self.wt):
+        for base,dirs,fns in os.walk(self.ktree):
             if "__pycache__" in base or "/.git" in base: continue
             for fn in fns:
                 if fn.endswith(".py"):
@@ -915,7 +1074,7 @@ class Grand:
         # __main__ is (S190). Nothing imports an entrypoint; that is what makes
         # it an entrypoint.
         docs=""
-        for base,dirs,fns in os.walk(self.wt):
+        for base,dirs,fns in os.walk(self.ktree):    # S211: layout-neutral
             if "__pycache__" in base or "/.git" in base.replace(os.sep,"/"): continue
             for fn in fns:
                 if fn.endswith((".md",".toml",".cfg",".ini",".txt")):
@@ -1074,14 +1233,6 @@ def main():
         # beside the scripts dir -- and every fallback stays inside the tree the
         # caller is standing in. Whatever else is uncertain, auditing a stranger
         # is now impossible.
-        def _root_of(d):
-            # A SOURCE CHECKOUT IS ITS OWN ROOT; A DEPLOYED RAG DIR IS NOT. Both
-            # hold a RAG_MASTER.json, so the store alone cannot tell them apart.
-            # The kernel repo also carries tests/; a deployment never does.
-            # Without this the checkout reported `root=GIT WORKTREES` -- the
-            # container of the repo rather than the repo. Wrong, though never
-            # dangerous: both are inside the same project.
-            return d if os.path.isdir(os.path.join(d,"tests")) else os.path.dirname(d)
         _ragdir=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         _cwd=os.path.abspath(os.getcwd())
         if os.path.isfile(os.path.join(_ragdir,"RAG_MASTER.json")):
