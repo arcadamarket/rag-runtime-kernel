@@ -246,6 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
              "No-op under --dry-run. For NON-loaded project context, prefer "
              "`context set` into the sanctioned RAG_CONTEXT.json store instead of merging into HOT.",
     )
+    config_parser.add_argument(
+        "--session", type=str, default=None,
+        help="session making this merge. Not used by the merge itself: it is the "
+             "legal escape from the post-seal guard, which refuses a write that "
+             "cannot be told apart from one by the sealed session "
+             "(SEAL-GUARD-COVERS-ONLY-STATE-MACHINE-VERBS-S209).",
+    )
 
     # -- health --
     health_parser = subparsers.add_parser("health", help="Verify all rag_kernel modules.")
@@ -540,6 +547,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gc_parser.add_argument("--path", type=Path, default=Path("."), help="Project root to scan (default: .)")
     gc_parser.add_argument("--dry-run", action="store_true", help="Report findings without deleting")
+    gc_parser.add_argument(
+        "--session", type=str, default=None,
+        help="session running this sweep. Not used by the sweep itself: it is the "
+             "legal escape from the post-seal guard, which refuses a DELETING gc "
+             "that cannot be told apart from one by the sealed session "
+             "(SEAL-GUARD-COVERS-ONLY-STATE-MACHINE-VERBS-S209). A --dry-run "
+             "needs nothing: it is read-only and never refused.",
+    )
 
     # -- graph --
     graph_parser = subparsers.add_parser(
@@ -871,6 +886,14 @@ def build_parser() -> argparse.ArgumentParser:
              "is also given, in which case the safe common-case .bak restore is applied.",
     )
     doctor_parser.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
+    doctor_parser.add_argument(
+        "--session", type=str, default=None,
+        help="session running the recovery. Not used by the checks themselves: it "
+             "is the legal escape from the post-seal guard, which refuses "
+             "`doctor --recover` (a restore from .bak IS a canonical write, and "
+             "one that would silently undo a seal). Plain `doctor` is read-only "
+             "and never refused.",
+    )
 
     # -- add (ENV-NORM increment 1: guarded ADD verb — closes the no-ADD-verb gap) --
     add_item_parser = subparsers.add_parser(
@@ -6325,18 +6348,219 @@ def _drive_close(
 # (POST-SEAL-INBOX-MISSING-S208) is built on that permission — a sealed session
 # must still be able to hand its successor a note.
 
-#: Verbs that write canonical state and are therefore refused after a seal.
-_SEAL_GUARDED_VERBS = frozenset({
-    "add", "un-add", "resolve", "start", "defer", "reopen", "discard", "supersede",
-    "note", "cite", "priority", "add-rule", "update-rule", "refresh-current-status",
-    "prune-current-status", "meta", "decide", "ingest",
-    "checkpoint", "migrate", "transplant", "birth-adopt", "dedup-sessions",
-    "errlog-migrate",
-})
+# ---------------------------------------------------------------------------
+# SEAL-GUARD-COVERS-ONLY-STATE-MACHINE-VERBS-S209 — the denylist inversion (S211)
+# ---------------------------------------------------------------------------
+#
+# Until S211 this guard consulted a HAND-KEPT SET OF VERB NAMES. A set of names
+# is a denylist, and a denylist is only ever as complete as the memory of
+# whoever last edited it. Three verbs measured past it, each added to the
+# dispatcher long after the set was written, each writing governed state after a
+# seal with nothing refusing:
+#
+#   gc                 deletes governed files from the project root unless --dry-run
+#   tests --run        stamps meta.test_gate and refreshes .bak to byte-parity
+#   deployment --field writes meta.deployments through the atomic store
+#
+# THE INVERSION, the same one the transport allowlist made after E-133: the
+# property is DECLARED PER VERB in ``_VERB_CANON_WRITE`` below, the table must
+# cover the dispatcher EXACTLY, and an UNDECLARED verb is treated as a WRITER —
+# refused — instead of waved through. ``tests/test_seal_guard_writes_canonical.py``
+# fails on any verb that is dispatched but undeclared, or declared but not
+# dispatched, so a new verb cannot reach production silently unguarded: it either
+# carries a declaration or the suite is red and the seal refuses it.
+#
+# The declaration shapes, each present because a real verb needed it:
+#   NEVER          read-only in every mode                    (items, audit, status)
+#   ALWAYS         every invocation writes canonical state    (add, checkpoint)
+#   WHEN(dests)    read-only until one of these flags is set  (render --apply)
+#   UNLESS(dests)  writes unless one of these flags is set    (gc --dry-run)
+#   CUSTOM(fn)     the condition is not one flag              (deployment, inventory)
+#   EXEMPT(why)    writes, but deliberately permitted post-seal — and the WHY is
+#                  stored here rather than remembered by the next reader.
+#
+# Every verb that can be refused must accept ``--session``: the refusal has to
+# leave a legal escape for the successor session, which is what makes this a gate
+# rather than an outage. ``gc`` and ``doctor`` gained the flag in S211 for exactly
+# that reason, the same way ``render`` and ``ingest`` gained it in S209.
 
-#: Dual-mode verbs: read-only by default, canonical writers under this flag.
-#: Guarded ONLY when the flag is set, so the read half stays free after a seal.
-_SEAL_GUARDED_WHEN_FLAG = {"render": "apply", "bootmap": "refresh"}
+
+class _CanonWrite:
+    """Whether a dispatcher verb writes governed state, and under what condition.
+
+    ``kind`` is one of ``never`` / ``always`` / ``when`` / ``unless`` / ``custom``
+    / ``exempt``. ``reason`` is mandatory for ``exempt`` and is rendered by the
+    completeness test, so a permission granted after a seal always carries the
+    measured argument for granting it (Rule 43 — the reader months later has no
+    transcript).
+    """
+
+    __slots__ = ("kind", "dests", "reason", "predicate")
+
+    def __init__(self, kind, dests=(), reason="", predicate=None):
+        self.kind = kind
+        self.dests = tuple(dests)
+        self.reason = reason
+        self.predicate = predicate
+
+    def writes(self, args: argparse.Namespace) -> bool:
+        if self.kind == "always":
+            return True
+        if self.kind == "when":
+            return any(getattr(args, d, False) for d in self.dests)
+        if self.kind == "unless":
+            return not any(getattr(args, d, False) for d in self.dests)
+        if self.kind == "custom":
+            return bool(self.predicate(args))
+        return False                      # never / exempt
+
+    def flag_in_play(self, args: argparse.Namespace):
+        """The flag that turned this read into a write, for the refusal text."""
+        if self.kind != "when":
+            return None
+        for d in self.dests:
+            if getattr(args, d, False):
+                return d.replace("_", "-")
+        return None
+
+
+def _never() -> _CanonWrite:
+    return _CanonWrite("never")
+
+
+def _always() -> _CanonWrite:
+    return _CanonWrite("always")
+
+
+def _when(*dests: str) -> _CanonWrite:
+    return _CanonWrite("when", dests)
+
+
+def _unless(*dests: str) -> _CanonWrite:
+    return _CanonWrite("unless", dests)
+
+
+def _custom(predicate, *dests: str) -> _CanonWrite:
+    return _CanonWrite("custom", dests, predicate=predicate)
+
+
+def _exempt(reason: str) -> _CanonWrite:
+    return _CanonWrite("exempt", reason=reason)
+
+
+#: WRITES_CANONICAL, declared for EVERY dispatcher verb. Undeclared == refused.
+_VERB_CANON_WRITE: dict[str, _CanonWrite] = {
+    # --- canonical writers: the state machine ------------------------------
+    "add": _always(), "un-add": _always(),
+    "resolve": _always(), "start": _always(), "defer": _always(),
+    "reopen": _always(), "discard": _always(), "supersede": _always(),
+    # --- canonical writers: the governed setters ---------------------------
+    "note": _always(), "cite": _always(), "priority": _always(),
+    "add-rule": _always(), "update-rule": _always(),
+    "refresh-current-status": _always(), "prune-current-status": _always(),
+    "meta": _always(), "decide": _always(), "ingest": _always(),
+    # --- canonical writers: whole-store operations -------------------------
+    "checkpoint": _always(), "migrate": _always(), "transplant": _always(),
+    "birth-adopt": _always(), "dedup-sessions": _always(),
+    "errlog-migrate": _always(),
+    # --- dual-mode: read by default, writer under a flag -------------------
+    "configure": _unless("dry_run"),  # merges into RAG_MASTER.json, .bak mirrored
+    "render": _when("apply"),
+    "bootmap": _when("refresh"),
+    "tests": _when("run"),      # set_test_gate_file stamps meta.test_gate + .bak
+    "doctor": _when("recover"), # --recover restores the RAG from .bak
+    "gc": _unless("dry_run"),   # deletes governed files unless the run is dry
+    # --- dual-mode whose condition is not a single flag --------------------
+    #     cmd_deployment reads on --list or with no --field, and writes otherwise.
+    "deployment": _custom(
+        lambda a: bool(getattr(a, "field", None)) and not getattr(a, "list", False),
+        "field",
+    ),
+    #     cmd_inventory: `scan` classifies (read-only); `backfill`/`fleet` write
+    #     asset records unless the run is dry.
+    "inventory": _custom(
+        lambda a: getattr(a, "mode", None) in ("backfill", "fleet")
+        and not getattr(a, "dry_run", False),
+        "mode",
+    ),
+    # --- read-only ---------------------------------------------------------
+    "health": _never(), "items": _never(), "audit": _never(),
+    "audit-env": _never(), "intent-audit": _never(), "report": _never(),
+    "forensics": _never(), "measured": _never(), "list-kinds": _never(),
+    "decisions": _never(), "inbox": _never(), "status": _never(),
+    "reuse-check": _never(), "session-delta": _never(), "verify": _never(),
+    "wait-for": _never(), "push-check": _never(), "adopt-preflight": _never(),
+    "acceptance": _never(),
+    "run": _never(),            # detached shim; the child re-enters this CLI
+    # --- deliberate post-seal permissions, each with its measured reason ----
+    "init": _exempt(
+        "session-zero bootstrap. It CREATES a RAG at --output rather than "
+        "mutating one, takes no --rag for this guard to read a seal from, and "
+        "runs before any session exists to name."
+    ),
+    "post": _exempt(
+        "the post-seal inbox is the ONE channel a sealed session still has to "
+        "reach its successor; guarding it would close the channel this whole "
+        "guard exists to protect (POST-SEAL-INBOX-MISSING-S208)."
+    ),
+    "drain": _exempt(
+        "a note is drained BY THE SUCCESSOR against the predecessor's seal; "
+        "refusing it would make the inbox permanently undrainable and the next "
+        "session unsealable."
+    ),
+    "register-asset": _exempt(
+        "writes RAG_CONTEXT.json, not the canonical RAG, and the post-seal inbox "
+        "is built on that permission (measured exception, S209)."
+    ),
+    "context": _exempt(
+        "the sanctioned RAG_CONTEXT.json side store — atomic, no .bak, not the "
+        "canonical RAG; same channel as register-asset."
+    ),
+    "hook-guard": _exempt(
+        "stamps the hook heartbeat outside the RAG; the enforcement layer must "
+        "keep firing across a seal or the next boot reads it as dead."
+    ),
+    "session": _exempt(
+        "opens/closes the session LOGGER (session_log_<sid>.jsonl), not the "
+        "canonical RAG; the successor must be able to open its logger while the "
+        "predecessor's seal stands."
+    ),
+    "session-start": _exempt(
+        "the normal path OUT of a seal. Refusing it would strand every successor "
+        "and is the repair the refusal text itself names."
+    ),
+    "session-end": _exempt(
+        "the seal itself; it carries its own CLOSE-SEAL-ENFORCE ordering guard."
+    ),
+    "session-resume": _exempt(
+        "the named repair for an INTERRUPTED close; it un-sets transfer_ready."
+    ),
+    "serve": _exempt(
+        "long-running HTTP transport. The writes it performs belong to the API "
+        "layer and are guarded there, not at this dispatcher."
+    ),
+    "mcp": _exempt(
+        "long-running MCP stdio transport; same reasoning as `serve`."
+    ),
+    "graph": _exempt(
+        "NOT a safety claim — an HONEST HOLE, declared so it is visible. "
+        "`graph run` executes kernel actions and CAN write canonical state, but "
+        "it spells its session `--session-id` on the SUBparser, so this guard has "
+        "no session to compare at the `graph` level and a refusal would have no "
+        "legal escape. Tracked as SEAL-GUARD-CANNOT-REACH-GRAPH-SUBVERB-S211."
+    ),
+}
+
+#: Backward-compatible views, DERIVED from the table above — never hand-kept.
+#: They exist so the S209 gate tests keep asserting against the same names.
+_SEAL_GUARDED_VERBS = frozenset(
+    verb for verb, decl in _VERB_CANON_WRITE.items() if decl.kind == "always"
+)
+_SEAL_GUARDED_WHEN_FLAG = {
+    verb: decl.dests[0]
+    for verb, decl in _VERB_CANON_WRITE.items()
+    if decl.kind == "when" and len(decl.dests) == 1
+}
 
 
 def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
@@ -6346,13 +6570,22 @@ def _refuse_mutation_after_seal(command: str, args: argparse.Namespace):
     an exit code when it must not. Deliberately fail-OPEN on any inability to read
     the marker: a guard that cannot read state must not become an outage, and every
     downstream verb still has its own guards.
+
+    FAIL-CLOSED ON THE CLASSIFICATION, fail-open on the state (S211). Those are two
+    different questions. Whether a seal stands is read from disk and can legitimately
+    be unknowable, so it fails open. Whether a verb writes is a DECLARATION this
+    repository owns, so an absent one is a defect in this file, not an unknown, and
+    it is treated as a writer.
     """
-    flag = _SEAL_GUARDED_WHEN_FLAG.get(command)
-    if flag is not None:
-        if not getattr(args, flag, False):
-            return None
-    elif command not in _SEAL_GUARDED_VERBS:
+    decl = _VERB_CANON_WRITE.get(command)
+    if decl is None:
+        # An undeclared verb reaching here means the dispatcher grew and the table
+        # did not. The suite fails on that, but a running kernel must not wave it
+        # through in the meantime.
+        decl = _CanonWrite("always")
+    if not decl.writes(args):
         return None
+    flag = decl.flag_in_play(args)
     rag = getattr(args, "rag", None)
     if rag is None:
         return None
@@ -8188,6 +8421,7 @@ def cmd_forensics(args: argparse.Namespace) -> int:
             "gap_seconds": facts.gap_seconds,
             "gap_share": facts.gap_share,
             "bursts": facts.bursts,
+            "instant_waits": facts.instant_waits,
             "session_ends": facts.session_ends,
             "double_sealed": facts.double_sealed,
             "mutations_after_first_end": facts.mutations_after_first_end,
@@ -9444,6 +9678,43 @@ _NO_BOOTSTRAP_LOG = frozenset(
 )
 
 
+#: argparse dests that name WHAT a call acted on, most specific first. A record
+#: that carries one lets forensics tell a batch from a poll.
+_TARGET_DESTS = ("item_id", "asset_id", "rule_id", "path")
+
+
+def _invocation_target(args: argparse.Namespace) -> "str | None":
+    """What this call ACTED ON, for the ``target`` field of its log record.
+
+    WAIT-FOR-USED-AS-A-POLL-S198 + E-117, closed S211 as ONE change.
+
+    E-117 established that repetition alone is not polling: ``cite`` x22 over 22
+    DISTINCT items is the scripted batch PY-SCRIPT-MANDATE asks for, while
+    ``audit`` x5 against unchanged state is the E-081 violation. Only the target
+    separates them, so S191 began logging it — but the extractor accepted ``str``
+    ONLY. ``wait-for`` names its sentinel ``path`` and argparse hands that back as
+    a ``Path``, so the isinstance test silently dropped it and EVERY wait-for
+    record was written with no target at all.
+
+    That is why the two items are one fix. The single verb Rule 44 names as the
+    polling instrument was the one verb burst detection could not discriminate,
+    so it was exempted instead — and S198 then called it 65 times, 39 of them
+    returning instantly, while every detector reported the session clean.
+
+    The defect class is WHITELIST-FORWARDER-CLASS-S209: a type test that converts
+    a present value into an absent one and loses the distinction downstream.
+    """
+    for dest in _TARGET_DESTS:
+        val = getattr(args, dest, None)
+        if isinstance(val, str):
+            if val.strip():
+                return val.strip()
+            continue
+        if isinstance(val, os.PathLike):
+            return os.fspath(val)
+    return None
+
+
 def _active_session_log(rag_dir: Path) -> "Path | None":
     """Most-recently-modified bootstrap session log in ``rag_dir``, or None.
 
@@ -9549,11 +9820,7 @@ def _dispatch_with_bootstrap_log(
                 # same state is the violation. Without the target the two are
                 # indistinguishable, so the check flagged correct work. Logging
                 # what the call ACTED ON makes the distinction measurable.
-                _tgt = next(
-                    (getattr(args, a) for a in ("item_id", "asset_id", "rule_id", "path")
-                     if isinstance(getattr(args, a, None), str)),
-                    None,
-                )
+                _tgt = _invocation_target(args)
                 if _tgt:
                     extra["target"] = _tgt
                 logger = SessionLogger(
@@ -9756,16 +10023,14 @@ def _force_utf8_console() -> None:
             pass                      # a redirected/closed stream is not fatal
 
 
-def main(argv: list[str] | None = None) -> int:
-    _force_utf8_console()
-    parser = build_parser()
-    if argv is None:
-        argv = sys.argv[1:]
-    args = parser.parse_args(_fold_dash_values(argv))
-    if args.command is None:
-        parser.print_help()
-        return 1
-    commands = {
+def _dispatch_table() -> dict:
+    """verb -> handler. Module-level so the seal guard's WRITES_CANONICAL table can
+    be tested for EXACT coverage of it (SEAL-GUARD-COVERS-ONLY-STATE-MACHINE-VERBS-
+    S209). While this lived inside ``main`` no test could name the set of verbs the
+    kernel actually dispatches, which is precisely how three writers reached
+    production with no declaration and nothing to notice.
+    """
+    return {
         "init": cmd_init, "configure": cmd_configure, "health": cmd_health,
         "serve": cmd_serve, "mcp": cmd_mcp, "session": cmd_session,
         "session-start": cmd_session_start, "session-end": cmd_session_end,
@@ -9821,6 +10086,18 @@ def main(argv: list[str] | None = None) -> int:
         "adopt-preflight": cmd_adopt_preflight,
         "bootmap": cmd_bootmap,
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    _force_utf8_console()
+    parser = build_parser()
+    if argv is None:
+        argv = sys.argv[1:]
+    args = parser.parse_args(_fold_dash_values(argv))
+    if args.command is None:
+        parser.print_help()
+        return 1
+    commands = _dispatch_table()
     rc = _refuse_mutation_after_seal(args.command, args)
     if rc is not None:
         return rc

@@ -25,6 +25,7 @@ from rag_kernel.session_forensics import (
     ForensicsError,
     analyze_file,
     analyze_log,
+    conduct_findings,
     render_text,
 )
 
@@ -160,8 +161,31 @@ class TestBursts:
         f = analyze_log(rows)
         assert f.bursts and f.bursts[0]["verb"] == "items"
 
-    def test_wait_for_is_exempt_because_it_is_the_anti_poll_primitive(self):
-        rows = [_rec(i, f"2026-01-01T00:00:{i:02d}+00:00", verb="wait-for")
+    def test_wait_for_on_one_sentinel_is_a_burst_like_any_other_verb(self):
+        """WAIT-FOR-USED-AS-A-POLL-S198 — the exemption this REPLACES.
+
+        The assertion here used to be ``bursts == []``, on the reasoning that
+        ``wait-for`` blocks server-side and IS the anti-poll primitive. Being the
+        sanctioned instrument is not the same as being used as one. S198 called
+        it 65 times, 39 of them returning instantly, and this exemption is why
+        every detector reported the session clean. Hammering ONE sentinel is
+        polling no matter which verb spells it.
+        """
+        rows = [_rec(i, f"2026-01-01T00:00:{i:02d}+00:00", verb="wait-for",
+                     target="/RAG/.boot/job.out", ms=900)
+                for i in range(1, BURST_MIN_REPEATS + 3)]
+        f = analyze_log(rows)
+        assert f.bursts and f.bursts[0]["verb"] == "wait-for"
+
+    def test_wait_for_across_distinct_sentinels_is_a_batch_not_a_burst(self):
+        """The other half, and the reason the target had to be logged at all.
+
+        Waiting on six different detached jobs is six waits, not a poll. Without
+        ``target`` on the record these two cases are identical, which is why
+        E-117 and WAIT-FOR-USED-AS-A-POLL-S198 are one change.
+        """
+        rows = [_rec(i, f"2026-01-01T00:00:{i:02d}+00:00", verb="wait-for",
+                     target=f"/RAG/.boot/job{i}.out", ms=30000)
                 for i in range(1, BURST_MIN_REPEATS + 3)]
         assert analyze_log(rows).bursts == []
 
@@ -335,6 +359,106 @@ class TestRefusalIsNotFailure:
         out = render_text(f)
         assert "guard refusals" in out
         assert "failed calls     : none" in out
+
+
+class TestAWaitThatDidNotWait:
+    """WAIT-FOR-USED-AS-A-POLL-S198, signature 2 of Rule 44.
+
+    Repetition is not the only polling shape the wait verb has. A single
+    ``wait-for`` that returns in half a millisecond took a READING: the sentinel
+    was already on disk when it was called, so nothing was waited for. S198 did
+    this 39 times out of 65 with every detector reporting clean, because the verb
+    was burst-exempt and its records carried no target to group by.
+    """
+
+    def _instant(self, n, target="/RAG/.boot/job.out", ms=0.4):
+        # Spread across hours so the BURST window cannot be what catches them —
+        # this detector must stand on its own.
+        return [_rec(i, f"2026-01-01T{i:02d}:00:00+00:00", verb="wait-for",
+                     target=target, ms=ms)
+                for i in range(1, n + 1)]
+
+    def test_an_instant_return_is_recorded_with_its_sentinel(self):
+        from rag_kernel.session_forensics import INSTANT_WAIT_SECONDS
+
+        f = analyze_log(self._instant(1))
+        assert len(f.instant_waits) == 1
+        assert f.instant_waits[0]["target"] == "/RAG/.boot/job.out"
+        assert f.instant_waits[0]["seconds"] < INSTANT_WAIT_SECONDS
+
+    def test_a_real_block_is_not_counted(self):
+        f = analyze_log(self._instant(3, ms=45_000))
+        assert f.instant_waits == []
+
+    def test_one_instant_return_does_not_fail_the_gate(self):
+        """The job legitimately finishing first is ordinary, not misconduct."""
+        assert conduct_findings(analyze_log(self._instant(1))) == []
+
+    def test_the_s198_pattern_fails_the_conduct_gate(self):
+        from rag_kernel.session_forensics import INSTANT_WAIT_ALLOWANCE
+
+        findings = conduct_findings(analyze_log(self._instant(INSTANT_WAIT_ALLOWANCE)))
+        assert findings, "a session of readings dressed as waits must not seal clean"
+        assert any("did not block" in x or "wait-for" in x for x in findings)
+
+    def test_render_names_the_finding_either_way(self):
+        assert "waits that did not wait : none detected" in render_text(
+            analyze_log([_rec(1, "2026-01-01T00:00:00+00:00", verb="audit")])
+        )
+        out = render_text(analyze_log(self._instant(5)))
+        assert "waits that did not wait : 5" in out
+        assert "/RAG/.boot/job.out" in out
+
+    def test_a_wait_with_no_duration_recorded_is_not_guessed_at(self):
+        """Records written before duration_ms existed must not be charged."""
+        rows = [_rec(i, f"2026-01-01T{i:02d}:00:00+00:00", verb="wait-for",
+                     target="/x", ms=None)
+                for i in range(1, 6)]
+        assert analyze_log(rows).instant_waits == []
+
+
+class TestTheTargetIsActuallyCaptured:
+    """The half of the fix that lives in the dispatcher, not in this module.
+
+    E-117 made burst detection target-aware in S191; the extractor it was given
+    accepted ``str`` only, so ``wait-for``'s ``Path``-typed sentinel never
+    reached a record. Target-aware detection over records with no target is not
+    detection.
+    """
+
+    def test_a_path_typed_target_is_captured(self):
+        import argparse
+        from pathlib import Path
+
+        from rag_kernel.__main__ import _invocation_target
+
+        got = _invocation_target(argparse.Namespace(
+            path=Path("/RAG/.boot/job.out"), timeout=600.0))
+        assert got == str(Path("/RAG/.boot/job.out"))
+
+    def test_a_string_target_still_wins_and_is_stripped(self):
+        import argparse
+
+        from rag_kernel.__main__ import _invocation_target
+
+        assert _invocation_target(
+            argparse.Namespace(item_id="  E-117 ", path=None)) == "E-117"
+
+    def test_an_empty_string_does_not_mask_a_later_dest(self):
+        import argparse
+        from pathlib import Path
+
+        from rag_kernel.__main__ import _invocation_target
+
+        got = _invocation_target(argparse.Namespace(item_id="", path=Path("/x")))
+        assert got == str(Path("/x"))
+
+    def test_no_target_at_all_is_none_not_a_guess(self):
+        import argparse
+
+        from rag_kernel.__main__ import _invocation_target
+
+        assert _invocation_target(argparse.Namespace(session="S211")) is None
 
 
 def test_the_audit_gap_allowance_comes_from_this_module():

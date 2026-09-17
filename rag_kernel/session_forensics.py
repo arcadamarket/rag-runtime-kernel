@@ -63,6 +63,8 @@ __all__ = [
     "render_text",
     "GAP_SECONDS",
     "BURST_SECONDS",
+    "INSTANT_WAIT_SECONDS",
+    "INSTANT_WAIT_ALLOWANCE",
     "GAP_ALLOWANCE",
     "GAP_SHARE_MAX",
     "conduct_findings",
@@ -86,10 +88,29 @@ BURST_SECONDS = 120
 #: Repeats within BURST_SECONDS before it is reported.
 BURST_MIN_REPEATS = 4
 
-#: Verbs whose repetition is legitimate rather than suspicious: `wait-for` blocks
-#: server-side (it IS the anti-poll primitive) and the state machine's two-step
-#: transitions are supposed to come in pairs.
-_BURST_EXEMPT = frozenset({"wait-for", "run", "start", "resolve"})
+#: Verbs whose repetition is legitimate rather than suspicious: `run` detaches a
+#: job and the state machine's two-step transitions are supposed to come in pairs.
+#:
+#: WAIT-FOR-USED-AS-A-POLL-S198 (closed S211). ``wait-for`` sat in this set on the
+#: reasoning that it blocks server-side and IS the anti-poll primitive. Being the
+#: sanctioned instrument is not the same as being used as one: S198 called it 65
+#: times and 39 of those returned in under a second, which is not a wait — the
+#: sentinel already existed and the call was a stat dressed as a block. The
+#: exemption made the single verb Rule 44 names as the polling instrument the one
+#: verb no detector could see. It is now judged like any other: repeating it
+#: against the SAME sentinel is a burst, repeating it across DIFFERENT sentinels
+#: is a batch, and a wait that did not wait is counted separately below.
+_BURST_EXEMPT = frozenset({"run", "start", "resolve"})
+
+#: A blocking wait that returns faster than this did not block on anything — the
+#: sentinel was already there when it was called (no_polling, signature 2). One is
+#: ordinary: the job legitimately finished first. A session full of them is the
+#: S198 pattern, where the wait verb was used to take a reading.
+INSTANT_WAIT_SECONDS = 1.0
+
+#: Instant-return waits tolerated before the conduct gate calls it polling. Set to
+#: BURST_MIN_REPEATS so the two polling shapes are charged at the same threshold.
+INSTANT_WAIT_ALLOWANCE = 4
 
 #: Verbs that act on ONE named item. Repeating them is how a batch is spelled —
 #: twenty-two `cite` calls are twenty-two items, and repeating one against the
@@ -143,6 +164,14 @@ def conduct_findings(f: "SessionForensics") -> list[str]:
         out.append(
             "%d repeat burst(s) — polling is a protocol violation (E-081): %s"
             % (len(f.bursts), detail)
+        )
+    if len(f.instant_waits) >= INSTANT_WAIT_ALLOWANCE:
+        targets = {w.get("target") for w in f.instant_waits}
+        out.append(
+            "%d `wait-for` call(s) returned in under %.0fs across %d sentinel(s) "
+            "— a block that did not block is a reading, and taking readings is "
+            "polling (Rule 44, WAIT-FOR-USED-AS-A-POLL-S198)"
+            % (len(f.instant_waits), INSTANT_WAIT_SECONDS, len(targets))
         )
     if f.failures:
         detail = ", ".join(
@@ -207,6 +236,11 @@ class SessionForensics:
     failures: list[dict] = field(default_factory=list)
     gaps: list[dict] = field(default_factory=list)
     bursts: list[dict] = field(default_factory=list)
+    #: `wait-for` calls that returned faster than INSTANT_WAIT_SECONDS — a block
+    #: that did not block (WAIT-FOR-USED-AS-A-POLL-S198). Each row carries the
+    #: sentinel it was pointed at, so a reader can tell 39 readings of one file
+    #: from 39 legitimate waits on 39 different jobs.
+    instant_waits: list[dict] = field(default_factory=list)
     session_ends: list[dict] = field(default_factory=list)
     mutations_after_first_end: list[str] = field(default_factory=list)
     started: Optional[datetime] = None
@@ -399,6 +433,20 @@ def analyze_log(records: Iterable[dict]) -> SessionForensics:
             # AND no forward progress: either it names no target at all, or it
             # keeps hitting the SAME one.
             tgt = _target(rec)
+
+            # A BLOCK THAT DID NOT BLOCK (WAIT-FOR-USED-AS-A-POLL-S198).
+            # Repetition is not the only polling shape the wait verb has. A single
+            # `wait-for` that returns in half a millisecond took a reading: the
+            # sentinel was already on disk when it was called. S198 did this 39
+            # times out of 65 while every detector reported clean, because the
+            # verb was burst-exempt and its records carried no target.
+            if (verb == "wait-for" and secs is not None
+                    and secs < INSTANT_WAIT_SECONDS):
+                out.instant_waits.append({
+                    "seq": rec.get("seq"), "target": tgt,
+                    "seconds": round(secs, 3), "ts": rec.get("ts"),
+                })
+
             recent = [(v, g, t) for v, g, t in recent
                       if (ts - t).total_seconds() <= BURST_SECONDS]
             recent.append((verb, tgt, ts))
@@ -515,6 +563,16 @@ def render_text(f: SessionForensics) -> str:
             ap(f"      {b['verb']} x{b['count']} in {b['seconds']}s")
     else:
         ap("  repeat bursts    : none detected")
+
+    if f.instant_waits:
+        targets = sorted({str(w.get("target")) for w in f.instant_waits})
+        ap(f"  waits that did not wait : {len(f.instant_waits)} `wait-for` call(s)"
+           f" returned in under {INSTANT_WAIT_SECONDS:.0f}s across"
+           f" {len(targets)} sentinel(s) — allowance {INSTANT_WAIT_ALLOWANCE}")
+        for w in f.instant_waits[:5]:
+            ap(f"      {w['seconds']}s on {w.get('target') or '(no target logged)'}")
+    else:
+        ap("  waits that did not wait : none detected")
 
     if f.double_sealed:
         ap(f"  SEALS            : {len(f.session_ends)} session_end records "
