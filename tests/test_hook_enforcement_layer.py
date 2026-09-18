@@ -51,6 +51,83 @@ def _file(tool, path):
     return {"tool_name": tool, "tool_input": {"file_path": path}}
 
 
+def _tmux(command):
+    """The PRIMARY shell of this deployment. Same payload key as Bash."""
+    return {"tool_name": "mcp__tmux-mcp__execute-command",
+            "tool_input": {"command": command}}
+
+
+def _wsl(command):
+    return {"tool_name": "mcp__wsl-exec__execute_command",
+            "tool_input": {"command": command}}
+
+
+class TestTheWaitGateSeesThePrimaryTransport:
+    """UNBOUNDED-WAIT-GATE-CANNOT-SEE-THE-PRIMARY-TRANSPORT-S211.
+
+    The gate was keyed on a matcher for the first-party Bash tool alone. That
+    tool is NOT on this deployment's transport allowlist — tool_hierarchy names
+    tmux-mcp as the PRIMARY shell and wsl-exec as the atomic fallback, and the
+    transport gate refuses Bash outright. So the gate built in S206 to refuse
+    hand-rolled waits was watching the one door welded shut, while the door all
+    the work goes through had no lock at all.
+
+    MEASURED, not reasoned. S211 wrote the exact forbidden shape TWICE through
+    mcp__tmux-mcp__execute-command and nothing objected; its own successor review
+    scored "[FAIL] no hand-rolled waits  2 sleeping loop(s)  Rule 44" only
+    afterwards. A gate that only a post-hoc reviewer can enforce is a report.
+    """
+
+    #: The literal command S211 ran, twice, unrefused.
+    S211_VIOLATION = (
+        'cd "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG"'
+        ' && until ! pgrep -f "rag_kernel session-start" >/dev/null 2>&1; do '
+        'sleep 3; done; echo "QQ_BOOTWAIT_FINISHED_QQ"'
+    )
+
+    def test_the_exact_command_s211_got_away_with_is_now_refused(self):
+        assert decide("unbounded-wait", _tmux(self.S211_VIOLATION)).allow is False
+
+    def test_it_is_still_refused_on_bash(self):
+        """The widening must not drop the coverage it already had."""
+        assert decide("unbounded-wait", _bash(self.S211_VIOLATION)).allow is False
+
+    def test_the_atomic_fallback_is_covered_too(self):
+        assert decide("unbounded-wait", _wsl(self.S211_VIOLATION)).allow is False
+
+    def test_the_sanctioned_wait_verb_over_tmux_stays_allowed(self):
+        cmd = ("python -m rag_kernel wait-for .boot/job.txt --timeout 600 "
+               "--contains QQ_JOB_DONE_QQ --emit 20")
+        assert decide("unbounded-wait", _tmux(cmd)).allow is True
+
+    def test_an_ordinary_tmux_command_stays_allowed(self):
+        cmd = 'git -C "$W" status --porcelain | wc -l'
+        assert decide("unbounded-wait", _tmux(cmd)).allow is True
+
+    def test_a_detached_launch_over_tmux_stays_allowed(self):
+        """The correct half of the pattern must not be caught with the wrong half."""
+        cmd = ("setsid nohup python -m rag_kernel tests --run --session S211 "
+               "> .boot/tg.txt 2>&1 < /dev/null & echo LAUNCHED")
+        assert decide("unbounded-wait", _tmux(cmd)).allow is True
+
+    def test_a_bounded_loop_over_tmux_stays_allowed(self):
+        cmd = 'for i in $(seq 1 20); do echo "$i"; done'
+        assert decide("unbounded-wait", _tmux(cmd)).allow is True
+
+    def test_a_non_shell_tool_is_untouched(self):
+        assert decide("unbounded-wait",
+                        _file("Read", "/tmp/x.txt")).allow is True
+
+    def test_the_sandbox_state_gate_was_deliberately_left_alone(self):
+        """Its hole is real and tracked; bundling it here would ship a second,
+        riskier change under cover of this one — a legitimate
+        `cmp RAG_MASTER.json RAG_MASTER.json.bak` over tmux would start being
+        refused. Tracked as
+        SANDBOX-STATE-GATE-CANNOT-SEE-THE-PRIMARY-TRANSPORT-S211."""
+        cmd = "cmp -s RAG_MASTER.json RAG_MASTER.json.bak && echo same"
+        assert decide("sandbox-state", _tmux(cmd)).allow is True
+
+
 # --------------------------------------------------------------------------- #
 # contract
 # --------------------------------------------------------------------------- #
@@ -84,7 +161,11 @@ def test_gate_names_are_stable():
     # Bumped WITH the gate. The pin and the bump were both left undone by the
     # commit that added it (d4d86c1), which is why this test was red at HEAD —
     # see RED-TESTS-COMMITTED-AT-HEAD-S206.
-    assert HOOK_GUARD_VERSION == "1.10.0"  # S209: shell-carried waits seen
+    # S211 moved `unbounded-wait` onto _COMMAND_TOOLS, so its verdict for a
+    # payload from mcp__tmux-mcp__execute-command changed from allow to deny.
+    # That is a policy change and the version moves with it — see
+    # UNBOUNDED-WAIT-GATE-CANNOT-SEE-THE-PRIMARY-TRANSPORT-S211.
+    assert HOOK_GUARD_VERSION == "1.11.0"  # S211: wait gate sees the primary transport
 
 
 def test_unknown_gate_is_fail_loud_not_silently_allowed():

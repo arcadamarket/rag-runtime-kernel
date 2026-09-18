@@ -83,7 +83,7 @@ from typing import Any, Optional
 
 # Bump when a gate's verdict for a given payload changes — a hook whose policy
 # moved without a version is indistinguishable from a hook that stopped running.
-HOOK_GUARD_VERSION = "1.10.0"  # S209: waits carried by a shell are seen too
+HOOK_GUARD_VERSION = "1.11.0"  # S211: the wait gate sees the PRIMARY transport
 
 #: SCOPE OF THIS LAYER (operator ruling, S197) — deliberately small.
 #:
@@ -298,6 +298,43 @@ def _wait_invocation(name: str, tool_input: dict) -> "tuple[bool, str]":
 
 _POLL_TOOLS = re.compile(r"get-?command-?result", re.I)
 _SHELL_TOOLS = re.compile(r"(^Bash$)|(bash$)", re.I)
+
+#: EVERY tool that carries a shell command string — the first-party Bash tool AND
+#: the two MCP shells this deployment actually uses.
+#:
+#: UNBOUNDED-WAIT-GATE-CANNOT-SEE-THE-PRIMARY-TRANSPORT-S211. The command-text
+#: gates were all keyed on ``_SHELL_TOOLS``, which matches the first-party Bash
+#: tool and nothing else. That tool is NOT on this deployment's transport
+#: allowlist: operating_protocol.tool_hierarchy names tmux-mcp as the PRIMARY
+#: shell and wsl-exec as the atomic fallback, and the transport gate refuses Bash
+#: outright. So the unbounded-wait gate was watching the one door welded shut
+#: while the door everyone uses had no lock on it at all.
+#:
+#: MEASURED, not reasoned. S211 wrote the exact shape that gate exists to refuse —
+#:     until ! pgrep -f "rag_kernel session-start" >/dev/null; do sleep 3; done
+#: — TWICE, through mcp__tmux-mcp__execute-command, and nothing objected. Its own
+#: successor review caught it only afterwards, scoring "[FAIL] no hand-rolled
+#: waits  2 sleeping loop(s)  Rule 44". A gate only a post-hoc reviewer can
+#: enforce is a report, not a gate.
+#:
+#: Both MCP shells put the command in ``tool_input["command"]``, the same key the
+#: Bash tool uses, so a gate needs no other change to read them.
+#:
+#: DELIBERATELY NARROW: only ``unbounded-wait`` moves to this matcher here. The
+#: ``sandbox-state`` gate shares the old one and has the SAME hole, but widening
+#: it in the same edit would bundle a second change with a real blast radius —
+#: it refuses any segment naming canonical state outside the kernel CLI, so a
+#: legitimate ``cmp RAG_MASTER.json RAG_MASTER.json.bak`` over tmux would start
+#: being refused. That is a decision to take on its own evidence, not a side
+#: effect of this one; tracked as SANDBOX-STATE-GATE-CANNOT-SEE-THE-PRIMARY-
+#: TRANSPORT-S211.
+_COMMAND_TOOLS = re.compile(
+    r"(^Bash$)"
+    r"|(bash$)"
+    r"|(^mcp__tmux-mcp__execute-command$)"
+    r"|(^mcp__wsl-exec__execute_command$)",
+    re.I,
+)
 _FILE_TOOLS = re.compile(r"^(Read|Edit|Write|NotebookEdit|MultiEdit)$")
 #: Two-copy sources: edited in the worktree, RUN from the deployment. S201 added
 #: scripts/ — grand_audit.py became a two-copy asset the moment it was banked
@@ -784,7 +821,7 @@ def _gate_unbounded_wait(event: dict, **_: Any) -> Decision:
     loop whose body sleeps, or any ``pgrep -f``. Bounded loops (``for i in
     $(seq 1 20)``) are untouched, and so is every use of ``wait-for``/``rag_wait``.
     """
-    if not _SHELL_TOOLS.search(_tool_name(event)):
+    if not _COMMAND_TOOLS.search(_tool_name(event)):
         return Decision("unbounded-wait", True)
     command = str(_tool_input(event).get("command") or "")
     if not command:
