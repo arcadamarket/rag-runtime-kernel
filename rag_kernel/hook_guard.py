@@ -1192,7 +1192,41 @@ _INFLIGHT_MAX_AGE_S = 3600
 # this file specifically, and the reason is worth keeping: it is a git commit
 # MESSAGE, passed to `git commit -F`, so a QQ token would land in the project's
 # history forever. Exclusion is the correct half of the fix here.
-_KERNEL_AUTHORED = re.compile(r"^(close_commit_S\d+|session_start_S\d+)\.txt$")
+#
+# GENERALISED S211, STOP-GATE-FLAGS-FILES-THAT-WERE-NEVER-JOBS-S210. The pattern
+# above named two kernel-authored files and stopped there, so the SAME argument
+# went unapplied to the agent-authored files that carry exactly the same
+# property: an INPUT to a command can never carry a completion sentinel, because
+# nothing ever completes into it. Measured across S211, which was told five times
+# in one session that its commit messages and rule-value files were "job output
+# with no completion sentinel":
+#
+#   s211_commit_msg.txt, s211_commit_msg2.txt, s211_imm_commit_msg.txt
+#       -> git commit -F. A QQ token here lands in history forever -- the exact
+#          reason close_commit_S*.txt was excluded in S208.
+#   rule_cowork_session_lookup.txt
+#       -> rag_kernel add-rule --value-file. A QQ token here lands in the
+#          canonical operating_protocol rule text forever, which is worse.
+#
+# THE PREDICATE IS THE FILE'S ROLE, NOT ITS AUTHOR. A file that is fed TO a verb
+# is an input; only a file a verb writes INTO can be a job. Naming the role in
+# the filename is the cheapest decidable form, and it is a convention the agent
+# already follows, so this costs nothing to obey and fails loudly if abandoned.
+#
+# WHAT IS DELIBERATELY *NOT* EXCLUDED, because it would be a false negative and
+# the S207 note above is right that those are worse: output written by a
+# non-shell transport (a PowerShell result file, say). Those CAN carry a
+# sentinel -- the author simply has to append one -- so the gate keeps asking,
+# and the remedy belongs to the caller rather than to this predicate.
+_NEVER_A_JOB = re.compile(
+    r"^("
+    r"close_commit_S\d+"          # kernel-authored close commit message (S208)
+    r"|session_start_S\d+"        # kernel-authored boot transcript (S208)
+    r"|.*commit_msg\d*"           # any commit message fed to `git commit -F`
+    r"|rule_[a-z0-9_]+"           # any rule value fed to `add-rule --value-file`
+    r"|.*_value"                  # any other declared --value-file input
+    r")\.txt$"
+)
 
 # Half two: the gate keyed on the PRESENCE of a flagged set and never asked
 # whether it had CHANGED. It fired nine consecutive times on one finished file
@@ -1243,7 +1277,7 @@ def _inflight_jobs(rag_dir: Path) -> list[str]:
             continue
         if "wait-for" in f.name or st.st_size == 0:
             continue
-        if _KERNEL_AUTHORED.match(f.name):
+        if _NEVER_A_JOB.match(f.name):
             continue
         quiet = now - st.st_mtime
         if quiet > _QUIET_S:

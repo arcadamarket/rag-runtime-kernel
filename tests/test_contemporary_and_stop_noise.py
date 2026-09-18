@@ -153,3 +153,72 @@ class TestKernelAuthoredFilesAreNotFlagged:
         (boot / "s209_done.txt").write_text("out\nQQ_S209_DONE_QQ rc=0\n",
                                             encoding="utf-8")
         assert hook_guard._inflight_jobs(tmp_path) == []
+
+
+class TestAnInputIsNotAJob:
+    """STOP-GATE-FLAGS-FILES-THAT-WERE-NEVER-JOBS-S210, closed S211.
+
+    S208 excluded two KERNEL-authored files with an argument that was about the
+    file's ROLE, not its author: a git commit message cannot carry a completion
+    sentinel, because a QQ token passed to ``git commit -F`` lands in the
+    project's history forever. The exclusion then named those two files and
+    stopped, so the same argument went unapplied to the AGENT-authored files
+    with the identical property.
+
+    MEASURED: S211 was told five separate times, at five separate stops, that
+    its commit messages and its rule-value file were "job output with no
+    completion sentinel". A gate that cries wolf at every stop is one the reader
+    learns to scroll past — which is indistinguishable from a gate never wired,
+    and is the exact failure mode the S207 note in this module warns about.
+
+    THE PREDICATE IS THE ROLE: a file fed TO a verb is an input, and only a file
+    a verb writes INTO can be a job.
+    """
+
+    @staticmethod
+    def _boot(tmp_path, name, body="content with no sentinel\n"):
+        boot = tmp_path / ".boot"
+        boot.mkdir(exist_ok=True)
+        (boot / name).write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_an_agent_authored_commit_message_is_excluded(self, tmp_path):
+        """`git commit -F` — a QQ token here would enter history forever."""
+        self._boot(tmp_path, "s211_commit_msg.txt")
+        assert hook_guard._inflight_jobs(tmp_path) == []
+
+    def test_a_numbered_commit_message_is_excluded(self, tmp_path):
+        self._boot(tmp_path, "s211_commit_msg2.txt")
+        self._boot(tmp_path, "s211_imm_commit_msg.txt")
+        assert hook_guard._inflight_jobs(tmp_path) == []
+
+    def test_a_rule_value_file_is_excluded(self, tmp_path):
+        """`add-rule --value-file` — worse than history: it enters the RULE."""
+        self._boot(tmp_path, "rule_cowork_session_lookup.txt")
+        assert hook_guard._inflight_jobs(tmp_path) == []
+
+    def test_a_declared_value_input_is_excluded(self, tmp_path):
+        self._boot(tmp_path, "transport_allowlist_value.txt")
+        assert hook_guard._inflight_jobs(tmp_path) == []
+
+    def test_the_kernel_authored_exclusions_still_hold(self, tmp_path):
+        self._boot(tmp_path, "close_commit_S208.txt")
+        self._boot(tmp_path, "session_start_S211.txt")
+        assert hook_guard._inflight_jobs(tmp_path) == []
+
+    def test_real_job_output_is_still_flagged(self, tmp_path):
+        """The narrowing must not become a licence. A false negative on a safety
+        gate is worse than a false alarm — output that CAN carry a sentinel is
+        still asked for one, whatever transport wrote it."""
+        self._boot(tmp_path, "s211_pytest1.txt")
+        self._boot(tmp_path, "s211_cowork_list.txt")
+        assert sorted(hook_guard._inflight_jobs(tmp_path)) == [
+            "s211_cowork_list.txt", "s211_pytest1.txt",
+        ]
+
+    def test_a_name_that_merely_mentions_a_rule_is_not_excluded(self, tmp_path):
+        """GATE-FALSE-POSITIVE-ON-PROSE-S201 in the other direction: the
+        exclusion keys on the input NAMING CONVENTION, not on a substring
+        appearing anywhere."""
+        self._boot(tmp_path, "s211_rule47.txt")
+        assert hook_guard._inflight_jobs(tmp_path) == ["s211_rule47.txt"]
