@@ -22,7 +22,124 @@ from pathlib import Path
 import pytest
 
 from rag_kernel.drift_audit import ERROR, WARNING, check_hook_layer_live
-from rag_kernel.hook_guard import heartbeat_path, record_heartbeat, run_gate
+from rag_kernel.hook_guard import (
+    HEARTBEAT_NAME,
+    heartbeat_candidates,
+    heartbeat_path,
+    newest_heartbeat,
+    record_heartbeat,
+    run_gate,
+)
+
+
+class TestTheReaderLooksInBothPathSpaces:
+    """HOOK-LIVENESS-READS-THE-WSL-HOME-S211.
+
+    The hooks are launched by the WINDOWS client and stamp the Windows profile;
+    ``drift_audit`` runs under WSL, where ``Path.home()`` is ``/home/<user>``.
+    Two path spaces, so the reader graded a copy nobody had written since August
+    and reported a LIVE layer as dead. MEASURED 2026-09-17 15:11 local, both
+    files listed in one command: the Windows copy written that same afternoon,
+    the WSL copy last written 2026-08-20, and ``audit`` printing "hook layer last
+    fired 28.6 days ago". The exact inverse of
+    HOOK-LAYER-DECLARED-DEAD-BUT-LIVE-S209.
+
+    The repair is in the READ. ``heartbeat_path`` — the WRITE — stays a single
+    path on purpose: widening it would manufacture the evidence this check
+    consumes, which is SELF-CERTIFYING-EVIDENCE-GATE-S201.
+    """
+
+    @staticmethod
+    def _stamp(d: Path, *, last_utc: float, source: str = "hook_entry") -> Path:
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / HEARTBEAT_NAME
+        p.write_text(json.dumps({"last_utc": last_utc, "source": source, "pid": 1}),
+                     encoding="utf-8")
+        return p
+
+    def test_the_newest_wins_across_two_roots(self, tmp_path):
+        stale = self._stamp(tmp_path / "wsl_home", last_utc=1_000.0)
+        fresh = self._stamp(tmp_path / "win_home", last_utc=9_000.0)
+        assert stale.is_file() and fresh.is_file()
+
+        import rag_kernel.hook_guard as hg
+
+        real = hg.heartbeat_candidates
+        try:
+            hg.heartbeat_candidates = lambda state_dir=None: [stale, fresh]
+            path, payload = hg.newest_heartbeat()
+        finally:
+            hg.heartbeat_candidates = real
+        assert path == fresh, "the reader must grade the freshest stamp, not the first"
+        assert payload["last_utc"] == 9_000.0
+
+    def test_order_does_not_decide_it(self, tmp_path):
+        """Reversing the candidate order must not change the answer."""
+        stale = self._stamp(tmp_path / "a", last_utc=1_000.0)
+        fresh = self._stamp(tmp_path / "b", last_utc=9_000.0)
+        import rag_kernel.hook_guard as hg
+
+        real = hg.heartbeat_candidates
+        try:
+            hg.heartbeat_candidates = lambda state_dir=None: [fresh, stale]
+            path, _ = hg.newest_heartbeat()
+        finally:
+            hg.heartbeat_candidates = real
+        assert path == fresh
+
+    def test_an_injected_state_dir_is_the_whole_answer(self, tmp_path):
+        """A test that pins a directory must never be widened to the real host."""
+        state = tmp_path / "pinned"
+        self._stamp(state, last_utc=5_000.0)
+        got = heartbeat_candidates(state)
+        assert got == [state / HEARTBEAT_NAME], got
+
+    def test_unreadable_candidates_are_skipped_not_fatal(self, tmp_path):
+        bad = tmp_path / "bad"
+        bad.mkdir()
+        (bad / HEARTBEAT_NAME).write_text("{not json", encoding="utf-8")
+        good = self._stamp(tmp_path / "good", last_utc=7_000.0)
+        import rag_kernel.hook_guard as hg
+
+        real = hg.heartbeat_candidates
+        try:
+            hg.heartbeat_candidates = lambda state_dir=None: [
+                bad / HEARTBEAT_NAME, good]
+            path, payload = hg.newest_heartbeat()
+        finally:
+            hg.heartbeat_candidates = real
+        assert path == good and payload["last_utc"] == 7_000.0
+
+    def test_no_readable_candidate_is_none_not_a_crash(self, tmp_path):
+        import rag_kernel.hook_guard as hg
+
+        real = hg.heartbeat_candidates
+        try:
+            hg.heartbeat_candidates = lambda state_dir=None: [
+                tmp_path / "absent" / HEARTBEAT_NAME]
+            assert hg.newest_heartbeat() == (None, None)
+        finally:
+            hg.heartbeat_candidates = real
+
+    def test_the_write_path_stayed_single(self):
+        """The trap, pinned: never widen the write to clear the finding."""
+        import inspect
+
+        import rag_kernel.hook_guard as hg
+
+        src = inspect.getsource(hg.heartbeat_path)
+        assert "_state_base(state_dir) / HEARTBEAT_NAME" in src
+        assert "for " not in src, "the stamping side must resolve exactly one path"
+
+    def test_the_audit_consumes_the_newest_reader(self):
+        """Wiring assertion: the check must not fall back to the single path."""
+        import inspect
+
+        from rag_kernel import drift_audit
+
+        src = inspect.getsource(drift_audit.check_hook_layer_live)
+        assert "newest_heartbeat" in src
+        assert "hb = heartbeat_path(" not in src
 
 
 def _declare_hooks(root: Path, entries: int = 2) -> Path:

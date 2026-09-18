@@ -126,6 +126,57 @@ class TestTheStopGateStopsRepeatingItself:
         got = self._fire(tmp_path, tmp_path / "state", 1000.0)
         assert got.allow is True and not got.context
 
+    def test_the_same_job_quiet_one_minute_longer_is_still_a_repeat(self, tmp_path):
+        """STOP-GATE-FINGERPRINT-EMBEDS-ELAPSED-TIME-S211 — the proving test.
+
+        The two tests above fire one SECOND apart, so the rendered "quiet Nm"
+        never changes and they passed over the defect for three sessions. The key
+        was built from the RENDERED lines, which carry those minutes, so it moved
+        every sixty seconds and `repeated` was never true in real use: four
+        consecutive firings on an identical flagged set in S210, four again in
+        S211, at which point the operator asked what the blocks were for.
+
+        Here nothing changes except how long the SAME file has been quiet. The
+        causes are identical, so the second firing must say nothing.
+        """
+        import os
+
+        rag = self._rag(tmp_path)
+        job = rag / ".boot" / "job.txt"
+        job.write_text("output, no sentinel\n", encoding="utf-8")
+        state = tmp_path / "state"
+        base = time.time()
+
+        os.utime(job, (base - hook_guard._QUIET_S - 60, base - hook_guard._QUIET_S - 60))
+        first = self._fire(tmp_path, state, 1000.0)
+        assert first.context, "the first firing must carry the checklist"
+        assert "quiet" in first.context, "fixture must exercise the quiet-time path"
+
+        os.utime(job, (base - hook_guard._QUIET_S - 120,
+                       base - hook_guard._QUIET_S - 120))
+        second = self._fire(tmp_path, state, 1060.0)
+        assert not second.context, (
+            "only the elapsed minutes moved — the flagged SET is unchanged, and "
+            "the comment above the key has always claimed it is keyed on the set"
+        )
+
+    def test_the_key_is_built_from_causes_not_from_rendered_text(self, tmp_path):
+        """Guards the SHAPE, so a future edit cannot reintroduce the same bug.
+
+        A behavioural test alone would pass again the moment someone re-renders
+        the bits into the key with the minutes rounded differently. The key must
+        name its causes.
+        """
+        import inspect
+
+        src = inspect.getsource(hook_guard._gate_stop_status)
+        assert 'fingerprint = "|".join(causes)' in src, (
+            "the repeat key must be built from the causes tuple"
+        )
+        assert 'fingerprint = "|".join(sorted(bits))' not in src, (
+            "hashing the rendered lines is the defect itself"
+        )
+
 
 class TestKernelAuthoredFilesAreNotFlagged:
     def test_the_close_commit_message_is_excluded(self, tmp_path):

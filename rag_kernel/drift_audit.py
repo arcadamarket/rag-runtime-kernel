@@ -2159,18 +2159,36 @@ def check_hook_layer_live(
                 f"{gate_count} gate entries are wired and claim NO coverage. "
                 f"Reason: {str(status.get('reason') or 'none given')[:160]}"
             ))]
+    # HOOK-LIVENESS-READS-THE-WSL-HOME-S211. This used to resolve ONE path from
+    # Path.home(). The hooks are launched by the WINDOWS client and stamp the
+    # Windows profile; this module runs under WSL, where home is /home/<user>.
+    # Two path spaces, so the reader graded a copy nobody had written since
+    # August and called a live layer dead — measured 2026-09-17: the Windows
+    # heartbeat written at 15:11 that afternoon, the WSL copy on 2026-08-20, and
+    # this check printing "last fired 28.6 days ago". The repair is in the READ;
+    # widening the WRITE would be manufacturing the evidence this check consumes
+    # (SELF-CERTIFYING-EVIDENCE-GATE-S201), which is why heartbeat_path is
+    # deliberately untouched.
     try:
-        from rag_kernel.hook_guard import LIVE_HEARTBEAT_SOURCE, heartbeat_path
-        hb = heartbeat_path(Path(state_dir) if state_dir else None)
+        from rag_kernel.hook_guard import (
+            LIVE_HEARTBEAT_SOURCE, heartbeat_candidates, newest_heartbeat,
+        )
+        _sd = Path(state_dir) if state_dir else None
+        hb, payload = newest_heartbeat(_sd)
     except Exception:  # pragma: no cover - sibling module always present
         return findings
 
-    if not hb.is_file():
+    if hb is None or payload is None:
+        try:
+            looked = ", ".join(str(p) for p in heartbeat_candidates(_sd)[:4]) or "none"
+        except Exception:  # pragma: no cover - candidate walk is best-effort
+            looked = "none"
         return [AuditFinding(
             check="hook_layer_live", severity=ERROR,
             detail=(
                 f".claude/settings.json declares a hook layer ({gate_count} hook "
-                f"entries) but no gate has EVER recorded running: {hb} is absent. "
+                f"entries) but no gate has EVER recorded running: no readable "
+                f"heartbeat at any candidate path ({looked}). "
                 f"The layer is wired and inert — every gate it declares is "
                 f"uncovered. Either the client does not read this file (measured "
                 f"S199 for the Cowork desktop client) or the host interpreter "
@@ -2180,10 +2198,9 @@ def check_hook_layer_live(
 
     try:
         import time
-        payload = json.loads(hb.read_text(encoding="utf-8"))
         last = float(payload.get("last_utc") or 0.0)
         age_days = (time.time() - last) / 86400.0
-    except (OSError, ValueError, TypeError):
+    except (ValueError, TypeError):
         return [AuditFinding(
             check="hook_layer_live", severity=ERROR,
             detail=f"hook heartbeat at {hb} is unreadable — treat the layer as inert")]

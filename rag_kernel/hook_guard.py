@@ -442,7 +442,101 @@ HEARTBEAT_NAME = "hook_heartbeat.json"
 
 
 def heartbeat_path(state_dir: Optional[Path] = None) -> Path:
+    """Where a gate STAMPS its heartbeat. Writer-side; deliberately unchanged.
+
+    HOOK-LIVENESS-READS-THE-WSL-HOME-S211 is a defect in the READ, and the repair
+    belongs there. Widening the write would be writing the evidence, which is
+    SELF-CERTIFYING-EVIDENCE-GATE-S201 — see ``newest_heartbeat`` below.
+    """
     return _state_base(state_dir) / HEARTBEAT_NAME
+
+
+def heartbeat_candidates(state_dir: Optional[Path] = None) -> list[Path]:
+    """Every path a heartbeat for THIS host could have been stamped at.
+
+    HOOK-LIVENESS-READS-THE-WSL-HOME-S211. The hooks are launched by the WINDOWS
+    client and stamp the WINDOWS profile; ``drift_audit`` runs under WSL, where
+    ``Path.home()`` is ``/home/<user>``. Those are two different path spaces, so
+    the reader graded a copy nobody had written since August and reported a LIVE
+    layer as dead. MEASURED 2026-09-17 15:11 local, both files listed in one
+    command: the Windows copy written that same afternoon, the WSL copy last
+    written 2026-08-20, and ``audit`` printing "hook layer last fired 28.6 days
+    ago". It is the exact inverse of HOOK-LAYER-DECLARED-DEAD-BUT-LIVE-S209, and
+    the same split ``host_scratch_slugs`` already solves for the harness slug by
+    emitting both spellings and letting the filesystem decide.
+
+    NAMES ARE ENUMERATED, NEVER GUESSED. The Windows account name is not derivable
+    from the WSL one — assuming they match would put a guess where a measurement
+    belongs. So a mounted drive's ``Users`` directory is walked and only files
+    that EXIST are returned. An injected ``state_dir`` or ``RAG_HOOK_STATE_DIR``
+    is the whole answer and short-circuits the walk: a test that pins a directory
+    must not be silently widened to the real host.
+    """
+    out: list[Path] = []
+
+    def add(p: Path) -> None:
+        if p not in out:
+            out.append(p)
+
+    if state_dir is not None or os.environ.get("RAG_HOOK_STATE_DIR"):
+        add(_state_base(state_dir) / HEARTBEAT_NAME)
+        return out
+
+    add(Path.home() / ".rag_kernel_hooks" / HEARTBEAT_NAME)
+
+    # Exact when the harness propagates it; costs one env read.
+    profile = os.environ.get("USERPROFILE")
+    if profile:
+        add(Path(profile) / ".rag_kernel_hooks" / HEARTBEAT_NAME)
+
+    # WSL: the Windows profile is a mounted drive. Walk, do not predict.
+    try:
+        mnt = Path("/mnt")
+        drives = sorted(mnt.iterdir()) if mnt.is_dir() else []
+    except OSError:
+        drives = []
+    for drive in drives:
+        try:
+            users = drive / "Users"
+            homes = sorted(users.iterdir()) if users.is_dir() else []
+        except OSError:
+            continue
+        for home in homes:
+            cand = home / ".rag_kernel_hooks" / HEARTBEAT_NAME
+            try:
+                if cand.is_file():
+                    add(cand)
+            except OSError:
+                continue
+    return out
+
+
+def newest_heartbeat(
+    state_dir: Optional[Path] = None,
+) -> "tuple[Optional[Path], Optional[dict]]":
+    """The freshest heartbeat across every candidate path, with its payload.
+
+    Returns ``(None, None)`` when no candidate is readable — which is the honest
+    answer for "the layer never fired", and is what the caller turns into a
+    finding. Freshness is decided on ``last_utc`` and NOT on file mtime: a copy
+    operation moves mtime without a gate having run, and this function exists
+    precisely to stop a reader grading the wrong artifact.
+    """
+    best_path: Optional[Path] = None
+    best_payload: Optional[dict] = None
+    best_ts = float("-inf")
+    for cand in heartbeat_candidates(state_dir):
+        try:
+            payload = json.loads(cand.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        raw = payload.get("last_utc")
+        ts = float(raw) if isinstance(raw, (int, float)) else float("-inf")
+        if best_path is None or ts > best_ts:
+            best_path, best_payload, best_ts = cand, payload, ts
+    return best_path, best_payload
 
 
 #: HEARTBEAT-PROVENANCE (S200). The only value of `source` that proves the layer
@@ -1278,6 +1372,17 @@ _STOP_LAST_KEY = "__stop_status_last__"
 _QUIET_S = 120
 
 
+def _job_key(rendered: str) -> str:
+    """The job FILENAME out of a rendered in-flight entry, stripped of its label.
+
+    STOP-GATE-FINGERPRINT-EMBEDS-ELAPSED-TIME-S211. ``_inflight_jobs`` renders
+    ``"<name> (no sentinel; quiet 23m — …)"``. The minutes in that suffix are the
+    reason the repeat-suppression key changed every minute and suppressed
+    nothing. The filename is the cause; everything after " (" is presentation.
+    """
+    return rendered.split(" (", 1)[0].strip()
+
+
 def _inflight_jobs(rag_dir: Path) -> list[str]:
     """Output files under .boot/ that carry no completion sentinel.
 
@@ -1418,7 +1523,28 @@ def _gate_stop_status(event: dict, *, project_root: Optional[Path] = None,
     # moment anything moves -- a new job file, a different commit count, a seal
     # appearing or vanishing -- the block returns in full. Silence here is not a
     # weaker gate; it is the same gate declining to say a thing twice.
-    fingerprint = "|".join(sorted(bits))
+    #
+    # STOP-GATE-FINGERPRINT-EMBEDS-ELAPSED-TIME-S211. The key used to be
+    # "|".join(sorted(bits)) -- the RENDERED lines, which embed elapsed minutes
+    # ("quiet 22m" -> "quiet 23m"). It therefore changed every minute, `repeated`
+    # was never true, and the block repeated forever over a set that had not
+    # moved, while the paragraph directly above claimed the opposite. The comment
+    # was the documentation a reader checks, so the code contradicted the only
+    # thing anyone would consult. MEASURED: four consecutive firings on an
+    # identical flagged set in S210, and four again in S211 -- at which point the
+    # operator asked what the blocks were for. A suppression that never
+    # suppresses does not merely fail to save noise, it trains the reader to
+    # scroll past the gate, which is indistinguishable from never wiring it.
+    #
+    # The key is now the CAUSES and never their rendering: which jobs (by
+    # filename, no quiet-time), how many uncommitted files, which session is
+    # unsealed. Each is exactly the thing whose change should break silence.
+    causes = (
+        f"unsealed={unsealed or ''}",
+        f"uncommitted={n or 0}",
+        "jobs=" + ",".join(sorted(_job_key(j) for j in jobs)),
+    )
+    fingerprint = "|".join(causes)
     path = _state_path(state_dir)
     state = _prune(_load_state(path), now)
     prior = state.get(_STOP_LAST_KEY)
