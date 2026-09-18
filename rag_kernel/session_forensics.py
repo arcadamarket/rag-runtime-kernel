@@ -584,5 +584,13 @@ def render_text(f: SessionForensics) -> str:
             ap("      the first seal attested a state that then changed")
     elif f.session_ends:
         ap("  SEALS            : 1 (clean)")
+    else:
+        # GRAND-AUDIT-SEAL-PROBE-CANNOT-READ-ZERO-S211. There used to be no line
+        # at all for a session that has not sealed yet, so the grand audit's
+        # `num(r"SEALS\s*:\s*(\d+)")` matched nothing and returned None -> UNKNOWN,
+        # and L2 makes an UNKNOWN block GREEN. The state every close is in WHILE
+        # IT RUNS was therefore unreadable, and unreadable was treated as
+        # disqualifying. A number that cannot be zero is not a number.
+        ap("  SEALS            : 0 (not closed yet)")
 
     return "\n".join(L)

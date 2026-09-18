@@ -5587,8 +5587,14 @@ def _close_order_prepare(
     # how a default gets to be wrong for a year. cwd was already correct here,
     # which is the sharpest part of the lesson: the right value was in this
     # frame the whole time and simply was not passed.
+    # PASS THE PHASE (GRAND-AUDIT-SEAL-PROBE-CANNOT-READ-ZERO-S211). This audit
+    # runs BEFORE the session_close marker is written, so the forensics it reads
+    # report zero seals — which the probe used to score as UNKNOWN (blocking
+    # GREEN) or, once readable, would score as a failure. Zero is the correct
+    # state HERE and only here, and the caller is the only party that knows it.
     g = subprocess.run([sys.executable, str(grand), "--session", str(sid),
-                        "--root", str(Path(rag_dir).resolve().parent)],
+                        "--root", str(Path(rag_dir).resolve().parent),
+                        "--in-close"],
                        cwd=str(rag_dir), capture_output=True, text=True)
     if g.returncode != 0:
         print(

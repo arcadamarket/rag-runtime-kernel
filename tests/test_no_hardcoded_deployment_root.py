@@ -407,6 +407,76 @@ class TestADeploymentThatMirrorsTestsIsStillADeployment:
         )
 
 
+class TestTheSealProbeCanFailOnItsOwnSubject:
+    """GRAND-AUDIT-SEAL-PROBE-CANNOT-READ-ZERO-S211.
+
+    The probe named "session sealed cleanly" tested `PASS if s>0`. So one seal
+    passed — and TWO passed just as well, which is CLOSE-DOUBLE-SEAL-S187, the
+    precise failure it exists to catch. A probe that cannot fail on its own
+    subject is decoration.
+
+    The second half is why the close could never satisfy it: session_forensics
+    printed no SEALS line at all before a seal landed, the regex matched nothing,
+    the probe returned UNKNOWN, and L2 makes an UNKNOWN block GREEN. The close
+    runs this audit BEFORE writing its marker, so the MANDATORY audit was
+    unanswerable at the only moment it actually runs — one of the two roads into
+    GRAND-AUDIT-IN-CLOSE-CANNOT-PASS-S209.
+    """
+
+    @staticmethod
+    def _verdict(seals, in_close=False):
+        return _grand_audit_module().seal_verdict(seals, in_close)
+
+    def test_two_seals_fail_and_are_named_as_the_double_seal(self):
+        status, evidence = self._verdict(2)
+        mod = _grand_audit_module()
+        assert status == mod.FAIL, "a double seal passed this probe until S211"
+        assert "DOUBLE SEAL" in evidence and "S187" in evidence
+
+    def test_seven_seals_also_fail(self):
+        """`s>0` passed every count above one, not just two."""
+        assert self._verdict(7)[0] == _grand_audit_module().FAIL
+
+    def test_exactly_one_seal_passes(self):
+        assert self._verdict(1)[0] == _grand_audit_module().PASS
+
+    def test_zero_seals_inside_a_close_is_correct(self):
+        status, evidence = self._verdict(0, in_close=True)
+        assert status == _grand_audit_module().PASS
+        assert "INSIDE the close" in evidence
+
+    def test_zero_seals_outside_a_close_is_a_failure(self):
+        status, evidence = self._verdict(0, in_close=False)
+        assert status == _grand_audit_module().FAIL
+        assert "unsealed" in evidence
+
+    def test_an_unreadable_count_stays_unknown_not_invented(self):
+        assert self._verdict(None)[0] == _grand_audit_module().UNK
+
+    def test_the_renderer_always_prints_a_number(self):
+        """The probe can only read zero if the renderer is willing to write it."""
+        from rag_kernel.session_forensics import analyze_log, render_text
+
+        out = render_text(analyze_log([{
+            "seq": 1, "ts": "2026-01-01T00:00:00+00:00", "sid": "S1",
+            "event": "tool_invocation", "msg": "cli audit",
+            "data": {"command": "audit", "exit_code": 0},
+        }]))
+        assert "SEALS            : 0 (not closed yet)" in out, out
+
+    def test_the_close_declares_the_phase_rather_than_the_probe_guessing_it(self):
+        import inspect
+
+        from rag_kernel import __main__ as m
+
+        src = inspect.getsource(m._close_order_prepare)
+        head = src.split("grand_audit.py", 1)[1]
+        assert '"--in-close"' in head, (
+            "the close must declare that it runs before the marker; a probe that "
+            "infers its own phase is guessing"
+        )
+
+
 class TestTheAuditorDoesNotAssumeTwoTrees:
     """AUDIT-ASSUMES-A-TWO-TREE-DEPLOYMENT-S211.
 

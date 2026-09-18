@@ -176,6 +176,44 @@ def _store_dir(root):
     return os.path.join(root,"RAG")
 
 
+def seal_verdict(seals,in_close):
+    """How many session_end records is the right number, given the phase. -> (status, evidence)
+
+    GRAND-AUDIT-SEAL-PROBE-CANNOT-READ-ZERO-S211, two defects in one line, and
+    this function exists as a function so both are testable by BEHAVIOUR rather
+    than by grepping the axis that used to inline them.
+
+    (1) IT SCORED THE DEFECT IT IS NAMED AFTER AS A PASS. The old test was
+        `PASS if s>0`, so ONE seal passed and TWO passed just as well -- and two
+        is CLOSE-DOUBLE-SEAL-S187, the exact failure the probe exists to catch.
+        A probe that cannot fail on its own subject is decoration.
+
+    (2) IT COULD NOT READ THE STATE EVERY CLOSE IS IN. The renderer emitted no
+        SEALS line at all before a seal landed, so the regex matched nothing,
+        the probe returned UNKNOWN, and L2 makes UNKNOWN block GREEN. The close
+        runs this audit BEFORE writing its marker, so the mandatory audit was
+        unanswerable at the only moment it actually runs -- one of the two roads
+        into GRAND-AUDIT-IN-CLOSE-CANNOT-PASS-S209. session_forensics now always
+        prints the line, zero included.
+
+    The phase is DECLARED by the caller (`--in-close`, passed by
+    _close_order_prepare) and never inferred: a probe that guesses which phase it
+    is in is the same class of guess as one that guesses where it lives.
+    """
+    if seals is None:
+        return UNK,"L1: forensics printed no SEALS line -- cannot judge"
+    if seals>=2:
+        return FAIL,("seals = %d -- DOUBLE SEAL (CLOSE-DOUBLE-SEAL-S187): the first "
+                     "seal attested a state that then changed"%seals)
+    if seals==1:
+        return PASS,"seals = 1"
+    if in_close:
+        return PASS,("seals = 0, and this audit is running INSIDE the close -- the "
+                     "marker is written after it, so zero is correct here")
+    return FAIL,("seals = 0 -- the session is unsealed and no close is in progress; "
+                 "nothing it did has reached a successor")
+
+
 def _kernel_tree(wt,ragd):
     """Where ``tests/`` and ``formal/`` ACTUALLY live in this deployment.
 
@@ -206,8 +244,13 @@ def _kernel_tree(wt,ragd):
 
 
 class Grand:
-    def __init__(self,root,session=None,fast=False):
+    def __init__(self,root,session=None,fast=False,in_close=False):
         self.root=root; self.session=session; self.fast=fast
+        # GRAND-AUDIT-SEAL-PROBE-CANNOT-READ-ZERO-S211: the seal probe needs the
+        # PHASE, not just the count. Declared by the caller that knows it, never
+        # inferred -- a probe that guesses whether it is inside a close is the
+        # same class of guess as one that guesses where it lives.
+        self.in_close=bool(in_close)
         self.ragd=_store_dir(root)
         self.wt=os.path.join(root,"GIT WORKTREES","rag-runtime-kernel")
         self.ktree=_kernel_tree(self.wt,self.ragd)
@@ -629,8 +672,26 @@ class Grand:
         self.add(A,"no unexplained silent gaps",
                  UNK if g is None else (PASS if g<=_GA else FAIL),
                  "silent gaps = %s (allowance %d, from session_forensics)"%(g,_GA))
-        s=num(r"SEALS\s*:\s*(\d+)")
-        self.add(A,"session sealed cleanly",UNK if s is None else (PASS if s>0 else FAIL),"seals = %s"%s)
+        # GRAND-AUDIT-SEAL-PROBE-CANNOT-READ-ZERO-S211, two defects in one line.
+        #
+        # (1) IT SCORED THE DEFECT IT IS NAMED AFTER AS A PASS. The test was
+        #     `s>0`, so ONE seal passed and TWO passed just as well -- and two is
+        #     CLOSE-DOUBLE-SEAL-S187, the exact failure this probe exists to
+        #     catch. A probe that cannot fail on its own subject is decoration.
+        #
+        # (2) IT COULD NOT READ THE STATE EVERY CLOSE IS IN. The renderer emitted
+        #     no SEALS line at all before a seal landed, so `num` returned None
+        #     -> UNKNOWN, and L2 makes UNKNOWN block GREEN. The close runs this
+        #     audit BEFORE writing its marker, which means the mandatory audit
+        #     was unanswerable at the only moment it actually runs -- one of the
+        #     two roads into GRAND-AUDIT-IN-CLOSE-CANNOT-PASS-S209.
+        #
+        # The question is now asked with the phase it is asked in:
+        #   0 seals  -> correct DURING a close, suspicious after one
+        #   1 seal   -> PASS, the only clean end state
+        #   2+ seals -> FAIL, always, and named as the double seal it is
+        self.add(A,"session sealed cleanly",*seal_verdict(num(r"SEALS\s*:\s*(\d+)"),
+                                                          self.in_close))
 
     def _verbs(self):
         try:
@@ -1213,6 +1274,14 @@ def main():
                          "script's own location, never a baked-in path)")
     ap.add_argument("--session",help="session id whose conduct axis 7 judges (via forensics)")
     ap.add_argument("--fast",action="store_true",help="skip TLC; axis 8 becomes UNKNOWN, verdict cannot be GREEN")
+    # GRAND-AUDIT-SEAL-PROBE-CANNOT-READ-ZERO-S211. The close runs this audit
+    # BEFORE it writes the session_close marker, so zero seals is the CORRECT
+    # state there and a defect anywhere else. Declared by the caller that knows,
+    # never inferred: _close_order_prepare passes it, nothing else should.
+    ap.add_argument("--in-close",dest="in_close",action="store_true",
+                    help="this audit is running inside session-end, before the "
+                         "seal is written; zero seals is expected rather than a "
+                         "finding")
     ap.add_argument("--out",help="also write the report to this path")
     # GRAND-AUDIT-AT-BOOT (S190, P2): the boot needs axis 1 and only axis 1 -
     # the transports must be proven THIS session before anything below them is
@@ -1246,7 +1315,7 @@ def main():
     # charging the auditor's own gc/audit probes to the agent it is judging.
     # Set before any child is spawned; children inherit os.environ.
     os.environ["RAG_KERNEL_CALLER"]="auditor"
-    G=Grand(a.root,a.session,a.fast)
+    G=Grand(a.root,a.session,a.fast,in_close=getattr(a,"in_close",False))
     PLAN=[("1",G.axis_tools),("2",G.axis_gates),("3",G.axis_claims),
           ("4",G.axis_continuity),("5",G.axis_files),("6",G.axis_code),
           ("7",G.axis_protocol),("8",G.axis_formal),("10",G.axis_wiring),
