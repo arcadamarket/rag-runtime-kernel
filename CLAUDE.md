@@ -4,7 +4,7 @@
 
 > **INTEGRITY WARNING — read before trusting anything below.**
 > The canonical state does not match its own stored checksum:
-> state_hash: stored=bd27b925865d0de2... computed=e81deeb4d2268a47...
+> state_hash: stored=bd27b925865d0de2... computed=f7b4ceff35171fd2...
 > Tracked as `STATE-HASH-STALE-AND-UNCHECKED-S202` (P1). `audit` and `verify` do not call `verify_hashes`, so they report
 > clean over this. Every number in section 2 is read from that state.
 
@@ -16,13 +16,13 @@ store or measured live; none of it is typed into this file.
 ## 1. BOOT — first action of every session
 
 ```bash
-cd "C:/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG" && python -m rag_kernel session-start
+cd "/mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/RAG" && python -m rag_kernel session-start
 ```
 
 Then run the `--attest <TOKEN>` line it prints, verbatim. You are
 booted at `Session S<NNN> READY`.
 
-DEPLOYED INTERPRETER (declared in toolchain/toolchain.json): `C:\Python314\python.exe`. Use `python`, never `python3` —
+DEPLOYED INTERPRETER (declared in toolchain/toolchain.json): `C:\Python314\python.exe` (this document was rendered by `/home/pakhol/miniconda3/bin/python`, which is NOT the declared interpreter — the declared one governs). Use `python`, never `python3` —
 `python3` on this host is the Microsoft Store alias and exits
 non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 
@@ -49,34 +49,35 @@ non-zero. Authority for every tool path is `toolchain/toolchain.json`.
 - role: AI/ML Engineer - LLM pipelines, RAG architectures, context optimization, token efficiency, agent orchestration
 - role: Senior CS Specialist - Deterministic state machines, DAG execution, atomic writes, WAL, crash recovery, formal transition guards
 
-All 60 operating_protocol rules are rendered in full by `session-start`; the list above is only the boot-critical subset.
+All 61 operating_protocol rules are rendered in full by `session-start`; the list above is only the boot-critical subset.
 
 ## 2. STATE (read from the RAG, measured where stated)
 
 | Fact | Value |
 |---|---|
-| git HEAD | c344f7a |
+| git HEAD | 445822c |
 | runtime | see current_status |
-| test gate | 3016  (session S210 @ c344f7a) |
-| written_by_session | S209 |
-| active items | 130 |
-| P1 | 22 |
-| baked assets | 144 |
-| posix shell | C:\WINDOWS\system32\bash.EXE |
-| tmux transport | wsl:tmux |
-| TLC jar | C:\Users\pakhol\Desktop\GitHub Project (RAG Runtime Kernel)\toolchain\tla2tools.jar |
+| test gate | 3100  (session S211 @ 445822c) |
+| written_by_session | S211 |
+| active items | 137 |
+| P1 | 25 |
+| baked assets | 146 |
+| posix shell | /bin/bash |
+| tmux transport | /usr/bin/tmux |
+| TLC jar | /mnt/c/Users/pakhol/Desktop/GitHub Project (RAG Runtime Kernel)/toolchain/tla2tools.jar |
 
 ## 3. P1 — what is owed, in ledger order
 
 - `AGENT-STOPS-WITHOUT-A-STATUS-S206`
 - `COLD-BOOT-HAS-NO-RULES-S205`
+- `CONTEXT-COMPACTED-AFTER-S210-SEAL-S211`
 - `CONTEXT-COMPACTION-FORBIDDEN-BUT-UNGATED-S203`
-- `E-117`
 - `E-132`
 - `GATE-FALSE-POSITIVE-ON-PROSE-S201`
 - `GC-IS-INVERTED-S202`
 - `GC-WOULD-DELETE-LIVE-TESTS-S202`
 - `GRAND-AUDIT-IN-CLOSE-CANNOT-PASS-S209`
+- `IRCC-DEPLOYMENT-HAS-NO-MIGRATION-PATH-S211`
 - `LEAN-RAG-INVERTED-LOADED-STORE-S204`
 - `MEASUREMENT-PROVENANCE-S201`
 - `OPERATOR-ONE-NUMBER`
@@ -85,13 +86,15 @@ All 60 operating_protocol rules are rendered in full by `session-start`; the lis
 - `RENDERER-PINS-THE-RUNNING-INTERPRETER-S206`
 - `RESOLVE-EVIDENCE-GATE-NOT-ENFORCED-S202`
 - `RULE-ORPHANS-31-OF-57-S203`
-- `SEAL-GUARD-COVERS-ONLY-STATE-MACHINE-VERBS-S209`
+- `SANDBOX-STATE-GATE-CANNOT-SEE-THE-PRIMARY-TRANSPORT-S211`
 - `SELF-CERTIFYING-EVIDENCE-GATE-S201`
 - `STATE-HASH-STALE-AND-UNCHECKED-S202`
+- `TRANSPORT-ALLOWLIST-CHECKS-MEMBERSHIP-NOT-ORDER-S211`
+- `TRANSPORT-DECLARATION-BLOCKED-BY-HOST-CLASSIFIER-S211`
 - `TRANSPORT-RULE-HAS-NO-ENFORCER-S206`
-- `WAIT-FOR-USED-AS-A-POLL-S198`
+- `WAIT-FANOUT-AXIS-BLIND-TO-PANE-WAITS-S211`
 
-Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 22, 'P2': 56, 'P3': 39, 'P4': 9, 'P5': 4}.
+Full backlog: `python -m rag_kernel items`. Distribution: {'P1': 25, 'P2': 58, 'P3': 41, 'P4': 9, 'P5': 4}.
 
 ## 5. TRAPS (from operating_protocol)
 
