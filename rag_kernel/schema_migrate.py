@@ -145,16 +145,104 @@ def _ensure_5_4(hot: dict) -> list[str]:
     if "next_session_directive" not in hot:
         hot["next_session_directive"] = None
         notes.append("added next_session_directive handoff slot (null)")
+    # S211: the slots the shipped kernel READS, ensured on the terminal rung so
+    # every path traverses them exactly once. See _KERNEL_READ_SLOTS for the
+    # measurement and for why they are not on the 5.1 -> 5.3 rung.
+    for key, kind in _KERNEL_READ_SLOTS:
+        if key in hot:
+            if kind is not None and not isinstance(hot[key], kind):
+                raise SchemaMigrateError(
+                    f"{key} exists but is {type(hot[key]).__name__}, not "
+                    f"{kind.__name__} — refusing to coerce a deployment's own state"
+                )
+            continue
+        hot[key] = None if kind is None else kind()
+        notes.append(
+            f"added {key} ({'null' if kind is None else 'empty ' + kind.__name__})"
+        )
     return notes
 
 
+#: 5.1 -> 5.3, one key per line, with the MEASURED number of places the shipped
+#: kernel reads it. The list is evidence, not taste: a key nothing reads is not
+#: structure, it is one deployment's content, and adding it to another's store
+#: would be this kernel writing its own project into somebody else's RAG.
+#:
+#: Measured 2026-09-18 over rag_kernel/*.py against the _CANADA IRCC store:
+#:     tracked_items 17 | deferred_items 15 | next_session_directive 7
+#:     session_close 6  | inference_ledger 4 | rule_load 3
+#:     decision_ledger 1 | boot_guard 1
+#:     marketing_assessment 0 | cleanup_script_notes 0   <-- EXCLUDED, content
+#:
+#: WHERE THESE SIX SLOTS BELONG, and why not on the 5.1 -> 5.3 rung where they
+#: were first written. The ladder holds an invariant, asserted by
+#: tests/test_schema_migrate.py::TestApply::test_steps_are_idempotent: after a
+#: full migration to CURRENT, re-running EVERY rung must yield no further notes.
+#: Hanging these on 5.3 broke it at once -- a store migrated only 5.3 -> 5.4
+#: never passes through the 5.3 rung, so the slots never arrive and the 5.3 rung
+#: stays hungry forever. The test was right and the first draft was wrong: the
+#: evidence says the shipped kernel READS these keys, it does not say which
+#: version introduced them, and assigning them to 5.3 was a guess dressed as a
+#: boundary. They are ensured on the terminal rung, where "the shape this kernel
+#: speaks" is exactly what is being asserted.
+_KERNEL_READ_SLOTS: tuple[tuple[str, object], ...] = (
+    ("deferred_items", list),
+    ("decision_ledger", list),
+    ("inference_ledger", list),
+    ("rule_load", dict),
+    ("boot_guard", dict),
+    ("session_close", None),
+)
+
+
+def _ensure_5_3(hot: dict) -> list[str]:
+    """5.1 -> 5.3: a declared entry onto the ladder, and nothing more.
+
+    WHY THIS RUNG EXISTS. Until S211 the ladder began at 5.3, so `migrate`
+    answered a 5.1 store with "no migration declared from schema_version '5.1';
+    known origins: ['5.3']" and stopped. That is correct behaviour for an unknown
+    shape and a dead end for a real deployment: the _CANADA IRCC store has sat at
+    5.1 since 2026-05-03, and on 2026-09-08 02:05 the operator ordered that
+    project migrated to the current release. A ladder with no bottom rung cannot
+    carry it, so the rung gets built rather than the refusal argued with.
+
+    WHY IT CHANGES NOTHING. What distinguishes a 5.1 store from a 5.3 store is
+    not recorded anywhere this kernel can read -- no 5.2 or 5.3 spec ships with
+    it. Inventing a difference would put this kernel's guess into another
+    project's canonical store, which is the one thing a migration must never do.
+    What IS measurable is the set of keys the shipped code reads, and those are
+    ensured on the terminal rung by :func:`_ensure_5_4`, which every path
+    traverses. So this rung carries a 5.1 store forward by VERSION only, and the
+    structural work happens once, in one place.
+
+    The legacy surfaces ``priority_actions``, ``open_tasks`` and ``deliverables``
+    are deliberately NOT folded into ``tracked_items`` anywhere on this ladder:
+    that is a CONTENT decision about someone's live case file, and it stays a
+    governed, reviewable act rather than a side effect of a version bump.
+    """
+    return []
+
+
 SCHEMA_MIGRATIONS: tuple[SchemaMigration, ...] = (
+    SchemaMigration(
+        from_version="5.1",
+        to_version="5.3",
+        description=(
+            "entry onto the ladder for a pre-5.3 store: version only, no "
+            "structural change — what separates 5.1 from 5.3 is recorded in no "
+            "spec this kernel ships, and the slots the code reads are ensured "
+            "once on the terminal rung"
+        ),
+        apply=_ensure_5_3,
+    ),
     SchemaMigration(
         from_version="5.3",
         to_version="5.4",
         description=(
             "DRIFT-ELIM shape: canonical tracked_items array + next_session_directive "
-            "handoff slot (additive; existing content preserved in place)"
+            "handoff slot, plus the slots the shipped kernel reads (deferred_items, "
+            "decision_ledger, inference_ledger, rule_load, boot_guard, session_close) "
+            "— additive; existing content preserved in place"
         ),
         apply=_ensure_5_4,
     ),
