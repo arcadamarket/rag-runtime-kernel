@@ -380,14 +380,31 @@ class TestADeploymentThatMirrorsTestsIsStillADeployment:
             "the predicate must not key on an artifact both shapes carry"
         )
 
-    def test_this_repos_own_worktree_and_store_both_resolve_correctly(self):
-        """Measured against the two real trees on this machine, not fixtures."""
+    def test_root_and_store_round_trip_in_whatever_layout_this_is(self):
+        """Measured against the REAL tree this copy sits in — any layout.
+
+        S211, second pass. The first version of this test asserted
+        ``_root_of(REPO) == REPO`` and ``_store_dir(REPO.parent.parent)``, which
+        hardcodes the AUTHORING project's two-tree layout — inside the very file
+        whose subject is that a released kernel must not know where it lives. It
+        passed here and failed immediately in the _MY U.S. IMM PROJ deployment,
+        where the repo IS the store. The irony is the finding: an assertion about
+        layout independence must itself be layout independent.
+
+        What actually holds everywhere is a ROUND TRIP: resolve the root of this
+        tree, resolve the store under that root, and the store must resolve back
+        to the same root. Both real layouts on this machine satisfy it, and so
+        does any deployment that is coherent at all.
+        """
         mod = _grand_audit_module()
-        assert Path(mod._root_of(str(REPO))) == REPO, (
-            "the kernel checkout is its own root"
+        root = Path(mod._root_of(str(REPO)))
+        store = Path(mod._store_dir(str(root)))
+        assert (store / "RAG_MASTER.json").is_file(), (
+            f"resolved root {root} has no store under it (found {store})"
         )
-        store = Path(mod._store_dir(str(REPO.parent.parent)))
-        assert Path(mod._root_of(str(store))) == REPO.parent.parent
+        assert Path(mod._root_of(str(store))) == root, (
+            f"store {store} resolves to a different root than {root}"
+        )
 
 
 class TestTheAuditorDoesNotAssumeTwoTrees:
